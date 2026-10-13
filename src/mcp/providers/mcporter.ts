@@ -6,11 +6,18 @@ import {
   isJSONKeyConfigured,
   mcpEndpoint,
   mcpHeaders,
+  readJSONServer,
   removeJSONServer,
 } from "../config-helpers";
 import { expandHome, isInstalled } from "../detect";
 import type { SetupProvider } from "../providers";
-import { proxyCommand, stdioServer } from "../proxy-entry";
+import { type ProxyCommand, proxyCommand, stdioServer } from "../proxy-entry";
+import { ANY, entryHasShape, proxyCommandShape, shapeEndpoint } from "../shape";
+
+function server(url: string, apiKey: string | undefined, proxy: ProxyCommand | null) {
+  if (proxy) return stdioServer(proxy);
+  return { type: "http", url, headers: mcpHeaders(apiKey) };
+}
 
 function resolveGlobalConfigPath(): string {
   const jsonPath = expandHome("~/.mcporter/mcporter.json");
@@ -29,17 +36,23 @@ export const MCPorterProvider = (): SetupProvider => ({
   isInstalled: () => isInstalled(["~/.mcporter"]),
   globalConfigPath: () => resolveGlobalConfigPath(),
   isConfigured: () => isJSONKeyConfigured(resolveGlobalConfigPath(), "mcpServers"),
+  isCurrent: (cfg) =>
+    entryHasShape(
+      server(shapeEndpoint(cfg), ANY, proxyCommandShape("mcporter")),
+      readJSONServer(resolveGlobalConfigPath(), "mcpServers"),
+    ),
 
   install(cfg: Config, global: boolean): void {
     const configPath = global
       ? resolveGlobalConfigPath()
       : join(process.cwd(), "config", "mcporter.json");
     const url = mcpEndpoint(cfg);
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed by install() guard
-    const headers = mcpHeaders(cfg.active_account!.target!.api_key!);
     const proxy = proxyCommand("mcporter");
-    const server = proxy ? stdioServer(proxy) : { type: "http", url, headers };
-    installJSONServer(configPath, "mcpServers", server);
+    installJSONServer(
+      configPath,
+      "mcpServers",
+      server(url, cfg.active_account?.target?.api_key, proxy),
+    );
   },
 
   remove(global: boolean): void {

@@ -416,8 +416,21 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     // Once, after an upgrade from 0.66: what its learner's watermark passed over unstudied may have
     // been an incognito agent's, so it settles as the switch would have it.
     const passed = legacyPassedSessions(scanned, state);
+    // Stable releases recorded private periods instead of per-session seals. Settle their
+    // sessions before the quiet period or scope can defer them, so a later resume
+    // cannot make the period's timestamp protection disappear.
+    const privatePeriods = state.incognito_periods
+      ? scanned.filter(
+          (s) => !state.sessions[sessionKey(s)]?.by_agent && isAgentIncognito(state, s, lineage),
+        )
+      : [];
     const outsideChanged = !sameRecord(outside, remembered);
-    if (outsideChanged || restamped.length > 0 || state.legacy_passed) {
+    if (
+      outsideChanged ||
+      restamped.length > 0 ||
+      state.legacy_passed ||
+      privatePeriods.length > 0
+    ) {
       // Saved now, whatever this run goes on to do (the next run must find these transcripts),
       // onto a fresh read so nothing a concurrent run settled meanwhile is lost.
       const fresh = loadState();
@@ -430,6 +443,12 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         if (!entry?.by_agent) continue;
         entry.updated = session.updated;
         entry.path = session.path;
+      }
+      for (const session of privatePeriods) {
+        if (!isAgentIncognito(fresh, session, lineage)) continue;
+        const entry = agentIncognitoEntry(session, now().toISOString(), cliVersion);
+        fresh.sessions[sessionKey(session)] = entry;
+        state.sessions[sessionKey(session)] = entry;
       }
       if (fresh.legacy_passed) {
         const at = now().toISOString();

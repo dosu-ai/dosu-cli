@@ -120,6 +120,12 @@ interface SyncRun {
   baseline_shipped: number;
 }
 
+interface IncognitoPeriod {
+  agent: string;
+  from?: string;
+  to?: string;
+}
+
 export interface SyncState {
   schema_version: number;
   /** The ledger, by `harness/id`. Entries age out once their session leaves the scan window,
@@ -158,6 +164,9 @@ export interface SyncState {
    * what ran since then, however long ago (leaveIncognito). An agent listed without one (carried
    * over from 0.66) goes back as far as the scan window. */
   incognito_since?: Record<string, string>;
+  /** Private periods recorded by stable 0.68.1+. Keep them for sessions discovered later; a
+   * matching session is permanently sealed in the ledger, including its continuations. */
+  incognito_periods?: IncognitoPeriod[];
   /** From a 0.66 state file: its learner's watermark (`before`) and the sessions it studied (by
    * `harness/id`). The watermark also passed, unstudied, every session of an agent in incognito,
    * which 0.66 promised to keep unstudied once the switch was off, and which nothing else tells
@@ -266,8 +275,40 @@ function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_vers
     ...(outside ? { outside_sessions: outside } : {}),
     // Schema 1 (0.66's per-agent switch) kept it at the top level too, so it survives migration.
     ...agentList(raw.incognito_agents, raw.incognito_since),
+    ...(Array.isArray(raw.incognito_periods)
+      ? { incognito_periods: parseIncognitoPeriods(raw.incognito_periods) }
+      : {}),
     ...legacyPassed(raw.legacy_passed),
   };
+}
+
+function parseIncognitoPeriods(values: unknown[]): IncognitoPeriod[] {
+  return values.flatMap((value) => {
+    if (!isRecord(value) || typeof value.agent !== "string") return [];
+    const from =
+      typeof value.from === "string" && Number.isFinite(Date.parse(value.from))
+        ? value.from
+        : undefined;
+    const to =
+      typeof value.to === "string" && Number.isFinite(Date.parse(value.to)) ? value.to : undefined;
+    // An invalid bound must never narrow a saved privacy setting.
+    return [{ agent: value.agent, ...(from ? { from } : {}), ...(to ? { to } : {}) }];
+  });
+}
+
+function periodProtects(
+  state: Pick<SyncState, "incognito_periods">,
+  harness: string,
+  updated: string | undefined,
+): boolean {
+  if (!updated) return false;
+  const at = Date.parse(updated);
+  return (state.incognito_periods ?? []).some(
+    (period) =>
+      period.agent === harness &&
+      (period.from === undefined || Date.parse(period.from) <= at) &&
+      (period.to === undefined || at <= Date.parse(period.to)),
+  );
 }
 
 function legacyPassed(value: unknown): Pick<SyncState, "legacy_passed"> {
@@ -483,6 +524,9 @@ function switchAgents(
     else {
       current.delete(id);
       delete since[id];
+      for (const period of state.incognito_periods ?? []) {
+        if (period.agent === id && period.to === undefined) period.to = now.toISOString();
+      }
     }
   }
   if (current.size > 0) state.incognito_agents = [...current].sort();
@@ -531,7 +575,15 @@ export function leaveIncognito(
     new Map(
       agentIds
         .filter((id) => state.incognito_agents?.includes(id))
-        .map((id) => [id, Date.parse(state.incognito_since?.[id] ?? AGENT_SWITCH_SINCE)]),
+        .map((id) => {
+          const open = state.incognito_periods?.find((p) => p.agent === id && !p.to);
+          const since = open
+            ? open.from
+              ? Date.parse(open.from)
+              : 0
+            : Date.parse(state.incognito_since?.[id] ?? AGENT_SWITCH_SINCE);
+          return [id, since];
+        }),
     );
   // Listed first, from a read for that alone: the scan takes a while, and whatever another
   // command or a sync saves meanwhile must survive the save below, a quick load-modify-save.
@@ -551,7 +603,7 @@ export function leaveIncognito(
     if (!isUnanswered(session, state.sessions[key])) continue;
     state.sessions[key] = agentIncognitoEntry(session, at, cliVersion);
   }
-  switchAgents(state, agentIds, false);
+  switchAgents(state, agentIds, false, now);
   saveSyncState(state, configDir);
 }
 
@@ -567,7 +619,7 @@ export function sealAgentSession(
   configDir: string = getConfigDir(),
 ): void {
   const state = loadSyncState(configDir);
-  if (!state.incognito_agents?.includes(session.harness)) return;
+  if (!isAgentIncognito(state, session, sessionLineage([session]))) return;
   const key = sessionKey(session);
   const entry = state.sessions[key];
   if (entry?.by_agent || !isUnanswered(session, entry)) return;
@@ -580,7 +632,7 @@ const MAX_LINEAGE_DEPTH = 32;
 
 /** A session's links up its lineage: the session it is a subagent of, and the one it was forked
  * or branched from. */
-type Lineage = Pick<AgentSession, "parentId" | "forkOf">;
+type Lineage = Pick<AgentSession, "parentId" | "forkOf"> & Partial<Pick<AgentSession, "updated">>;
 
 /** Whether the agent's saved incognito switch keeps a session off the record: its agent is in
  * `incognito_agents` now, or the switch settled it, the session it is a subagent of, or the one it
@@ -592,12 +644,16 @@ type Lineage = Pick<AgentSession, "parentId" | "forkOf">;
  * from either, the session's own links are all there is. Looks nothing up while the switch has
  * settled no session of the agent's. */
 export function isAgentIncognito(
-  state: Pick<SyncState, "incognito_agents" | "sessions">,
+  state: Pick<SyncState, "incognito_agents" | "incognito_periods" | "sessions">,
   session: Pick<AgentSession, "harness" | "id"> & Lineage,
   lineageOf: (key: string) => Lineage | undefined = () => undefined,
 ): boolean {
   if (state.incognito_agents?.includes(session.harness)) return true;
-  if (!switchSettledAny(state, session.harness)) return false;
+  if (
+    !switchSettledAny(state, session.harness) &&
+    !state.incognito_periods?.some((p) => p.agent === session.harness)
+  )
+    return false;
   const seen = new Set<string>();
   const queue = [session.id];
   while (queue.length > 0 && seen.size < MAX_LINEAGE_DEPTH) {
@@ -608,6 +664,7 @@ export function isAgentIncognito(
     const entry = state.sessions[key];
     if (entry?.by_agent) return true;
     const links = lineageOf(key) ?? (id === session.id ? session : undefined);
+    if (periodProtects(state, session.harness, links?.updated)) return true;
     for (const next of [links?.parentId, links?.forkOf?.id, entry?.parent]) {
       if (next) queue.push(next);
     }
@@ -629,12 +686,16 @@ function switchSettledAny(state: Pick<SyncState, "sessions">, harness: string): 
  * view of it, or null when its transcript cannot be found), which is looked up only once the switch
  * has settled some session of the agent's. */
 export function isSessionAgentIncognito(
-  state: Pick<SyncState, "incognito_agents" | "sessions">,
+  state: Pick<SyncState, "incognito_agents" | "incognito_periods" | "sessions">,
   session: Pick<AgentSession, "harness" | "id">,
   stored: () => AgentSession | null = () => null,
 ): boolean {
   if (state.incognito_agents?.includes(session.harness)) return true;
-  if (!switchSettledAny(state, session.harness)) return false;
+  if (
+    !switchSettledAny(state, session.harness) &&
+    !state.incognito_periods?.some((p) => p.agent === session.harness)
+  )
+    return false;
   const found = stored();
   return found
     ? isAgentIncognito(state, { ...found, id: session.id }, sessionLineage([found]))
@@ -698,6 +759,7 @@ export function resetSyncState(configDir: string = getConfigDir()): void {
       ...(previous.ship_transcripts === false ? { ship_transcripts: false as const } : {}),
       ...(previous.incognito_agents ? { incognito_agents: previous.incognito_agents } : {}),
       ...(previous.incognito_since ? { incognito_since: previous.incognito_since } : {}),
+      ...(previous.incognito_periods ? { incognito_periods: previous.incognito_periods } : {}),
       ...(previous.legacy_passed ? { legacy_passed: previous.legacy_passed } : {}),
       // Where those sessions live, so a fresh drain can still find them.
       ...(previous.outside_sessions ? { outside_sessions: previous.outside_sessions } : {}),

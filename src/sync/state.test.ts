@@ -1283,3 +1283,68 @@ describe("transcript shipping switch", () => {
     expect(loaded.consecutive_failures).toBe(2);
   });
 });
+
+describe("incognito periods migrated from stable releases", () => {
+  const period = { agent: "claude", from: "2026-08-25T10:00:00Z", to: "2026-08-25T11:30:00Z" };
+
+  it.each([1, 2, 3, 99])("preserves privacy through schema %s migration and reset", (schema) => {
+    writeRaw({ schema_version: schema, incognito_periods: [period] });
+    let state = loadSyncState(configDir);
+    expect(state.incognito_periods).toEqual([period]);
+    expect(isAgentIncognito(state, session())).toBe(true);
+    expect(isAgentIncognito(state, session({ updated: "2026-08-25T09:00:00Z" }))).toBe(false);
+    expect(isAgentIncognito(state, session({ updated: "2026-08-25T11:45:00Z" }))).toBe(false);
+    expect(isAgentIncognito(state, session({ harness: "cursor" }))).toBe(false);
+    saveSyncState(state, configDir);
+    resetSyncState(configDir);
+    state = loadSyncState(configDir);
+    expect(state.incognito_periods).toEqual([period]);
+    expect(isAgentIncognito(state, session())).toBe(true);
+  });
+
+  it("keeps a protected session, its resumed contents, and its forks private forever", () => {
+    writeRaw({ schema_version: 1, incognito_periods: [period] });
+    const original = session({ id: "private" });
+    sealAgentSession(original, VERSION, NOW, configDir);
+    resetSyncState(configDir);
+    const state = loadSyncState(configDir);
+    expect(state.sessions["claude/private"]).toMatchObject({
+      outcome: "incognito",
+      by_agent: true,
+    });
+    const resumed = { ...original, updated: "2027-01-01T00:00:00Z" };
+    expect(isAgentIncognito(state, resumed)).toBe(true);
+    expect(isPending(resumed, state.sessions["claude/private"], { cliVersion: "9.0.0" })).toBe(
+      false,
+    );
+    expect(isAgentIncognito(state, session({ parentId: "private" }))).toBe(true);
+    expect(
+      isAgentIncognito(state, session({ forkOf: { id: "private", path: original.path } })),
+    ).toBe(true);
+  });
+
+  it("keeps an old spell without a start private, and closes an open spell on off", () => {
+    writeRaw({
+      schema_version: 1,
+      incognito_agents: ["claude"],
+      incognito_periods: [{ agent: "claude" }],
+    });
+    const old = session({ updated: "2026-01-01T00:00:00Z" });
+    leaveIncognito(["claude"], () => [old], VERSION, NOW, configDir);
+    const state = loadSyncState(configDir);
+    expect(state.incognito_periods).toEqual([{ agent: "claude", to: NOW.toISOString() }]);
+    expect(state.sessions[`claude/${old.id}`]).toMatchObject({ by_agent: true });
+    expect(isAgentIncognito(state, old)).toBe(true);
+    expect(isAgentIncognito(state, session({ updated: "2026-08-25T13:00:00Z" }))).toBe(false);
+  });
+
+  it("treats invalid date bounds conservatively and ignores records with no agent", () => {
+    writeRaw({
+      schema_version: 1,
+      incognito_periods: [null, {}, { agent: "claude", from: "bad", to: 12 }],
+    });
+    const state = loadSyncState(configDir);
+    expect(state.incognito_periods).toEqual([{ agent: "claude" }]);
+    expect(isAgentIncognito(state, session())).toBe(true);
+  });
+});

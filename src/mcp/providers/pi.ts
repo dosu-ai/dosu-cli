@@ -19,6 +19,8 @@ export const PiProvider = (): SetupProvider => {
     detectPaths: () => [piAgentDir()],
     isInstalled: () => extension.isInstalled(),
     isConfigured: () => extension.isEnabled(),
+    // The extension registers MCP at runtime and is refreshed with enabled hooks each version.
+    isCurrent: () => extension.isEnabled(),
     globalConfigPath: () => extension.configPath(),
     install: (_cfg, global) => (global ? extension.enable() : globalOnly()),
     remove: (global) => (global ? extension.disable() : globalOnly()),

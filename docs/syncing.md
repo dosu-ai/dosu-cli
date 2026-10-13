@@ -1,5 +1,8 @@
 # Syncing sessions to Dosu memory
 
+The memory beta is intended for organizations with `enable-agent-memory` enabled. Installing
+`@beta` does not enable that server-side flag; memory requests from other organizations are refused.
+
 `dosu knowledge hooks enable` installs a session-end hook (Claude Code, Cursor, Codex), for
 OpenCode a plugin (see [OpenCode](#opencode)) and for pi the Dosu pi extension (see [Pi](#pi)),
 each running `dosu knowledge sync --quiet --detach`; for Claude Code it also installs the prompt-time memory hook
@@ -764,3 +767,5 @@ DOSU_DEV=true bun run dev knowledge hooks enable claude   # installs /dosu-incog
 # `dosu knowledge incognito off claude`, then resume that session: its entry in
 # knowledge-sync.json keeps `by_agent: true`, and it never ships
 ```
+
+When upgrading from 0.68.1 or later, saved incognito periods carry over. Sessions protected by those periods are sealed into the new ledger when discovered, so turning the switch off, resuming them, or resetting sync does not make them eligible for upload.

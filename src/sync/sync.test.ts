@@ -1533,3 +1533,50 @@ describe("runKnowledgeSync with a session a hook says just ended", () => {
     expect(waited).toBeGreaterThanOrEqual(ENDED_LOCK_WAIT_MS);
   });
 });
+
+it("migrates stable incognito periods before shipping and keeps a resumed session private", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dosu-period-migration-"));
+  const { loadSyncState, saveSyncState, resetSyncState } = await import("./state");
+  try {
+    writeFileSync(
+      join(dir, "knowledge-sync.json"),
+      JSON.stringify({
+        schema_version: 1,
+        watermark: "2026-08-25T09:00:00Z",
+        incognito_periods: [
+          { agent: "claude", from: "2026-08-25T10:30:00Z", to: "2026-08-25T11:30:00Z" },
+        ],
+      }),
+    );
+    const privateSession = session(60);
+    const publicSession = session(10);
+    const child = { ...session(9), parentId: privateSession.id };
+    const ship = shipAll();
+    const { deps } = makeDeps({
+      loadState: () => loadSyncState(dir),
+      saveState: (s) => saveSyncState(s, dir),
+      listSessions: vi.fn().mockResolvedValue([child, privateSession, publicSession]),
+      ship,
+    });
+    await runKnowledgeSync({ deps });
+    expect(ship).toHaveBeenCalledOnce();
+    expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([publicSession.id]);
+    expect(loadSyncState(dir).sessions[`claude/${privateSession.id}`]).toMatchObject({
+      by_agent: true,
+      outcome: "incognito",
+    });
+    expect(loadSyncState(dir).sessions[`claude/${child.id}`]).toMatchObject({
+      by_agent: true,
+      outcome: "incognito",
+    });
+    resetSyncState(dir);
+    vi.mocked(ship).mockClear();
+    deps.listSessions = vi
+      .fn()
+      .mockResolvedValue([{ ...privateSession, updated: publicSession.updated }]);
+    await runKnowledgeSync({ deps });
+    expect(ship).not.toHaveBeenCalled();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

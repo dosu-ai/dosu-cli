@@ -53,20 +53,24 @@ describe("sessionLineage", () => {
       ]);
 
       expect(lineage(`codex/${stem("18-56-30", FORK)}`)).toEqual({
+        updated: expect.any(String),
         forkOf: { id: stem("18-50-30", SOURCE), path: source },
       });
       expect(lineage(`codex/${stem("18-50-38", CHILD)}`)).toEqual({
+        updated: expect.any(String),
         parentId: stem("18-50-30", SOURCE),
       });
       // The source was reached through the fork: its links are read in turn.
-      expect(lineage(`codex/${stem("18-50-30", SOURCE)}`)).toEqual({});
+      expect(lineage(`codex/${stem("18-50-30", SOURCE)}`)).toEqual({ updated: expect.any(String) });
       expect(lineage("codex/unknown")).toBeUndefined();
     });
 
     it("gives a fork whose source rollout is gone no link", () => {
       const fork = rollout(stem("18-56-30", FORK), { id: FORK, forked_from_id: SOURCE });
 
-      expect(sessionLineage([at("codex", "f", fork)])("codex/f")).toEqual({});
+      expect(sessionLineage([at("codex", "f", fork)])("codex/f")).toEqual({
+        updated: expect.any(String),
+      });
     });
   });
 
@@ -83,9 +87,10 @@ describe("sessionLineage", () => {
       const lineage = sessionLineage([at("claude", "branch", branch)]);
 
       expect(lineage("claude/branch")).toEqual({
+        updated: expect.any(String),
         forkOf: { id: "orig", path: join(project(), "orig.jsonl") },
       });
-      expect(lineage("claude/orig")).toEqual({});
+      expect(lineage("claude/orig")).toEqual({ updated: expect.any(String) });
     });
 
     it("ignores a branch tag naming the transcript itself, and a quoted one", () => {
@@ -96,8 +101,12 @@ describe("sessionLineage", () => {
         { type: "user", message: { content: '{"forkedFrom":{"sessionId":"orig"}}' } },
       ]);
 
-      expect(sessionLineage([at("claude", "self", self)])("claude/self")).toEqual({});
-      expect(sessionLineage([at("claude", "quoting", quoting)])("claude/quoting")).toEqual({});
+      expect(sessionLineage([at("claude", "self", self)])("claude/self")).toEqual({
+        updated: expect.any(String),
+      });
+      expect(sessionLineage([at("claude", "quoting", quoting)])("claude/quoting")).toEqual({
+        updated: expect.any(String),
+      });
     });
 
     it("leads from a subagent to the session it worked for", () => {
@@ -108,8 +117,9 @@ describe("sessionLineage", () => {
 
       const lineage = sessionLineage([at("claude", "agent-a1", child)]);
 
-      expect(lineage("claude/agent-a1")).toEqual({ parentId: "p1" });
+      expect(lineage("claude/agent-a1")).toEqual({ updated: expect.any(String), parentId: "p1" });
       expect(lineage("claude/p1")).toEqual({
+        updated: expect.any(String),
         forkOf: { id: "orig", path: join(dirname(parent), "orig.jsonl") },
       });
     });
@@ -127,8 +137,11 @@ describe("sessionLineage", () => {
     const fork = piSessionById("fork", { homeDir: home, env: {} });
     expect(fork?.forkOf).toEqual({ id: "src", path: source });
     const lineage = sessionLineage(fork ? [fork] : []);
-    expect(lineage("pi/fork")).toEqual({ forkOf: { id: "src", path: source } });
-    expect(lineage("pi/src")).toEqual({});
+    expect(lineage("pi/fork")).toEqual({
+      updated: expect.any(String),
+      forkOf: { id: "src", path: source },
+    });
+    expect(lineage("pi/src")).toEqual({ updated: expect.any(String) });
     expect(piSessionById("nope", { homeDir: home, env: {} })).toBeNull();
   });
 
@@ -150,8 +163,14 @@ describe("sessionLineage", () => {
 
     const lineage = sessionLineage([leaf]);
 
-    expect(lineage("opencode/ses_leaf")).toEqual({ parentId: "ses_mid" });
-    expect(lineage("opencode/ses_mid")).toEqual({ parentId: "ses_root" });
+    expect(lineage("opencode/ses_leaf")).toEqual({
+      updated: expect.any(String),
+      parentId: "ses_mid",
+    });
+    expect(lineage("opencode/ses_mid")).toEqual({
+      updated: expect.any(String),
+      parentId: "ses_root",
+    });
   });
 
   it("keeps the links a Cursor session carries, and reads nothing", () => {
@@ -163,6 +182,9 @@ describe("sessionLineage", () => {
       parentId: "c0",
     };
 
-    expect(sessionLineage([cursor])("cursor/c1")).toEqual({ parentId: "c0" });
+    expect(sessionLineage([cursor])("cursor/c1")).toEqual({
+      updated: expect.any(String),
+      parentId: "c0",
+    });
   });
 });

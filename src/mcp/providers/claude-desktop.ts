@@ -5,12 +5,14 @@ import {
   isJSONKeyConfigured,
   mcpEndpoint,
   mcpHeaders,
-  mcpRemoteServer,
+  npxRemoteEntry,
+  readJSONServer,
   removeJSONServer,
 } from "../config-helpers";
 import { appSupportDir, findNpx, isInstalled, launcherPathEnv } from "../detect";
 import type { SetupProvider } from "../providers";
 import { proxyCommand, stdioServer } from "../proxy-entry";
+import { ANY, entryHasShape, proxyCommandShape, shapeEndpoint } from "../shape";
 
 function configPath(): string {
   return join(appSupportDir(), "Claude", "claude_desktop_config.json");
@@ -25,6 +27,13 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
   isInstalled: () => isInstalled([join(appSupportDir(), "Claude")]),
   globalConfigPath: () => configPath(),
   isConfigured: () => isJSONKeyConfigured(configPath(), "mcpServers"),
+  isCurrent: (cfg) => {
+    const proxy = proxyCommandShape("claude-desktop");
+    return entryHasShape(
+      proxy ? stdioServer(proxy) : npxRemoteEntry(shapeEndpoint(cfg), ANY, ANY, ANY),
+      readJSONServer(configPath(), "mcpServers"),
+    );
+  },
 
   install(cfg: Config, global: boolean): void {
     if (!global) throw new Error("Claude Desktop does not support local installation");
@@ -42,12 +51,11 @@ export const ClaudeDesktopProvider = (): SetupProvider => ({
       return;
     }
     const npx = findNpx();
-    const remote = mcpRemoteServer(url, cfg.active_account?.target?.api_key);
-    installJSONServer(configPath(), "mcpServers", {
-      command: npx,
-      args: remote.args,
-      env: { PATH: launcherPathEnv(npx), ...remote.env },
-    });
+    installJSONServer(
+      configPath(),
+      "mcpServers",
+      npxRemoteEntry(url, cfg.active_account?.target?.api_key, npx, launcherPathEnv(npx)),
+    );
   },
 
   remove(global: boolean): void {

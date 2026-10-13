@@ -12,7 +12,8 @@ import { opencodeLineage } from "./opencode";
 import { type AgentSession, claudeForkOf, parentSessionOf, sessionAtPath } from "./scan";
 
 /** A session's links up its lineage. */
-export type SessionLinks = Pick<AgentSession, "parentId" | "forkOf">;
+export type SessionLinks = Pick<AgentSession, "parentId" | "forkOf"> &
+  Partial<Pick<AgentSession, "updated">>;
 
 function keyOf(session: Pick<AgentSession, "harness" | "id">): string {
   return `${session.harness}/${session.id}`;
@@ -23,6 +24,7 @@ function keyOf(session: Pick<AgentSession, "harness" | "id">): string {
  * turn). */
 function originsOf(session: AgentSession): { links: SessionLinks; next: AgentSession[] } {
   const links: SessionLinks = {
+    updated: session.updated,
     ...(session.parentId ? { parentId: session.parentId } : {}),
     ...(session.forkOf ? { forkOf: session.forkOf } : {}),
   };

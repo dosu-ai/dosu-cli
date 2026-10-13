@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTestConfig } from "../config/config.test-utils";
 import * as providersModule from "./providers";
-import { configuredProviders, refreshConfiguredProviders } from "./refresh";
+import {
+  configuredProviders,
+  refreshConfiguredProviders,
+  refreshProviders,
+  staleProviders,
+} from "./refresh";
 
 function fakeProvider(
   overrides: Partial<providersModule.SetupProvider> = {},
@@ -15,6 +20,7 @@ function fakeProvider(
     detectPaths: () => [],
     isInstalled: () => true,
     isConfigured: () => true,
+    isCurrent: () => true,
     globalConfigPath: () => "/tmp/fake.json",
     priority: () => 1,
     ...overrides,
@@ -56,6 +62,41 @@ describe("configuredProviders", () => {
     vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([broken, fakeProvider()]);
 
     expect(configuredProviders()).toHaveLength(1);
+  });
+});
+
+describe("staleProviders", () => {
+  it("keeps configured providers whose entry is not current, and passes the config through", () => {
+    const current = fakeProvider({ name: () => "Current" });
+    const isCurrent = vi.fn(() => false);
+    const stale = fakeProvider({ name: () => "Stale", isCurrent });
+    const absent = fakeProvider({ isConfigured: () => false, isCurrent: () => false });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([current, stale, absent]);
+
+    expect(staleProviders(cfg)).toEqual([stale]);
+    expect(isCurrent).toHaveBeenCalledWith(cfg);
+  });
+
+  it("counts a provider whose check throws as stale, so the rewrite reports the error", () => {
+    const broken = fakeProvider({
+      isCurrent: () => {
+        throw new Error("unreadable config");
+      },
+    });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([broken, fakeProvider()]);
+
+    expect(staleProviders(undefined)).toEqual([broken]);
+  });
+});
+
+describe("refreshProviders", () => {
+  it("rewrites only the providers it is given", () => {
+    const given = fakeProvider({ name: () => "Given" });
+    const other = fakeProvider({ name: () => "Other" });
+    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([given, other]);
+
+    expect(refreshProviders(cfg, [given])).toEqual({ updated: [given], failed: [] });
+    expect(other.install).not.toHaveBeenCalled();
   });
 });
 

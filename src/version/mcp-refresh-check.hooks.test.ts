@@ -7,11 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-// The release that moved every entry to the local proxy (0.67.0), whose hooks name each memory
-// call's session; keep in step with MCP_FORMAT_CHANGES.
+// Even another beta of the same release must re-apply hooks, independently of MCP changes.
 vi.mock("./version", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./version")>()),
-  VERSION: "0.67.0",
+  VERSION: "0.69.0-beta.2",
 }));
 vi.mock("../debug/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), init: vi.fn() },
@@ -78,8 +77,12 @@ function seedEarlierHooks(): void {
   writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: "0.66.1" }));
 }
 
-it("re-applies the hooks of every agent that has them on, after an upgrade across 0.67.0", () => {
+it.each([
+  "0.68.2",
+  "0.69.0-beta.1",
+])("re-applies enabled hooks after %s even with no MCP entries", (previous) => {
   seedEarlierHooks();
+  writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: previous }));
 
   checkForMcpRefresh();
 
@@ -88,12 +91,15 @@ it("re-applies the hooks of every agent that has them on, after an upgrade acros
   ]);
   expect(readFileSync(opencodePlugin(), "utf-8")).toContain('"shell.env"');
   expect(existsSync(join(home, ".cursor", "hooks.json"))).toBe(false);
-  expect(readMcpRefreshCache()).toEqual({ version: "0.67.0" });
+  expect(readMcpRefreshCache()).toEqual({ version: "0.69.0-beta.2" });
 });
 
 it("leaves the hooks alone once this release already refreshed them", () => {
   seedEarlierHooks();
-  writeFileSync(join(getConfigDir(), "mcp-refresh.json"), JSON.stringify({ version: "0.67.0" }));
+  writeFileSync(
+    join(getConfigDir(), "mcp-refresh.json"),
+    JSON.stringify({ version: "0.69.0-beta.2" }),
+  );
 
   checkForMcpRefresh();
 

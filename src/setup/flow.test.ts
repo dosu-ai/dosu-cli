@@ -368,6 +368,7 @@ function throwingProvider(): providersModule.SetupProvider {
     detectPaths: () => [],
     isInstalled: () => true,
     isConfigured: () => false,
+    isCurrent: () => false,
     globalConfigPath: () => join(tempDir, "broken.json"),
     install() {
       throw new Error("boom: provider failure");

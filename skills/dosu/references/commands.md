@@ -76,7 +76,7 @@ dosu libraries monitors update <library-id> <source-id>
     [--up-to-date-behavior emoji|comment|silent] [--confirm] [--json]
 ```
 
-`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. It performs first-time setup for an attached supported source, reusing existing deployment infrastructure when available. When no Monitor row exists, omitted `--enabled`, paths, and behavior default to `true`, `[]`, and `emoji`.
+`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. It performs first-time setup for an attached supported source, reusing existing deployment infrastructure when available. When no Monitor row exists, omitted `--enabled`, paths, and behavior default to `true`, `[]`, and `emoji` (`comment` on Azure DevOps). Azure DevOps pull requests take no reactions, so a saved `emoji` posts a comment there and is reported as `comment`.
 
 ## Agents
 
@@ -149,7 +149,7 @@ dosu review notifications set (--library <library-id> | --agent <agent-id>)
 dosu review notifications clear (--library <library-id> | --agent <agent-id>) [--confirm] [--json]
 ```
 
-- `list` reads the selected Library's pending doc changes plus the selected MCP deployment's draft replies. JSON is `{items, truncated, total}`: at most 50 items, newest first; `total` is a lower bound when `truncated` is true. `--since`/`--until` take `24h`/`7d`/`2w`, a UTC date, or an ISO-8601 datetime.
+- `list` reads the selected Library's pending doc changes plus the selected MCP deployment's draft replies. JSON is `{items, truncated, total, scope}`: at most 50 items, newest first; `total` is a lower bound when `truncated` is true; `scope` names the Library and MCP deployment searched (see [review-workflow.md](review-workflow.md)). A missing, deleted, or inaccessible Library or deployment is an error, not an empty list. `--since`/`--until` take `24h`/`7d`/`2w`, a UTC date, or an ISO-8601 datetime.
 - IDs are opaque: pass each `id` from `list` verbatim (draft replies carry a `draft_message:` prefix). `revert` takes a decided doc change's page-version ID and does not apply to drafts.
 - `edit` requires at least one field; drafts accept only `--body`/`--body-file`. `approve` and `reject` do not write without interactive confirmation or `--confirm`.
 - `notifications` manages the Slack channel that receives review notifications for one Library (doc reviews) or one Agent (its draft replies). Unlike the queue commands it takes an explicit target, not the selected MCP deployment. Pass exactly one of `--library`/`--agent` (UUID v4; Agent IDs come from `dosu agents list`).
@@ -243,7 +243,7 @@ dosu upgrade [--auto on|off]
 dosu logs [--tail [n]] [--clear]
 ```
 
-`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. The MCP entry `mcp add` writes runs `dosu mcp serve --client <agent>` (a local proxy; never run it by hand). `project show` prints the project key Dosu memory scopes the directory by and which rule produced it; `project link` overrides it for a directory and everything under it. `memory search` and `memory evidence` call the same memory tools as the MCP server, scoped to the current directory; run from an agent's shell they are logged under the agent's session, and refuse to run in a session the user took off the record (`/dosu-incognito`) or for an agent the user put in incognito (`dosu knowledge incognito on <agent>`; its MCP tool calls are refused too, and `dosu knowledge incognito off <agent>` turns it back on). `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
+`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `deployments switch` does not repoint an AI tool's running MCP connection; `mcp refresh` rewrites configured tools' global entries from the current selection, then the user must restart the agent. Project entries change on the next `dosu setup` or `dosu mcp add`. The MCP entry `mcp add` writes runs `dosu mcp serve --client <agent>` (a local proxy; never run it by hand). `project show` prints the project key Dosu memory scopes the directory by and which rule produced it; `project link` overrides it for a directory and everything under it. `memory search` and `memory evidence` call the same memory tools as the MCP server, scoped to the current directory; run from an agent's shell they are logged under the agent's session, and refuse to run in a session the user took off the record (`/dosu-incognito`) or for an agent the user put in incognito (`dosu knowledge incognito on <agent>`; its MCP tool calls are refused too, and `dosu knowledge incognito off <agent>` allows sharing in new sessions; previously private sessions stay private). `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file. The CLI updates itself in the background by default; a `[dosu:update] Installing ...` notice on stderr needs no action. `upgrade --auto off` turns that off.
 
 ## Codebase audit
 

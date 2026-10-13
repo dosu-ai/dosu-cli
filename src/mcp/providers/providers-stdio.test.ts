@@ -434,3 +434,39 @@ describe("the Dosu an entry runs", () => {
     expect(cursorEntry().command).toBeUndefined();
   });
 });
+
+describe("proxy entry shape after an upgrade", () => {
+  it.each(
+    allSetupProviders().map((p) => [p.id()]),
+  )("%s recognizes the entry its installer writes", (id) => {
+    const provider = setupProvider(id);
+    expect(provider.isCurrent(makeCfg())).toBe(false);
+    provider.install(makeCfg(), true);
+    expect(provider.isCurrent(makeCfg())).toBe(true);
+    // The proxy reads the target at runtime; changing mode or deployment does not change its shape.
+    expect(provider.isCurrent(makeCfg({ mode: "oss" }))).toBe(true);
+    expect(provider.isCurrent(makeCfg({ deployment_id: "elsewhere" }))).toBe(true);
+  });
+
+  it("keeps a pinned backend current when the checking shell has no override", () => {
+    vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://staging.example");
+    const provider = setupProvider("cursor");
+    provider.install(makeCfg(), true);
+    vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", undefined);
+    expect(provider.isCurrent(makeCfg())).toBe(true);
+  });
+
+  it("requires the correct client, arguments and environment keys", () => {
+    const provider = setupProvider("cursor");
+    provider.install(makeCfg(), true);
+    const path = provider.globalConfigPath();
+    const cfg = loadJSONConfig(path);
+    cfg.mcpServers.dosu.args[3] = "codex";
+    writeFileSync(path, JSON.stringify(cfg));
+    expect(provider.isCurrent(makeCfg())).toBe(false);
+    cfg.mcpServers.dosu.args[3] = "cursor";
+    delete cfg.mcpServers.dosu.env.PATH;
+    writeFileSync(path, JSON.stringify(cfg));
+    expect(provider.isCurrent(makeCfg())).toBe(false);
+  });
+});
