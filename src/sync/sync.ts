@@ -699,7 +699,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       const entry = saved.get(key) ?? ledgerEntry(result, locked.sessions[key], at, cliVersion);
       if (!entry) {
         error = result.message ?? "unknown error";
-        logger.debug("sync", `shipping failed at ${key}: ${error}`);
+        // The reason first: the Activity screen clips long rows, and the reason is what matters.
+        logger.debug("sync", `shipping failed: ${error} (at ${key})`);
         continue;
       }
       settled.set(key, entry);
@@ -734,6 +735,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       if (batch.length > 0) {
         next.last_attempt_at = at;
         next.consecutive_failures = counts.failed > 0 ? next.consecutive_failures + 1 : 0;
+        if (counts.failed > 0) next.last_failure = error ?? "unknown error";
+        else delete next.last_failure;
         next.total_shipped = (next.total_shipped ?? 0) + counts.shipped - savedShipped;
         next.run = run;
       }

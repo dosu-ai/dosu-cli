@@ -1345,6 +1345,27 @@ describe("knowledge sync --status", () => {
     expect(output).toContain("2026-09-02T23:00:00.000Z");
   });
 
+  it("says what stopped the last run, and what to do about it", async () => {
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, consecutive_failures: 1 },
+        backoffUntil: "2026-09-02T23:00:00.000Z",
+        lastFailure: {
+          message: "ingest failed: HTTP 401",
+          hint: "Dosu rejected this install's API key. Run 'dosu login' (or 'dosu setup') to get a new one.",
+        },
+        recentActivity: [],
+      }),
+    );
+
+    await run("sync", "--status");
+
+    const output = allOutput();
+    expect(output).toContain("Last failure:    ingest failed: HTTP 401");
+    expect(output).toContain("Run 'dosu login'");
+  });
+
   it("renders very recent timestamps as 'just now'", async () => {
     mockGetSyncStatus.mockReturnValue(
       statusOf({

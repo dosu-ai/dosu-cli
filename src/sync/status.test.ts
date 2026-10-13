@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emptySyncState, type SessionOutcome, saveSyncState } from "./state";
-import { getSyncStatus } from "./status";
+import { failureHint, getSyncStatus } from "./status";
 
 let dir: string;
 
@@ -117,6 +117,39 @@ describe("getSyncStatus", () => {
       skipped_by_user: 0,
     });
     expect(status.attention.map((e) => e.session)).toEqual(["codex/d", "codex/c", "pi/b"]);
+  });
+
+  it("names the last failure while it counts, with what to do about a rejected key", () => {
+    const failed = { ...emptySyncState(), last_attempt_at: new Date().toISOString() };
+    saveSyncState(
+      { ...failed, consecutive_failures: 1, last_failure: "ingest failed: HTTP 401" },
+      dir,
+    );
+    expect(getSyncStatus({ configDir: dir, readLog: () => "" }).lastFailure).toEqual({
+      message: "ingest failed: HTTP 401",
+      hint: "Dosu rejected this install's API key. Run 'dosu login' (or 'dosu setup') to get a new one.",
+    });
+
+    // A transport error gets its hint; an unexplained one, none.
+    saveSyncState({ ...failed, consecutive_failures: 1, last_failure: "fetch failed" }, dir);
+    expect(getSyncStatus({ configDir: dir, readLog: () => "" }).lastFailure?.hint).toContain(
+      "Could not reach Dosu",
+    );
+    saveSyncState({ ...failed, consecutive_failures: 1, last_failure: "unknown error" }, dir);
+    expect(getSyncStatus({ configDir: dir, readLog: () => "" }).lastFailure).toEqual({
+      message: "unknown error",
+    });
+
+    // A failure the counter no longer counts is history.
+    saveSyncState({ ...failed, consecutive_failures: 0, last_failure: "stale" }, dir);
+    expect(getSyncStatus({ configDir: dir, readLog: () => "" }).lastFailure).toBeUndefined();
+  });
+
+  it("explains a failure's HTTP status, when it says anything", () => {
+    expect(failureHint("ingest failed: HTTP 403")).toContain("dosu login");
+    expect(failureHint("ingest failed: HTTP 503")).toContain("server error");
+    expect(failureHint("The operation was aborted due to timeout")).toContain("Could not reach");
+    expect(failureHint("ingest failed: HTTP 418")).toBeUndefined();
   });
 
   it("omits backoff when there are no failures", () => {
