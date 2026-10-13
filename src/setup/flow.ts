@@ -236,7 +236,9 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
       // At most one trip per process, never a handshake loop: tell the user, exit cleanly,
       // and let a re-run retry.
       p.log.warn(
-        "Your account still needs onboarding. Finish it in the browser at the Dosu app, then re-run `dosu setup`.",
+        wrapLog(
+          "Your account still needs onboarding. Finish it in the browser at the Dosu app, then re-run `dosu setup`.",
+        ),
       );
       trackInBackground(
         trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
@@ -423,7 +425,9 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
     backlog = inScope(await stepPickSyncScope(candidates, storedScope));
     n = offered(backlog).length;
     if (n === 0) {
-      p.log.info("No sessions from those repos are waiting. Dosu memory learns from new ones.");
+      p.log.info(
+        wrapLog("No sessions from those repos are waiting. Dosu memory learns from new ones."),
+      );
       recordCommandFacets({ backfill_offer: "not-offered" });
       return;
     }
