@@ -43,14 +43,20 @@ import {
   withoutSubagents,
 } from "./state";
 
-/** Every run, the first-time backfill included, looks back this far and no further: memory
- * is most useful about recent work, and each shipped session costs a server-side ingest. */
+/** Every run, the first-time backfill included, looks back this far unless `--age` says otherwise:
+ * memory is most useful about recent work, and each shipped session costs a server-side ingest. */
 export const SCAN_WINDOW_DAYS = 30;
 
 /** Ledger entries outlive the scan window by this much before they are pruned. */
 const LEDGER_GRACE_DAYS = 7;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Where a run looking back `ageDays` (`--age`; 0 for no limit) starts: sessions last active
+ * before it are not shipped. */
+export function lookbackStart(now: Date, ageDays: number = SCAN_WINDOW_DAYS): Date {
+  return new Date(ageDays === 0 ? 0 : now.getTime() - ageDays * DAY_MS);
+}
 
 /** How long a run carrying a just-ended session waits for another run to release the lock,
  * rather than leaving the session until some later trigger. */
@@ -169,6 +175,9 @@ export interface SyncOptions {
    * if a hook had named it ended, and the run waits for the lock as an ended session's run does.
    * Always an explicit command, even with `quiet`: it resumes paused syncing and ignores backoff. */
   flush?: boolean;
+  /** `--age`: ship sessions last active this many days back (0 for no limit) instead of the
+   * default window. Hook runs leave it unset. */
+  ageDays?: number;
   /** Report the pending sessions of every repo, and those outside any, whatever the stored scope:
    * for setup's scope picker, which narrows them itself. Only without `deps.ship`; a run that
    * ships always keeps to the scope. */
@@ -391,17 +400,22 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
    * subagents and forks find it. */
   let listed: ReadonlySet<string>;
   let lineage: (key: string) => SessionLinks | undefined;
+  const startedAt = now();
+  const defaultSince = lookbackStart(startedAt);
+  const since = lookbackStart(startedAt, options.ageDays);
   try {
     // The whole window every time: listing is metadata only, and the ledger, not a count cap,
-    // decides what is left to do.
-    const since = new Date(now().getTime() - SCAN_WINDOW_DAYS * DAY_MS);
-    const listSessions = deps.listSessions ?? (() => scanAgentSessions({ since }));
+    // decides what is left to do. A narrower `--age` still scans the default window, so the
+    // transcripts it remembers and the entries it keeps are what a default run would leave; it
+    // only ships less.
+    const scanSince = since < defaultSince ? since : defaultSince;
+    const listSessions = deps.listSessions ?? (() => scanAgentSessions({ since: scanSince }));
     const remembered = state.outside_sessions ?? {};
     const { sessions: scanned, outside } = withOutsideSessions(
       await listSessions(),
       ended,
       remembered,
-      since,
+      scanSince,
     );
     listed = new Set(scanned.map(sessionKey));
     lineage = sessionLineage(scanned);
@@ -499,7 +513,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     }
     // The ledger first, so settled sessions never cost a repo lookup.
     // A flush treats every session as over: nothing will run after it to ship them later.
-    const gate = gateSessions(scanned, state.sessions, {
+    const inWindow = scanned.filter((s) => Date.parse(s.updated) >= since.getTime());
+    const gate = gateSessions(inWindow, state.sessions, {
       ...pending,
       now: now(),
       isEnded: options.flush ? () => true : isEnded,
@@ -642,6 +657,16 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     const saved = new Map<string, LedgerEntry>();
     const reported: ShipSessionResult[] = [];
     let savedShipped = 0;
+    // The widest `--age` any run used is remembered, and the ledger is kept back to it: pruned, an
+    // entry that run settled would be pending, and shipped again, on the next run that wide. Every
+    // save that settles a session records it, so a run cut short still counts. Returns where the
+    // ledger is kept from.
+    const recordLookback = (next: SyncState): number => {
+      const recorded = next.lookback_since ? Date.parse(next.lookback_since) : Infinity;
+      const keepFrom = Math.min(recorded, since.getTime(), defaultSince.getTime());
+      if (keepFrom < defaultSince.getTime()) next.lookback_since = new Date(keepFrom).toISOString();
+      return keepFrom;
+    };
     const settle = (result: ShipSessionResult) => {
       reported.push(result);
       lock.refresh?.();
@@ -655,6 +680,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
         next.sessions[key] = entry;
         next.total_shipped = (next.total_shipped ?? 0) + counted;
         next.run = run;
+        recordLookback(next);
         saveState(next);
         savedShipped += counted;
       } catch {
@@ -725,11 +751,7 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
     try {
       const next = loadState();
       for (const [key, entry] of settled) next.sessions[key] = entry;
-      pruneLedger(
-        next,
-        new Date(now().getTime() - (SCAN_WINDOW_DAYS + LEDGER_GRACE_DAYS) * DAY_MS),
-        listed,
-      );
+      pruneLedger(next, new Date(recordLookback(next) - LEDGER_GRACE_DAYS * DAY_MS), listed);
       // Settling an incognito agent's sessions alone is no attempt to ship: backoff stands.
       if (batch.length > 0) {
         next.last_attempt_at = at;

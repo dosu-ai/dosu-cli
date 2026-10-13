@@ -9,6 +9,14 @@ export function positiveInteger(value: string): number {
   return parsed;
 }
 
+export function nonNegativeInteger(value: string): number {
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed)) {
+    throw new InvalidArgumentError("must be a non-negative integer");
+  }
+  return parsed;
+}
+
 export function positiveIntegerAtMost(maximum: number): (value: string) => number {
   return (value: string) => {
     const parsed = positiveInteger(value);

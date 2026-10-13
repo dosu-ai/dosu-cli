@@ -83,6 +83,21 @@ describe("listSessionBacklog", () => {
     expect(mockScan).toHaveBeenCalledWith({ since: new Date("2026-08-26T12:00:00.000Z") });
   });
 
+  it("lists the window `sync --age` would ship: wider, everything, or narrower", () => {
+    const now = new Date("2026-09-25T12:00:00.000Z");
+    const days = (n: number) =>
+      session({ id: `d${n}`, updated: new Date(now.getTime() - n * 86_400_000).toISOString() });
+    mockScan.mockReturnValue([days(2), days(10), days(200)]);
+
+    expect(listSessionBacklog(now, 0).queued.map((s) => s.id)).toEqual(["d200", "d10", "d2"]);
+    expect(mockScan).toHaveBeenLastCalledWith({ since: new Date(0) });
+    listSessionBacklog(now, 90);
+    expect(mockScan).toHaveBeenLastCalledWith({ since: new Date("2026-06-27T12:00:00.000Z") });
+    // Narrower still scans the default window, then lists only its own.
+    expect(listSessionBacklog(now, 5).queued.map((s) => s.id)).toEqual(["d2"]);
+    expect(mockScan).toHaveBeenLastCalledWith({ since: new Date("2026-08-26T12:00:00.000Z") });
+  });
+
   it("buckets quiet sessions as queued and fresh ones as open", () => {
     const quiet = session({ id: "quiet-1" });
     const fresh = session({ id: "fresh-1", updated: new Date().toISOString() });
