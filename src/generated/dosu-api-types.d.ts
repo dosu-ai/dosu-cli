@@ -380,6 +380,7 @@ export type CliLibrarySourceMonitor = {
 	monitored_paths: Array<string>
 	no_update_behavior: 'emoji' | 'comment' | 'silent'
 	provider_slug: 'github' | 'gitlab' | 'azure_devops'
+	review_trigger: 'opened_and_merged' | 'merged' | 'every_push'
 	setup_required: boolean
 	source_name: string
 }
@@ -593,7 +594,7 @@ export type CliSlackChannelRow = {
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'dd33222d64a5'
+export declare const CLI_CONTRACT_HASH: '4d78951c6d7c'
 
 export type AgentsAddAdminsInput = {
 	deployment_id: string
@@ -1100,6 +1101,7 @@ export type LibrariesMonitorsUpdateInput = {
 	enabled?: boolean
 	monitored_paths?: Array<string>
 	no_update_behavior?: 'emoji' | 'comment' | 'silent'
+	review_trigger?: 'opened_and_merged' | 'merged' | 'every_push'
 	space_id: string
 }
 
