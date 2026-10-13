@@ -100,19 +100,25 @@ export interface CaptureDeps {
   now?: Date;
 }
 
-/** Record the branch from a Cursor `stop` hook payload; other agents' payloads are ignored.
- * `stop` fires every turn, and the first turn's branch is the one kept. */
+/** The scanner keys Cursor sessions by the transcript's filename stem; a payload without a
+ * transcript (transcripts disabled) falls back to the conversation id, which names the same file. */
+function cursorSessionId(hook: Record<string, unknown>): string | null {
+  const id =
+    typeof hook.transcript_path === "string" && hook.transcript_path.endsWith(".jsonl")
+      ? basename(hook.transcript_path, ".jsonl")
+      : hook.conversation_id;
+  return typeof id === "string" ? id : null;
+}
+
+/** Record the branch from a Cursor hook payload (`stop` after every turn, `sessionEnd` when the
+ * chat closes); other agents' payloads are ignored. The first turn's branch is the one kept. */
 export function captureCursorStop(payload: unknown, deps: CaptureDeps = {}): boolean {
   if (typeof payload !== "object" || payload === null) return false;
   const hook = payload as Record<string, unknown>;
   if (hook.cursor_version === undefined) return false;
 
-  // The scanner keys Cursor sessions by the transcript's filename stem.
-  const id =
-    typeof hook.transcript_path === "string" && hook.transcript_path.endsWith(".jsonl")
-      ? basename(hook.transcript_path, ".jsonl")
-      : hook.conversation_id;
-  if (typeof id !== "string") return false;
+  const id = cursorSessionId(hook);
+  if (id === null) return false;
   const roots = hook.workspace_roots;
   const dir = Array.isArray(roots) && typeof roots[0] === "string" ? roots[0] : undefined;
   if (!dir?.startsWith("/")) return false;
@@ -213,12 +219,27 @@ function piSessionShutdown(hook: HookPayload): EndedSession | null {
   return { harness: "pi", id, path };
 }
 
+/** Cursor `sessionEnd`: `{session_id, reason, hook_event_name, cursor_version, conversation_id,
+ * transcript_path, workspace_roots}`, fired when the chat is closed, the window closed or the run
+ * aborted. The transcript is `<id>/<id>.jsonl` under the project's `agent-transcripts`, and is
+ * null when the user turned transcripts off: then there is nothing to ship. Only Cursor's payloads
+ * carry `cursor_version`, and its event name is camel-cased unlike Claude Code's and Codex's. */
+function cursorSessionEnd(hook: HookPayload): EndedSession | null {
+  if (hook.hook_event_name !== "sessionEnd" || hook.cursor_version === undefined) return null;
+  const path = hook.transcript_path;
+  if (typeof path !== "string" || !path.startsWith("/") || !path.endsWith(".jsonl")) return null;
+  const id = basename(path, ".jsonl");
+  if (!SAFE_SEGMENT.test(id)) return null;
+  return { harness: "cursor", id, path };
+}
+
 /** One reader per agent for its definitive end-of-session event; OpenCode has none, since its
  * plugin passes `--ended` itself. Per-turn events (Cursor `stop`, Codex `Stop` before 0.160,
  * OpenCode's `session.idle`) never count: they fire while the session goes on. */
 const END_EVENT_READERS: ReadonlyArray<(hook: HookPayload) => EndedSession | null> = [
   claudeSessionEnd,
   codexSessionEnd,
+  cursorSessionEnd,
   piSessionShutdown,
 ];
 
