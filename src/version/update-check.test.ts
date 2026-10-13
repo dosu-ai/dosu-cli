@@ -12,6 +12,17 @@ const mocks = vi.hoisted(() => ({
   startAutoUpdate: vi.fn<(version: string) => "started" | "in_progress" | "unavailable">(),
 }));
 
+// Pin a stable running version. From source, VERSION is package.json's, which a beta release
+// commit makes a prerelease; releaseTag() would then follow `beta` instead of `latest`.
+vi.mock("./version", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./version")>();
+  return {
+    ...actual,
+    VERSION: "0.60.0",
+    releaseTag: (version = "0.60.0") => actual.releaseTag(version),
+  };
+});
+
 vi.mock("./auto-update", () => ({ startAutoUpdate: mocks.startAutoUpdate }));
 
 import {
