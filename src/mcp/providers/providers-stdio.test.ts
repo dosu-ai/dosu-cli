@@ -55,7 +55,6 @@ beforeEach(() => {
   vi.stubEnv("PATH", bin);
   vi.stubEnv("XDG_CONFIG_HOME", undefined);
   vi.stubEnv("CODEX_HOME", undefined);
-  vi.stubEnv("CLINE_DIR", undefined);
   vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
   vi.stubEnv("DOSU_DEV", undefined);
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", undefined);
@@ -78,22 +77,8 @@ const JSON_PROVIDERS: Array<{ id: string; key: string; entry: (client: string) =
     key: "mcpServers",
     entry: (c) => ({ type: "stdio", ...proxy(c), alwaysLoad: true }),
   },
-  { id: "claude-desktop", key: "mcpServers", entry: proxy },
   { id: "cursor", key: "mcpServers", entry: proxy },
-  { id: "vscode", key: "servers", entry: (c) => ({ type: "stdio", ...proxy(c) }) },
   { id: "gemini", key: "mcpServers", entry: proxy },
-  { id: "windsurf", key: "mcpServers", entry: proxy },
-  { id: "zed", key: "context_servers", entry: proxy },
-  {
-    id: "cline",
-    key: "mcpServers",
-    entry: (c) => ({ type: "stdio", ...proxy(c), disabled: false }),
-  },
-  {
-    id: "cline-cli",
-    key: "mcpServers",
-    entry: (c) => ({ type: "stdio", ...proxy(c), disabled: false }),
-  },
   {
     id: "copilot",
     key: "mcpServers",
@@ -107,8 +92,6 @@ const JSON_PROVIDERS: Array<{ id: string; key: string; entry: (client: string) =
       return { type: "local", command: [command, ...args], environment: env, enabled: true };
     },
   },
-  { id: "antigravity", key: "mcpServers", entry: proxy },
-  { id: "mcporter", key: "mcpServers", entry: proxy },
   { id: "factory", key: "mcpServers", entry: (c) => ({ type: "stdio", ...proxy(c) }) },
 ];
 

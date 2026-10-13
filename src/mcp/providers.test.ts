@@ -2,10 +2,36 @@ import { describe, expect, it } from "vitest";
 import { allProviders, allSetupProviders, getProvider } from "./providers";
 
 describe("provider registry", () => {
-  it("allProviders returns 17 providers", () => {
-    const providers = allProviders();
-    expect(providers).toHaveLength(17);
+  it("allProviders returns the 8 agents whose sessions can be learned from, plus manual", () => {
+    expect(allProviders().map((p) => p.id())).toEqual([
+      "claude",
+      "cursor",
+      "gemini",
+      "codex",
+      "copilot",
+      "opencode",
+      "factory",
+      "pi",
+      "manual",
+    ]);
   });
+
+  // Agents without a @letta-ai/trajectory adapter get no provider: all the CLI could do for them
+  // is write an MCP entry that never learns from their sessions.
+  for (const id of [
+    "claude-desktop",
+    "vscode",
+    "windsurf",
+    "zed",
+    "cline",
+    "cline-cli",
+    "antigravity",
+    "mcporter",
+  ]) {
+    it(`${id} is no longer a provider`, () => {
+      expect(() => getProvider(id)).toThrow(`unknown tool: ${id}`);
+    });
+  }
 
   it("all providers have unique IDs", () => {
     const providers = allProviders();
@@ -45,20 +71,13 @@ describe("provider registry", () => {
   describe("provider metadata", () => {
     const expectedProviders = [
       { id: "claude", name: "Claude Code", local: true },
-      { id: "claude-desktop", name: "Claude Desktop", local: false },
       { id: "cursor", name: "Cursor", local: true },
-      { id: "vscode", name: "VS Code", local: true },
       { id: "gemini", name: "Gemini CLI", local: true },
       { id: "codex", name: "Codex (CLI + Desktop)", local: true },
-      { id: "windsurf", name: "Windsurf", local: false },
-      { id: "zed", name: "Zed", local: true },
-      { id: "cline", name: "Cline", local: false },
-      { id: "cline-cli", name: "Cline CLI", local: false },
       { id: "copilot", name: "GitHub Copilot CLI", local: true },
       { id: "opencode", name: "OpenCode", local: true },
+      { id: "factory", name: "Factory", local: true },
       { id: "pi", name: "Pi", local: false },
-      { id: "antigravity", name: "Antigravity", local: false },
-      { id: "mcporter", name: "MCPorter", local: true },
       { id: "manual", name: "Manual Configuration", local: false },
     ];
 

@@ -76,9 +76,8 @@ export function hasShape(expected: unknown, actual: unknown): boolean {
 }
 
 /** Keys an agent writes into its own server entry when the user switches the server off,
- * approves or hides tools, or sets a timeout (Cline: `disabled`, `autoApprove`, `timeout`;
- * Windsurf and Antigravity: `disabled`, `disabledTools`; Factory: `disabled`; OpenCode and Zed:
- * `enabled`; Gemini: `trust`, `includeTools`, `excludeTools`, `timeout`; Codex: `enabled`,
+ * approves or hides tools, or sets a timeout (Factory: `disabled`; OpenCode: `enabled`; Gemini:
+ * `trust`, `includeTools`, `excludeTools`, `timeout`; Codex: `enabled`,
  * `required`, `enabled_tools`, `disabled_tools`, `default_tools_approval_mode`,
  * `startup_timeout_sec`, `tool_timeout_sec`). They hold the user's choice, not the entry's
  * format. Counting them would rewrite the entry on every release and switch Dosu back on for a
