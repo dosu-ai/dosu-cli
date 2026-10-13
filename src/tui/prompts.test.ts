@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installCenteredLayout } from "./layout";
 import { confirm, intro, isCancel, log, multiselect, outro, select, spinner } from "./prompts";
 
 const ESC = String.fromCharCode(27);
@@ -12,7 +13,9 @@ function stripAnsi(text: string): string {
   return text.replace(new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]`, "g"), "");
 }
 
-function fakeIO(overrides: { inputTTY?: boolean; outputTTY?: boolean; rows?: number } = {}) {
+function fakeIO(
+  overrides: { inputTTY?: boolean; outputTTY?: boolean; rows?: number; columns?: number } = {},
+) {
   const input = Object.assign(new EventEmitter(), {
     isTTY: overrides.inputTTY ?? true,
     isRaw: false,
@@ -26,7 +29,7 @@ function fakeIO(overrides: { inputTTY?: boolean; outputTTY?: boolean; rows?: num
   const written: string[] = [];
   const output = {
     isTTY: overrides.outputTTY ?? true,
-    columns: 80,
+    columns: overrides.columns ?? 80,
     rows: overrides.rows ?? 24,
     write(chunk: string) {
       written.push(chunk);
@@ -199,6 +202,38 @@ describe("select", () => {
     await expect(result).resolves.toBe("v9");
   });
 
+  it("erases every terminal row a wrapped line took, not just one per line", async () => {
+    // At 30 columns the legend ("▌ ↑↓ move · enter select · esc cancel", 37 wide) wraps onto
+    // a second row: 6 frame lines fill 7 rows, and the repaint must climb all 7.
+    const { input, output, written } = fakeIO({ columns: 30 });
+    const result = select({ message: "Pick", options: OPTIONS }, { input, output });
+    input.emit("data", DOWN);
+    expect(written.at(-2)).toBe(`${ESC}[7A${ESC}[0J`);
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
+
+  it("counts the centered layout's margin toward a line's width", async () => {
+    // 100 columns gives an 18-column margin; a 90-wide label plus the margin wraps.
+    const wide = [{ value: "w", label: "w".repeat(88) }];
+    const { input, output, written } = fakeIO({ columns: 100 });
+    const restore = installCenteredLayout({
+      isTTY: true,
+      columns: 100,
+      write: () => true,
+    } as never);
+    try {
+      const result = select({ message: "Pick", options: wide }, { input, output });
+      input.emit("data", DOWN);
+      // 5 frame lines; the option row is the only one that wraps → 6 rows.
+      expect(written.at(-2)).toBe(`${ESC}[6A${ESC}[0J`);
+      input.emit("data", ESC);
+      expect(isCancel(await result)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
   it("assumes 24 rows when the output does not report a height", async () => {
     const many = Array.from({ length: 30 }, (_, i) => ({ value: `v${i}`, label: `Option ${i}` }));
     const { input, output, written } = fakeIO();
@@ -351,6 +386,52 @@ describe("multiselect", () => {
     expect(text()).not.toContain(longPath);
     expect(text()).toContain("\u2026");
     expect(text()).toContain("some-extremely-long-temp-folder-name-here");
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
+
+  it("budgets the hint column against the label so a row never wraps", async () => {
+    // A 52-column pane: every repo name fits under the old label cap, and then the session
+    // counts pushed each row past the edge and "sessions" wrapped onto its own line.
+    const { input, output, written } = fakeIO({ columns: 52 });
+    const result = multiselect(
+      {
+        message: "Choose",
+        options: [
+          { value: "a", label: "subquadratic-ai/cli-tool", hint: "93 sessions" },
+          { value: "b", label: "subquadratic-ai/relay-clayton-prototype", hint: "4 sessions" },
+        ],
+      },
+      { input, output },
+    );
+    const rows = stripAnsi(written.at(-1) ?? "")
+      .split("\n")
+      .filter((line) => line.includes("sessions"));
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row.length).toBeLessThanOrEqual(52);
+    expect(rows[1]).toContain("\u2026");
+    expect(rows[1]).toContain("relay-clayton-prototype");
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
+
+  it("budgets the widest live status, in either state, against the label", async () => {
+    const { input, output, written } = fakeIO({ columns: 40 });
+    const result = multiselect(
+      {
+        message: "Choose",
+        options: [{ value: "x", label: "a-label-that-is-fairly-long-indeed" }],
+        initialValues: ["x"],
+        statusFor: (_value, picked) => (picked ? "ok" : "will remove this one"),
+      },
+      { input, output },
+    );
+    const row = stripAnsi(written.at(-1) ?? "")
+      .split("\n")
+      .find((line) => line.includes("ok")) as string;
+    // Clipped for the unpicked state's wider status, not just the one showing now.
+    expect(row).toContain("\u2026");
+    expect(row.length).toBeLessThanOrEqual(40);
     input.emit("data", ESC);
     expect(isCancel(await result)).toBe(true);
   });

@@ -16,6 +16,13 @@ const TOKEN_PATTERN = new RegExp(`(\r\n|\r|\n|${ESC}\\[[0-9;?]*[A-Za-z])`);
 const COLUMN_RESET_FINALS = new Set(["D", "G", "H", "f"]);
 
 let active = false;
+let activeMargin = 0;
+
+/** Columns the installed layout prepends to every line; 0 while none is installed. In-place
+ * repaints add it to a line's width to tell whether the line wraps. */
+export function activeLayoutMargin(): number {
+  return activeMargin;
+}
 
 /** Width of the content column for the current terminal. */
 export function contentWidth(columns: number = process.stdout.columns ?? 80): number {
@@ -156,6 +163,7 @@ export function installCenteredLayout(stream: NodeJS.WriteStream = process.stdou
   if (margin === 0) return () => {};
 
   active = true;
+  activeMargin = margin;
   const pad = " ".repeat(margin);
   const original = stream.write;
   const state = { atLineStart: true };
@@ -174,5 +182,6 @@ export function installCenteredLayout(stream: NodeJS.WriteStream = process.stdou
   return () => {
     stream.write = original;
     active = false;
+    activeMargin = 0;
   };
 }
