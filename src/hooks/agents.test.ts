@@ -134,20 +134,42 @@ describe("claude agent", () => {
 });
 
 describe("cursor agent", () => {
-  it("enables a stop hook in hooks.json", () => {
+  it("enables stop and sessionEnd hooks in hooks.json", () => {
     const cursor = getHookAgent("cursor");
     cursor?.enable();
 
-    const config = readJSON(join(fakeHome, ".cursor", "hooks.json")) as {
+    const hooksPath = join(fakeHome, ".cursor", "hooks.json");
+    const config = readJSON(hooksPath) as {
       version: number;
-      hooks: { stop: unknown[] };
+      hooks: { stop: unknown[]; sessionEnd: unknown[] };
     };
     expect(config.version).toBe(1);
     expect(config.hooks.stop).toEqual([{ command: HOOK_COMMAND }]);
+    expect(config.hooks.sessionEnd).toEqual([{ command: HOOK_COMMAND }]);
     expect(cursor?.isEnabled()).toBe(true);
+    expect(cursor?.statusNote?.()).toBe("");
 
     cursor?.disable();
     expect(cursor?.isEnabled()).toBe(false);
+    expect(readJSON(hooksPath)).toEqual({ version: 1, hooks: {} });
+  });
+
+  it("counts an install from before sessionEnd as enabled, and adds the event on enable", () => {
+    const hooksPath = join(fakeHome, ".cursor", "hooks.json");
+    mkdirSync(join(fakeHome, ".cursor"), { recursive: true });
+    writeFileSync(
+      hooksPath,
+      JSON.stringify({ version: 1, hooks: { stop: [{ command: HOOK_COMMAND }] } }),
+    );
+    const cursor = getHookAgent("cursor");
+    expect(cursor?.isEnabled()).toBe(true);
+    expect(cursor?.statusNote?.()).toContain("sessionEnd hook is missing");
+
+    cursor?.enable();
+    const config = readJSON(hooksPath) as { hooks: { stop: unknown[]; sessionEnd: unknown[] } };
+    expect(config.hooks.stop).toEqual([{ command: HOOK_COMMAND }]);
+    expect(config.hooks.sessionEnd).toEqual([{ command: HOOK_COMMAND }]);
+    expect(cursor?.statusNote?.()).toBe("");
   });
 
   it("installs /dosu-incognito with the hook, and removes it with the hook once nothing ships", () => {

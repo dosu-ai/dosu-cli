@@ -156,10 +156,11 @@ waits for it (up to ten minutes) instead of leaving the session for a later trig
 run ships nothing, but still remembers where an ended session lives. While hook runs back off after
 a failure, a run carrying an ended session still tries that session, and only that one; if it gets
 through, the backoff ends. Only definitive end events count: Claude Code's `SessionEnd`, Codex's
-`SessionEnd` (0.160+), whose session is named by its rollout file as the scan names it, the exit of
-the opencode process that ran an OpenCode session, and pi's `session_shutdown` as the Dosu pi
-extension reports it. Per-turn events (Cursor's `stop`, Codex's `Stop`, OpenCode's `session.idle`)
-never pass `--ended`. Each agent's end event is one reader in `END_EVENT_READERS`
+`SessionEnd` (0.160+), whose session is named by its rollout file as the scan names it, Cursor's
+`sessionEnd` (the chat closed, Cursor quit, or the run aborted; a chat left open fires none, and
+with Cursor's transcripts turned off there is nothing to ship), the exit of the opencode process
+that ran an OpenCode session, and pi's `session_shutdown` as the Dosu pi extension reports it.
+Per-turn events (Cursor's `stop`, Codex's `Stop`, OpenCode's `session.idle`) never pass `--ended`. Each agent's end event is one reader in `END_EVENT_READERS`
 (`src/sessions/capture.ts`), except OpenCode's: its plugin passes `--ended` itself. `--flush` lifts
 the quiet period for every session (see [Throwaway machines](#throwaway-machines)).
 
@@ -235,10 +236,11 @@ dosu knowledge sync --flush
 ```
 
 End events ship most sessions at once, but not all: Codex killed with SIGTERM fires no `SessionEnd`,
-Codex before 0.160 and Cursor have only per-turn events, pi run with `--no-extensions` loads no
-extension to report its end, and the sync a hook starts runs detached, where a teardown can cut it
-short. A flush ships every pending session now, with its subagents, past the five-minute quiet
-period. It ships the whole backlog in the foreground (`--detach` is refused), and when
+Codex before 0.160 has only per-turn events, a Cursor chat left open fires no `sessionEnd`, pi run
+with `--no-extensions` loads no extension to report its end, and the sync a hook starts runs
+detached, where a teardown can cut it short. A flush ships every pending session now, with its
+subagents, past the five-minute quiet period. It ships the whole backlog in the foreground
+(`--detach` is refused), and when
 another sync holds the lock, such as one a session-end hook just started, it waits for it (up to ten
 minutes) instead of skipping. It is an explicit command even with `--quiet`, which then only
 silences it: it resumes a paused sync and does not wait out a failure backoff. It still leaves out
@@ -333,8 +335,9 @@ A session's repo is the `origin` remote of its working directory, normalized to 
 key (`git@github.com:dosu-ai/dosu-cli.git` → `github.com/dosu-ai/dosu-cli`). A session outside a
 repo, or in a repo without an `origin`, has no repo. The lookup is cached per session in
 `project-dirs.json`, so a checkout deleted later still resolves. Cursor's transcripts record no
-working directory, so its `stop` hook records it to `session-captures/cursor/<id>.json` before the
-detached sync starts, with the time and branch of the session's first turn.
+working directory, so its `stop` hook (and its `sessionEnd`) records it to
+`session-captures/cursor/<id>.json` before the detached sync starts, with the time and branch of
+the session's first turn.
 
 `dosu` → settings → sync scope picks which repos to ship (`repo_filter` in the state file). With a
 repo scope, only sessions in the picked repos are shipped. Picking every repo clears the filter, so
@@ -546,7 +549,7 @@ no restart.
 - `dosu knowledge sync --status` prints `Incognito: <agents> (not shipped)` while the list is not
   empty.
 
-Clients with no session of their own on this machine (Claude Desktop, VS Code, Windsurf, ...) are no
+Clients with no session of their own on this machine (a Claude Desktop or VS Code given the entry by hand, ...) are no
 agent's to switch: `incognito on claude` leaves Claude Desktop's Dosu tools working. A remote-HTTP
 Dosu entry (a one-off `npx @dosu/cli setup` writes one, having no install for the proxy to run)
 bypasses the proxy for `/dosu-incognito` and the switch alike; there the switch has only Claude

@@ -107,6 +107,16 @@ describe("captureCursorStop", () => {
     expect(readCapturedSession("cursor/conv-1", configDir)?.branch).toBe("main");
   });
 
+  it("records from a sessionEnd payload too, when no stop ever fired", () => {
+    const deps = { currentBranch: () => "main", configDir, now: NOW };
+    const end = { ...payload, hook_event_name: "sessionEnd", reason: "user_close" };
+    expect(captureCursorStop(end, deps)).toBe(true);
+    expect(readCapturedSession("cursor/uuid-1", configDir)).toMatchObject({
+      dir: "/work/app",
+      branch: "main",
+    });
+  });
+
   it("ignores other agents' payloads and payloads missing an id or a workspace", () => {
     const deps = { currentBranch: () => "main", configDir, now: NOW };
     expect(captureCursorStop(null, deps)).toBe(false);
@@ -232,6 +242,27 @@ describe("captureHookSession", () => {
       path: "/home/u/.claude/projects/-work-app/0a1b2c3d-4e5f-6789-abcd-ef0123456789.jsonl",
     });
   });
+
+  it("names the session a Cursor sessionEnd hook reports, and records its capture", async () => {
+    vi.stubEnv("XDG_CONFIG_HOME", configDir);
+    const transcript = "/home/u/.cursor/projects/work-app/agent-transcripts/uuid-9/uuid-9.jsonl";
+    const stream = new PassThrough();
+    const done = captureHookSession(stream);
+    stream.end(
+      JSON.stringify({
+        conversation_id: "uuid-9",
+        session_id: "uuid-9",
+        hook_event_name: "sessionEnd",
+        cursor_version: "2.4.0",
+        workspace_roots: [configDir],
+        transcript_path: transcript,
+        reason: "window_close",
+      }),
+    );
+    await expect(done).resolves.toEqual({ harness: "cursor", id: "uuid-9", path: transcript });
+    expect(readCapturedSession("cursor/uuid-9")?.dir).toBe(configDir);
+    vi.unstubAllEnvs();
+  });
 });
 
 describe("endedSessionOf", () => {
@@ -267,9 +298,51 @@ describe("endedSessionOf", () => {
     });
   });
 
+  // Cursor: camel-cased event name, the transcript at `<id>/<id>.jsonl`, only its payloads carry
+  // cursor_version.
+  const cursorEnd = {
+    conversation_id: "0d6228d2-593b-4023-8ca2-fd8c549c597d",
+    session_id: "0d6228d2-593b-4023-8ca2-fd8c549c597d",
+    hook_event_name: "sessionEnd",
+    cursor_version: "2.4.0",
+    workspace_roots: ["/work/app"],
+    transcript_path:
+      "/home/u/.cursor/projects/work-app/agent-transcripts/0d6228d2-593b-4023-8ca2-fd8c549c597d/0d6228d2-593b-4023-8ca2-fd8c549c597d.jsonl",
+    reason: "user_close",
+    duration_ms: 45000,
+    is_background_agent: false,
+  };
+
+  it.each([
+    "completed",
+    "aborted",
+    "error",
+    "window_close",
+    "user_close",
+  ])("reads a Cursor sessionEnd (reason %s), naming the session by its transcript stem", (reason) => {
+    expect(endedSessionOf({ ...cursorEnd, reason })).toEqual({
+      harness: "cursor",
+      id: "0d6228d2-593b-4023-8ca2-fd8c549c597d",
+      path: cursorEnd.transcript_path,
+    });
+  });
+
   it.each([
     ["a per-turn Stop event", { ...claudeEnd, hook_event_name: "Stop" }],
     ["Codex's per-turn Stop", { ...codexEnd, hook_event_name: "Stop", turn_id: "t1" }],
+    ["a Cursor sessionEnd with transcripts off", { ...cursorEnd, transcript_path: null }],
+    [
+      "a Cursor sessionEnd whose transcript is not a .jsonl file",
+      { ...cursorEnd, transcript_path: "/home/u/.cursor/transcript.txt" },
+    ],
+    [
+      "a Cursor sessionEnd with an unsafe transcript stem",
+      { ...cursorEnd, transcript_path: "/home/u/.cursor/agent-transcripts/a.b/a.b.jsonl" },
+    ],
+    [
+      "a camel-cased sessionEnd from an agent that is not Cursor",
+      { ...cursorEnd, cursor_version: undefined },
+    ],
     [
       "a Codex SessionEnd whose rollout belongs to another session",
       { ...codexEnd, session_id: "01a0ff29-0000-7000-8000-000000000000" },

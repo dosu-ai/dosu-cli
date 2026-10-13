@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type RuleAgentID = "claude" | "cursor" | "codex" | "opencode" | "gemini" | "antigravity";
+export type RuleAgentID = "claude" | "cursor" | "codex" | "opencode" | "gemini";
 
 type RuleTarget =
   | {
@@ -76,10 +76,6 @@ const RULE_TARGETS: Record<RuleAgentID, RuleTarget> = {
     path: () => join(homedir(), ".config", "opencode", "AGENTS.md"),
   },
   gemini: {
-    kind: "section",
-    path: () => join(homedir(), ".gemini", "GEMINI.md"),
-  },
-  antigravity: {
     kind: "section",
     path: () => join(homedir(), ".gemini", "GEMINI.md"),
   },

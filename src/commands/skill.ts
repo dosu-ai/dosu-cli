@@ -2,9 +2,9 @@
  *
  * The skills (`skills/` in the repository, embedded at build time as `BUNDLED_SKILLS`) are
  * written to the universal `~/.agents/skills/<name>` directory that Cursor, Codex, Gemini CLI,
- * Zed, Cline, Copilot, OpenCode, and Antigravity all read. Claude Code and Windsurf read their own
- * directories, which receive a symlink to the universal copy (or a plain copy where symlinks are
- * unavailable). Because the skill content is version-locked to the binary, "updating" a skill
+ * Copilot and OpenCode all read. Claude Code reads its own directory, which receives a symlink to
+ * the universal copy (or a plain copy where symlinks are unavailable). Because the skill content
+ * is version-locked to the binary, "updating" a skill
  * means upgrading the CLI; `checkForSkillUpdates` re-applies the bundle after an upgrade. */
 
 import {
@@ -38,12 +38,8 @@ const SUPPORTED_SKILL_AGENTS = [
   "cursor",
   "gemini-cli",
   "codex",
-  "windsurf",
-  "zed",
-  "cline",
   "github-copilot",
   "opencode",
-  "antigravity",
 ] as const;
 
 type SkillAgentID = (typeof SUPPORTED_SKILL_AGENTS)[number];
@@ -51,17 +47,17 @@ type SkillAgentID = (typeof SUPPORTED_SKILL_AGENTS)[number];
 const SKILL_AGENT_BY_PROVIDER: Readonly<Record<string, SkillAgentID>> = {
   claude: "claude-code",
   cursor: "cursor",
-  vscode: "github-copilot",
   gemini: "gemini-cli",
   codex: "codex",
-  windsurf: "windsurf",
-  zed: "zed",
-  cline: "cline",
-  "cline-cli": "cline",
   copilot: "github-copilot",
   opencode: "opencode",
-  antigravity: "antigravity",
 };
+
+/** Private skills directories earlier versions symlinked for agents the CLI no longer configures
+ * (Windsurf): `dosu skill remove` still cleans them up. */
+const LEGACY_LINKED_SKILLS_DIRS: ReadonlyArray<() => string> = [
+  () => join(homedir(), ".codeium", "windsurf", "skills"),
+];
 
 export function skillAgentIDsForProviders(providerIDs: readonly string[]): string[] {
   return [
@@ -88,7 +84,6 @@ function linkedSkillsDir(agent: SkillAgentID): string | null {
     const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
     return join(claudeConfigDir, "skills");
   }
-  if (agent === "windsurf") return join(homedir(), ".codeium", "windsurf", "skills");
   return null;
 }
 
@@ -299,7 +294,10 @@ export function removeSkills(): string[] {
   const names = new Set([...BUNDLED_SKILLS.map((skill) => skill.name), ...legacy]);
   const dirs = [
     universalSkillsDir(),
-    ...new Set(SUPPORTED_SKILL_AGENTS.map(linkedSkillsDir).filter((dir): dir is string => !!dir)),
+    ...new Set([
+      ...SUPPORTED_SKILL_AGENTS.map(linkedSkillsDir).filter((dir): dir is string => !!dir),
+      ...LEGACY_LINKED_SKILLS_DIRS.map((dir) => dir()),
+    ]),
   ];
   const removed: string[] = [];
   for (const dir of dirs) {

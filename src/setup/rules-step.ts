@@ -104,8 +104,8 @@ export async function stepConfigureAgentRules(
     }
   }
 
-  // Gemini CLI and Antigravity intentionally share ~/.gemini/GEMINI.md.
-  // Keep the shared section if either selected agent still needs it.
+  // Two agents may share one rule file; keep the shared section if a selected agent still needs
+  // it.
   const retainedPaths = new Set(
     toInstall
       .map((provider) => rulePathForAgent(provider.id()))

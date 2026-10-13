@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Dosu CLI (`@dosu/cli`) — a CLI tool that manages MCP (Model Context Protocol) server integrations for AI tools (Claude Code, Cursor, VS Code, Windsurf, Zed, etc.). It authenticates users via browser-based OAuth against Supabase, selects a Dosu deployment, and writes MCP server entries into each AI tool's config file.
+Dosu CLI (`@dosu/cli`) — a CLI tool that manages MCP (Model Context Protocol) server integrations for coding agents whose sessions Dosu can learn from (Claude Code, Cursor, Codex, Gemini CLI, Copilot CLI, OpenCode, Factory, Pi — each has a session log that `@letta-ai/trajectory` normalizes; an agent without one gets no provider). It authenticates users via browser-based OAuth against Supabase, selects a Dosu deployment, and writes MCP server entries into each AI tool's config file.
 
 ## Commands
 
