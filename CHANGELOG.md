@@ -1,3 +1,10 @@
+# [0.67.0-beta.3](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.2...v0.67.0-beta.3) (2026-10-13)
+
+
+### Bug Fixes
+
+* **setup:** wrap log prose to the centered content column ([#281](https://github.com/dosu-ai/dosu-cli/issues/281)) ([ac69162](https://github.com/dosu-ai/dosu-cli/commit/ac69162325b95a1b27cb26dc543f6802b651f0ec))
+
 # [0.67.0-beta.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.1...v0.67.0-beta.2) (2026-10-13)
 
 
