@@ -249,6 +249,19 @@ describe("select", () => {
     input.emit("data", ESC);
     expect(isCancel(await result)).toBe(true);
   });
+
+  it("assumes 80 columns when the output does not report a width", async () => {
+    // "▌ ❯ " plus an 88-wide label is 92 columns: one row at any real width, two at the
+    // assumed 80, so the repaint climbs 6 rows for 5 frame lines.
+    const wide = [{ value: "w", label: "w".repeat(88) }];
+    const { input, output, written } = fakeIO();
+    (output as { columns?: number }).columns = undefined;
+    const result = select({ message: "Pick", options: wide }, { input, output });
+    input.emit("data", DOWN);
+    expect(written.at(-2)).toBe(`${ESC}[6A${ESC}[0J`);
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
 });
 
 describe("multiselect", () => {
@@ -386,6 +399,20 @@ describe("multiselect", () => {
     expect(text()).not.toContain(longPath);
     expect(text()).toContain("\u2026");
     expect(text()).toContain("some-extremely-long-temp-folder-name-here");
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+  });
+
+  it("assumes 80 columns when the output does not report a width", async () => {
+    // contentWidth(80) is 64, less 8 for the row's chrome: a 70-wide label clips to 56.
+    const { input, output, text } = fakeIO();
+    (output as { columns?: number }).columns = undefined;
+    const result = multiselect(
+      { message: "Choose", options: [{ value: "a".repeat(70) }] },
+      { input, output },
+    );
+    expect(text()).toContain(`\u2026${"a".repeat(55)}`);
+    expect(text()).not.toContain("a".repeat(56));
     input.emit("data", ESC);
     expect(isCancel(await result)).toBe(true);
   });
