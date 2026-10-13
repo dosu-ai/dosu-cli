@@ -79,22 +79,40 @@ function groupedAgent(options: {
   };
 }
 
+/** Cursor's two events: `stop` fires after every turn and pins the session's directory and branch
+ * (captureCursorStop), which Cursor's transcript never records; `sessionEnd` fires when the chat
+ * is closed, the window closed or the run aborted, and ships the session at once. A chat left open
+ * fires no `sessionEnd`, so `stop` also keeps the session shipping once it has been quiet. */
 const CURSOR_EVENT = "stop";
+const CURSOR_END_EVENT = "sessionEnd";
 
 function cursorAgent(): HookAgent {
   const configPath = () => expandHome("~/.cursor/hooks.json");
+  const has = (event: string) => hasCursorHook(readHookConfig(configPath()), event);
   return {
     id: () => "cursor",
     name: () => "Cursor",
     isInstalled: () => isInstalled(["~/.cursor"]),
     configPath,
-    isEnabled: () => hasCursorHook(readHookConfig(configPath()), CURSOR_EVENT),
+    // The per-turn hook is the switch: an install from before sessionEnd stays enabled, and the
+    // post-upgrade refresh re-runs enable() to add the end event.
+    isEnabled: () => has(CURSOR_EVENT),
     enable: () => {
-      writeHookConfig(configPath(), addCursorHook(readHookConfig(configPath()), CURSOR_EVENT));
+      let config = readHookConfig(configPath());
+      config = addCursorHook(config, CURSOR_EVENT);
+      config = addCursorHook(config, CURSOR_END_EVENT);
+      writeHookConfig(configPath(), config);
     },
     disable: () => {
-      writeHookConfig(configPath(), removeCursorHook(readHookConfig(configPath()), CURSOR_EVENT));
+      let config = readHookConfig(configPath());
+      config = removeCursorHook(config, CURSOR_EVENT);
+      config = removeCursorHook(config, CURSOR_END_EVENT);
+      writeHookConfig(configPath(), config);
     },
+    statusNote: () =>
+      has(CURSOR_END_EVENT)
+        ? ""
+        : "The sessionEnd hook is missing, so sessions ship only once quiet; 'dosu knowledge hooks enable cursor' adds it.",
   };
 }
 

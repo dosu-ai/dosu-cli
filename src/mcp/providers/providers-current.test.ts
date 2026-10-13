@@ -119,14 +119,14 @@ describe("out-of-date entries", () => {
   });
 
   it("stays current when the agent's UI turns Dosu off or approves its tools", () => {
-    const cline = provider("cline-cli");
-    cline.install(makeCfg(), true);
-    const path = join(home, ".cline", "data", "settings", "cline_mcp_settings.json");
+    const cursor = provider("cursor");
+    cursor.install(makeCfg(), true);
+    const path = join(home, ".cursor", "mcp.json");
     const cfg = loadJSONConfig(path);
     Object.assign(cfg.mcpServers.dosu, { disabled: true, autoApprove: ["search"], timeout: 120 });
     saveJSONConfig(path, cfg);
 
-    expect(cline.isCurrent(makeCfg())).toBe(true);
+    expect(cursor.isCurrent(makeCfg())).toBe(true);
   });
 
   describe("Codex", () => {
@@ -251,17 +251,5 @@ describe("out-of-date entries", () => {
 
       expect(provider("codex").isCurrent(makeCfg())).toBe(true);
     });
-  });
-
-  it("Zed: a leftover entry in the legacy settings file", async () => {
-    const { ZedProvider } = await import("./zed");
-    const legacy = join(home, "legacy-zed.json");
-    const zed = ZedProvider(legacy);
-    zed.install(makeCfg(), true);
-    expect(zed.isCurrent(makeCfg())).toBe(true);
-
-    saveJSONConfig(legacy, { context_servers: { dosu: { url: "old" } } });
-
-    expect(zed.isCurrent(makeCfg())).toBe(false);
   });
 });

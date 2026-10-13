@@ -21,27 +21,6 @@ export function expandHome(path: string): string {
   return join(homedir(), path.slice(1));
 }
 
-/** Platform-specific Application Support dir; coverage-excluded because each CI runner
- * only exercises one switch arm. */
-/* v8 ignore start */
-export function appSupportDir(): string {
-  switch (platform()) {
-    case "darwin": {
-      return join(homedir(), "Library", "Application Support");
-    }
-    case "win32": {
-      return process.env.APPDATA ?? "";
-    }
-    default: {
-      // linux
-      const xdg = process.env.XDG_CONFIG_HOME;
-      if (xdg) return xdg;
-      return join(homedir(), ".config");
-    }
-  }
-}
-/* v8 ignore stop */
-
 /** Every absolute path `name` has on the shell PATH, in PATH order. */
 export function allOnPath(name: string): string[] {
   return (process.env.PATH ?? "")
