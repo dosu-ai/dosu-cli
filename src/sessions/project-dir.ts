@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { getConfigDir } from "../config/config";
 import { branchFromReflog, parseReflog } from "./branch";
 import { type CapturedSession, type EndedSession, readCapturedSession } from "./capture";
+import { geminiProjectDirOf } from "./gemini";
 import {
   GIT_BUDGETS,
   type GitBudget,
@@ -153,6 +154,8 @@ export interface ProjectDirDeps {
   mtime?: (path: string) => string;
   repoOfDir?: (dir: string) => string | null;
   captured?: (key: string) => CapturedSession | null;
+  /** The directory Gemini CLI recorded beside a transcript's project logs; null when none. */
+  geminiProjectDirOf?: (path: string) => string | null;
   reflogOfDir?: (dir: string, timeout?: number) => string | null | typeof GIT_TIMED_OUT;
   currentBranch?: (dir: string) => string | null | typeof GIT_TIMED_OUT;
   gitProjectOfDir?: (dir: string, budget: GitBudget, knownRoot?: string) => ProjectKey | null;
@@ -228,6 +231,7 @@ export function createProjectDirResolver(
   const head = deps.readHead ?? readHead;
   const mtime = deps.mtime ?? fileMtime;
   const captured = deps.captured ?? ((key: string) => readCapturedSession(key, configDir));
+  const projectRootOf = deps.geminiProjectDirOf ?? geminiProjectDirOf;
   const entries = loadCacheFile(configDir);
   // Keys this resolver changed: a flush writes only these over the file as it is then, so it
   // never drops what a concurrent hook or sync cached since this one loaded.
@@ -257,6 +261,10 @@ export function createProjectDirResolver(
         if (hookDir) return hookDir;
         return session.project ? unmungeSlug(session.project, exists) : null;
       }
+      case "gemini":
+        // The transcript records only a hash of the directory; Gemini CLI writes the directory
+        // itself beside the project's logs, and its SessionEnd hook reports it too.
+        return projectRootOf(session.path) ?? captured(`gemini/${session.id}`)?.dir ?? null;
       default:
         return null;
     }

@@ -490,6 +490,84 @@ describe("contextHookOutput for other agents", () => {
     expect(shipped?.project).toBe("poc-codex");
   });
 
+  const GEMINI_STEM = "session-2026-10-13T12-00-2f1e4c9a";
+
+  /** Gemini CLI's BeforeAgent payload: the base fields every hook gets, plus the prompt. */
+  function geminiPayload(over: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      session_id: "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+      transcript_path: `/home/u/.gemini/tmp/widget/chats/${GEMINI_STEM}.jsonl`,
+      cwd: "/work/widget",
+      hook_event_name: "BeforeAgent",
+      timestamp: "2026-10-13T12:00:00.000Z",
+      prompt: "add a cache to the layout pass",
+      ...over,
+    });
+  }
+
+  const gemini = { ...base, agent: "gemini-cli", format: "gemini" as const };
+
+  it("answers Gemini CLI's BeforeAgent hook in its hook JSON, as the gemini-cli agent", async () => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+
+    const out = await contextHookOutput(geminiPayload(), { ...gemini, fetchImpl });
+
+    expect(JSON.parse(out)).toEqual({
+      hookSpecificOutput: { hookEventName: "BeforeAgent", additionalContext: DIGEST },
+    });
+    // The transcript's stem names the session, as the scanner and the shipped session name it.
+    expect(sentBody(fetchImpl)).toMatchObject({
+      agent: "gemini-cli",
+      session_id: GEMINI_STEM,
+      project: "path:/work/widget",
+    });
+  });
+
+  it("answers only BeforeAgent for Gemini CLI, and names no session before the transcript exists", async () => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+    expect(
+      await contextHookOutput(geminiPayload({ hook_event_name: "AfterAgent" }), {
+        ...gemini,
+        fetchImpl,
+      }),
+    ).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await contextHookOutput(geminiPayload({ transcript_path: "" }), { ...gemini, fetchImpl });
+    expect(sentBody(fetchImpl)).toMatchObject({ session_id: null, project: "path:/work/widget" });
+  });
+
+  it("asks nothing in a Gemini CLI session off the record, by the switch or the marker", async () => {
+    const fetchImpl = respond(200, { digest: DIGEST });
+    expect(
+      await contextHookOutput(geminiPayload(), {
+        ...gemini,
+        fetchImpl,
+        incognito: { incognito_agents: ["gemini"], sessions: {} },
+      }),
+    ).toBe("");
+    const { isIncognito: _, ...defaults } = gemini;
+    const dir = mkdtempSync(join(tmpdir(), "dosu-context-gemini-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const transcript = join(dir, "chats", `${GEMINI_STEM}.jsonl`);
+    mkdirSync(join(dir, "chats"), { recursive: true });
+    writeFileSync(
+      transcript,
+      `${JSON.stringify({ sessionId: "s", projectHash: "h" })}\n${JSON.stringify({
+        id: "m1",
+        type: "user",
+        content: [{ text: `Dosu incognito marker: ${INCOGNITO_MARKER}` }],
+      })}\n`,
+    );
+    expect(
+      await contextHookOutput(geminiPayload({ transcript_path: transcript }), {
+        ...defaults,
+        fetchImpl,
+      }),
+    ).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("takes a harness-neutral payload and prints the digest alone in plain format", async () => {
     const fetchImpl = respond(200, { digest: DIGEST });
     const stdin = JSON.stringify({

@@ -214,6 +214,7 @@ import { loadJSONConfig, saveJSONConfig } from "../mcp/config-helpers";
 import * as providersModule from "../mcp/providers";
 import { ClaudeProvider } from "../mcp/providers/claude";
 import { CodexProvider } from "../mcp/providers/codex";
+import { CopilotProvider } from "../mcp/providers/copilot";
 import { CursorProvider } from "../mcp/providers/cursor";
 import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
@@ -708,7 +709,7 @@ describe("stepConfigureTools", () => {
     const cfg = makeCfg();
 
     const results = stepConfigureTools(cfg, {
-      toInstall: [GeminiProvider()],
+      toInstall: [CopilotProvider()],
       toRemove: [],
       skipped: [],
     });

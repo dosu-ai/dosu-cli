@@ -14,10 +14,19 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { codexOrigin } from "./codex-lineage";
+import {
+  GEMINI_CHATS_DIR,
+  geminiChatsDirOf,
+  geminiParentIdOfPath,
+  geminiSessionIdOfPath,
+  geminiTempDir,
+  isGeminiTranscriptName,
+  readGeminiSessionId,
+} from "./gemini";
 import { readPiHeader } from "./pi";
 
 /** The agents whose sessions the scanner finds, by the id the ledger keys them with. */
-export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode", "pi"] as const;
+export const SESSION_HARNESSES = ["claude", "cursor", "codex", "opencode", "pi", "gemini"] as const;
 export type SessionHarness = (typeof SESSION_HARNESSES)[number];
 
 export interface AgentSession {
@@ -504,6 +513,82 @@ export function piSessionById(
   return null;
 }
 
+/** A Gemini CLI session at its transcript, keyed by the file stem (`session-<time>-<id prefix>`,
+ * or a subagent's `<session id>`), its project the slug dir's name. A subagent's transcript names
+ * its parent by session id, which `stemOfSessionId` turns into the scanner's key for it when the
+ * parent's transcript is known (the scan's map; the bare id otherwise). */
+function geminiSession(
+  path: string,
+  stemOfSessionId: (id: string) => string | undefined = () => undefined,
+): AgentSession | null {
+  let mtime: Date;
+  try {
+    mtime = statSync(path).mtime;
+  } catch {
+    return null;
+  }
+  const chats = geminiChatsDirOf(path);
+  const parentId = geminiParentIdOfPath(path);
+  return {
+    id: geminiSessionIdOfPath(path),
+    harness: "gemini",
+    path,
+    ...(chats ? { project: basename(dirname(chats)) } : {}),
+    updated: mtime.toISOString(),
+    ...(parentId ? { parentId: stemOfSessionId(parentId) ?? parentId } : {}),
+  };
+}
+
+/** The transcripts of one project's `chats` dir: the sessions' own, flat, and in a directory
+ * named for a session's id, its subagents'. */
+function geminiChatsEntries(
+  chatsDir: string,
+  unreadable: Unreadable,
+): { sessions: string[]; subagents: { parentSessionId: string; path: string }[] } {
+  const sessions: string[] = [];
+  const subagents: { parentSessionId: string; path: string }[] = [];
+  for (const entry of listDir(chatsDir, unreadable)) {
+    if (entry.isDir) {
+      for (const child of listDir(entry.path, unreadable)) {
+        if (!child.isDir && isGeminiTranscriptName(child.name)) {
+          subagents.push({ parentSessionId: entry.name, path: child.path });
+        }
+      }
+    } else if (isGeminiTranscriptName(entry.name)) {
+      sessions.push(entry.path);
+    }
+  }
+  return { sessions, subagents };
+}
+
+/** Gemini CLI: `~/.gemini/tmp/<project slug>/chats/session-*.jsonl` (legacy `.json`), subagents'
+ * transcripts in `chats/<parent session id>/`, under the user's home and under GEMINI_CLI_HOME
+ * when set (both, as for Claude Code: a sync another agent's hook started does not have the
+ * variable). A subagent's parent is named by session id; its transcript's metadata line maps
+ * that back to the scanner's key, read only when a project has subagents. */
+function scanGemini(home: string, env: NodeJS.ProcessEnv, unreadable: Unreadable): AgentSession[] {
+  const roots = new Set([geminiTempDir(home, {}), geminiTempDir(home, env)]);
+  const sessions: AgentSession[] = [];
+  for (const root of roots) {
+    for (const project of listDir(root, unreadable)) {
+      if (!project.isDir) continue;
+      const chats = geminiChatsEntries(join(project.path, GEMINI_CHATS_DIR), unreadable);
+      const stems = new Map<string, string>();
+      if (chats.subagents.length > 0) {
+        for (const path of chats.sessions) {
+          const id = readGeminiSessionId(path);
+          if (id) stems.set(id, geminiSessionIdOfPath(path));
+        }
+      }
+      for (const path of [...chats.sessions, ...chats.subagents.map((s) => s.path)]) {
+        const session = geminiSession(path, (id) => stems.get(id));
+        if (session) sessions.push(session);
+      }
+    }
+  }
+  return sessions;
+}
+
 /** One opencode session, as the scan would report it, read by its id (which opencode's plugin
  * names): null when the DB has no such session. */
 export function opencodeSessionById(
@@ -534,6 +619,14 @@ export function sessionAtPath(
     const folder = basename(dirname(path));
     return piSession(path, /^--.*--$/.test(folder) ? folder : undefined, id);
   }
+  if (harness === "gemini") {
+    // The layout names the project slug and a subagent's parent, as scanGemini reads them; the
+    // parent's key is read beside the transcript (geminiParentStem), as the scan's map would.
+    const session = geminiSession(path, (parentSessionId) =>
+      geminiParentStem(path, parentSessionId),
+    );
+    return session ? { ...session, id } : null;
+  }
   // Claude Code keeps transcripts in their project dir, like scanClaude reads them.
   const layout = harness === "claude" ? claudeLayoutOf(path) : {};
   return {
@@ -549,6 +642,7 @@ export function sessionAtPath(
 /** The child sessions (subagents' transcripts) of a session the scan may not list, read beside
  * its transcript; none for a harness without them. */
 export function childSessionsOf(session: AgentSession): AgentSession[] {
+  if (session.harness === "gemini") return geminiSubagentsOf(session);
   if (session.harness !== "claude" || session.parentId || !session.path.endsWith(".jsonl")) {
     return [];
   }
@@ -556,11 +650,54 @@ export function childSessionsOf(session: AgentSession): AgentSession[] {
   return claudeSubagents(stem, session.id, basename(dirname(session.path)));
 }
 
+/** The transcript in a Gemini CLI `chats` dir whose metadata names `sessionId`: a subagent's
+ * parent, found by the id its directory carries. Null when none there does. */
+function geminiTranscriptOfSessionId(chatsDir: string, sessionId: string): string | null {
+  for (const entry of listDir(chatsDir)) {
+    if (entry.isDir || !isGeminiTranscriptName(entry.name)) continue;
+    if (readGeminiSessionId(entry.path) === sessionId) return entry.path;
+  }
+  return null;
+}
+
+/** The scanner's key for the parent a Gemini CLI subagent's transcript names, read beside it. */
+function geminiParentStem(path: string, parentSessionId: string): string | undefined {
+  const chats = geminiChatsDirOf(path);
+  const parent = chats && geminiTranscriptOfSessionId(chats, parentSessionId);
+  return parent ? geminiSessionIdOfPath(parent) : undefined;
+}
+
+/** A Gemini CLI session's subagents: the transcripts in `chats/<its session id>/`. */
+function geminiSubagentsOf(session: AgentSession): AgentSession[] {
+  if (session.parentId || !geminiChatsDirOf(session.path)) return [];
+  const sessionId = readGeminiSessionId(session.path);
+  if (!sessionId) return [];
+  const sessions: AgentSession[] = [];
+  for (const entry of listDir(join(dirname(session.path), sessionId))) {
+    if (entry.isDir || !isGeminiTranscriptName(entry.name)) continue;
+    const child = geminiSession(entry.path, () => session.id);
+    if (child) sessions.push(child);
+  }
+  return sessions;
+}
+
 /** The session a child session (a subagent's transcript) belongs to, as the scan would report
  * it; null for a top-level session, or when the parent's transcript is gone. Children inherit
  * what their parent decided: whether it ended, its incognito opt-out, and its project key. */
 export function parentSessionOf(session: AgentSession): AgentSession | null {
-  if (!session.parentId || session.harness !== "claude") return null;
+  if (!session.parentId) return null;
+  if (session.harness === "gemini") {
+    // chats/<parent session id>/<id>.jsonl → the chats/ transcript whose metadata names that id
+    // (the scan keyed the parent by its file stem; the directory carries the session id).
+    const chats = geminiChatsDirOf(session.path);
+    const parentSessionId = geminiParentIdOfPath(session.path);
+    if (!chats || !parentSessionId) return null;
+    const parent =
+      geminiTranscriptOfSessionId(chats, parentSessionId) ??
+      [".jsonl", ".json"].map((ext) => join(chats, `${session.parentId}${ext}`)).find(existsSync);
+    return parent ? sessionAtPath("gemini", geminiSessionIdOfPath(parent), parent) : null;
+  }
+  if (session.harness !== "claude") return null;
   // <project>/<parent id>/subagents/[workflows/<wf>/]agent-<id>.jsonl → <project>/<parent id>.jsonl
   const sessionDir = claudeSessionDirOf(session.path);
   if (!sessionDir) return null;
@@ -568,7 +705,7 @@ export function parentSessionOf(session: AgentSession): AgentSession | null {
 }
 
 /** Where each harness keeps its sessions when no variable relocates it (CLAUDE_CONFIG_DIR,
- * CODEX_HOME, XDG_DATA_HOME, PI_CODING_AGENT_DIR). */
+ * CODEX_HOME, XDG_DATA_HOME, PI_CODING_AGENT_DIR, GEMINI_CLI_HOME). */
 function defaultRoot(harness: SessionHarness, home: string): string {
   switch (harness) {
     case "claude":
@@ -581,6 +718,8 @@ function defaultRoot(harness: SessionHarness, home: string): string {
       return join(home, ".local", "share", "opencode");
     case "pi":
       return join(home, ".pi", "agent", "sessions");
+    case "gemini":
+      return geminiTempDir(home, {});
   }
 }
 
@@ -610,6 +749,7 @@ export function scanAgentSessions(options: ScanSessionsOptions = {}): AgentSessi
     ...scanCodex(home, env, options.since, unreadable("codex")),
     ...scanOpencode(home, env, undefined, unreadable("opencode")),
     ...scanPi(home, env, unreadable("pi")),
+    ...scanGemini(home, env, unreadable("gemini")),
   ];
   if (options.since !== undefined) {
     // ISO-8601 strings with identical precision compare correctly as strings.

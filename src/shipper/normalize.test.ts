@@ -374,6 +374,100 @@ function doc() {
   });
 }
 
+describe("normalizeSessionRecords for Gemini CLI", () => {
+  it("folds the append-only log into the document the adapter reads, with the tool linkage", async () => {
+    const path = join(dir, "session-2026-10-13T12-00-2f1e4c9a.jsonl");
+    writeFileSync(
+      path,
+      [
+        {
+          sessionId: "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+          projectHash: "h",
+          startTime: "2026-10-13T12:00:00.000Z",
+          lastUpdated: "2026-10-13T12:00:00.000Z",
+        },
+        {
+          id: "u1",
+          type: "user",
+          timestamp: "2026-10-13T12:00:01.000Z",
+          content: [{ text: `How does auth work? token ${GITHUB_TOKEN}` }],
+        },
+        {
+          id: "g1",
+          type: "gemini",
+          timestamp: "2026-10-13T12:00:05.000Z",
+          content: "Let me read it.",
+          model: "gemini-2.5-pro",
+          toolCalls: [
+            {
+              id: "read_file-1",
+              name: "read_file",
+              args: { file_path: "/repo/app/auth.ts" },
+              status: "executing",
+              timestamp: "2026-10-13T12:00:05.000Z",
+            },
+          ],
+        },
+        {
+          $patch: {
+            id: "g1",
+            toolCalls: [
+              {
+                id: "read_file-1",
+                status: "success",
+                result: [
+                  {
+                    functionResponse: {
+                      id: "read_file-1",
+                      name: "read_file",
+                      response: { output: "export const KEY = 1;" },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        {
+          id: "g2",
+          type: "gemini",
+          timestamp: "2026-10-13T12:00:07.000Z",
+          content: "It reads KEY from auth.ts.",
+          model: "gemini-2.5-pro",
+        },
+        { $set: { lastUpdated: "2026-10-13T12:00:07.000Z" } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n"),
+    );
+
+    const records = await normalizeSessionRecords(
+      session({ id: "session-2026-10-13T12-00-2f1e4c9a", harness: "gemini", path }),
+    );
+
+    expect(records?.[0]).toMatchObject({ role: "meta", source: "gemini-cli" });
+    // The patched tool result rides with its call: the adapter emits the call on an assistant
+    // record and the result as a tool record.
+    expect(records?.map((r) => r.role)).toEqual([
+      "meta",
+      "user",
+      "assistant",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+    const text = JSON.stringify(records);
+    expect(text).not.toContain(GITHUB_TOKEN);
+    expect(text).toContain("export const KEY = 1;");
+  });
+
+  it("returns null for a log with no metadata and no messages", async () => {
+    const path = join(dir, "session-2026-10-13T12-00-00000000.jsonl");
+    writeFileSync(path, "not json\n");
+    expect(await normalizeSessionRecords(session({ harness: "gemini", path, id: "x" }))).toBeNull();
+  });
+});
+
 describe("normalizeSessionRecords for opencode", () => {
   let bin: string;
   let dbPath: string;

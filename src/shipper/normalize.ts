@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import type { NormalizedRecord, TranscriptTrajectorySource } from "@letta-ai/trajectory";
 import { logger } from "../debug/logger";
+import { geminiTranscript } from "../sessions/gemini";
 import { opencodeTranscript } from "../sessions/opencode";
 import { redactSecrets } from "../sessions/redact";
 import type { AgentSession } from "../sessions/scan";
@@ -21,6 +22,8 @@ const TRAJECTORY_SOURCES: Partial<Record<AgentSession["harness"], TranscriptTraj
   // Not a file: its sessions are read out of opencode's DB as the export document.
   opencode: "opencode",
   pi: "pi",
+  // Its log is folded into the whole-session document the adapter reads (sessions/gemini.ts).
+  gemini: "gemini-cli",
 };
 
 export interface NormalizeOptions {
@@ -34,6 +37,7 @@ function readTranscript(session: AgentSession, options: NormalizeOptions): strin
   if (session.harness === "opencode") {
     return opencodeTranscript(session, { binary: options.opencodeBinary });
   }
+  if (session.harness === "gemini") return geminiTranscript(session.path);
   try {
     return readFileSync(session.path, "utf8");
   } catch {

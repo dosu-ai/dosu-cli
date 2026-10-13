@@ -1,6 +1,6 @@
 /** Prompt-time memory: the `UserPromptSubmit` hook behind `dosu knowledge context` (Claude Code,
- * Codex), and the same lookup for agents whose plugins ask from code (OpenCode, Pi: `--format
- * plain`). The same command is Claude Code's `PreToolUse` hook on Dosu's memory tools, which
+ * Codex; Gemini CLI's `BeforeAgent`), and the same lookup for agents whose plugins ask from code
+ * (OpenCode, Pi: `--format plain`). The same command is Claude Code's `PreToolUse` hook on Dosu's memory tools, which
  * stops them in a session that is off the record (the user's /dosu-incognito, or the agent's
  * incognito switch) and otherwise tells the MCP proxy which session the call belongs to
  * (memoryToolHookOutput).
@@ -25,6 +25,7 @@ import {
   type IncognitoSwitch,
   recordClaudeToolCall,
 } from "../mcp/call-session";
+import { geminiSessionIdOfPath } from "../sessions/gemini";
 import { GIT_BUDGETS, projectOverride, resolveProjectOfDir } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { currentBranchAnswer, GIT_TIMED_OUT } from "../sessions/repo";
@@ -55,9 +56,18 @@ const CONTEXT_TIMEOUT_MS = 4_000;
  * ranks by the same scope its evidence will get. */
 const CLAUDE_CODE_AGENT = "claude-code";
 
-/** What the hook prints: the agent's hook JSON (`claude`, `codex`), or the digest alone. */
-export type ContextFormat = "claude" | "codex" | "plain";
-export const CONTEXT_FORMATS: readonly ContextFormat[] = ["claude", "codex", "plain"];
+/** What the hook prints: the agent's hook JSON (`claude`, `codex`, `gemini`), or the digest
+ * alone. */
+export type ContextFormat = "claude" | "codex" | "gemini" | "plain";
+export const CONTEXT_FORMATS: readonly ContextFormat[] = ["claude", "codex", "gemini", "plain"];
+
+/** The prompt event each hook format answers: Claude Code's and Codex's UserPromptSubmit, Gemini
+ * CLI's BeforeAgent (its hooks read the same payload fields). */
+const PROMPT_EVENTS: Record<Exclude<ContextFormat, "plain">, string> = {
+  claude: "UserPromptSubmit",
+  codex: "UserPromptSubmit",
+  gemini: "BeforeAgent",
+};
 
 /** Prompts the agent submits on its own when a background task or subagent finishes (Claude
  * Code `<task-notification>`, Codex `<subagent_notification>`): nobody typed them, so they ask
@@ -174,10 +184,13 @@ function incognitoCheckOf(agent: string): (transcriptPath: string) => boolean {
 }
 
 /** The session id the scanner and the shipped session use. Codex's is its rollout's filename
- * stem: the payload's `session_id` is the root session's, even inside a subagent. */
+ * stem: the payload's `session_id` is the root session's, even inside a subagent. Gemini CLI's is
+ * its transcript's stem too (`session-<time>-<id prefix>`); a payload with no transcript yet (the
+ * first prompt's hook may run before it is created) names no session. */
 function sessionIdOf(payload: PromptHookPayload, format: ContextFormat): string | null {
   const transcript = str(payload.transcript_path);
   if (format === "codex" && transcript?.endsWith(".jsonl")) return basename(transcript, ".jsonl");
+  if (format === "gemini") return transcript ? geminiSessionIdOfPath(transcript) : null;
   return str(payload.session_id);
 }
 
@@ -279,7 +292,7 @@ export async function contextHookOutput(
       options.incognito,
     );
   }
-  if (format !== "plain" && payload.hook_event_name !== "UserPromptSubmit") return "";
+  if (format !== "plain" && payload.hook_event_name !== PROMPT_EVENTS[format]) return "";
   const prompt = str(payload.prompt);
   if (!prompt || NOTIFICATION_PROMPT.test(prompt)) return "";
 
@@ -349,9 +362,9 @@ export async function contextHookOutput(
     const count = Array.isArray(body.memory_ids) ? body.memory_ids.length : 0;
     note(`injected ${count} ${count === 1 ? "memory" : "memories"}`);
     if (format === "plain") return digest;
-    // Codex reads Claude Code's hook output shape.
+    // Codex reads Claude Code's hook output shape; Gemini CLI's is the same under its event.
     return JSON.stringify({
-      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: digest },
+      hookSpecificOutput: { hookEventName: PROMPT_EVENTS[format], additionalContext: digest },
     });
   } catch (err) {
     note(

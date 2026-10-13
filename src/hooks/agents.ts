@@ -27,6 +27,7 @@ import {
   removeGroupedHook,
   writeHookConfig,
 } from "./formats";
+import { geminiHookAgent } from "./gemini";
 import { opencodeHookAgent } from "./opencode";
 import { piHookAgent } from "./pi";
 
@@ -189,6 +190,7 @@ export function allHookAgents(): HookAgent[] {
     withIncognitoCommand(codexHookAgent()),
     opencodeHookAgent(),
     piHookAgent(),
+    withIncognitoCommand(geminiHookAgent()),
   ];
 }
 

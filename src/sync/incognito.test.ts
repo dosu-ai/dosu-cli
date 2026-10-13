@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -163,6 +163,36 @@ describe("isIncognitoSession", () => {
     expect(isIncognitoSession(session({ harness: "cursor", path: marked }))).toBe(true);
     expect(isIncognitoSession(session({ harness: "codex" }))).toBe(false);
     expect(mockReadTurns).not.toHaveBeenCalled();
+  });
+
+  it("takes a Gemini CLI subagent off the record with the session it worked for", () => {
+    const chats = join(dir, "gemini", "tmp", "widget", "chats");
+    const SESSION_ID = "2f1e4c9a-5b6d-4e7f-8a9b-0c1d2e3f4a5b";
+    const STEM = "session-2026-10-13T12-00-2f1e4c9a";
+    mkdirSync(join(chats, SESSION_ID), { recursive: true });
+    writeFileSync(
+      join(chats, `${STEM}.jsonl`),
+      `${JSON.stringify({ sessionId: SESSION_ID, projectHash: "h" })}\n${JSON.stringify({
+        id: "u1",
+        type: "user",
+        content: [{ text: `go ${INCOGNITO_MARKER}` }],
+      })}\n`,
+    );
+    const child = join(chats, SESSION_ID, "child-id.jsonl");
+    writeFileSync(child, `${JSON.stringify({ sessionId: "child-id", projectHash: "h" })}\n`);
+
+    expect(
+      isIncognitoSession(
+        session({ harness: "gemini", id: "child-id", path: child, parentId: STEM }),
+      ),
+    ).toBe(true);
+    // The parent's transcript gone: nothing to inherit.
+    rmSync(join(chats, `${STEM}.jsonl`));
+    expect(
+      isIncognitoSession(
+        session({ harness: "gemini", id: "child-id", path: child, parentId: STEM }),
+      ),
+    ).toBe(false);
   });
 
   it("falls back to parsed turns for opencode", () => {

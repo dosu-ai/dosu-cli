@@ -134,7 +134,7 @@ describe("no agent with prompt-time memory on the machine", () => {
     const said = await dosu("transcripts", "enable");
 
     expect(said).toContain(
-      "! Prompt-time memory not installed: no agent that supports it was found (Claude Code, Codex, OpenCode, Pi). Once one is installed, run 'dosu knowledge hooks enable <agent>'.",
+      "! Prompt-time memory not installed: no agent that supports it was found (Claude Code, Codex, OpenCode, Pi, Gemini CLI). Once one is installed, run 'dosu knowledge hooks enable <agent>'.",
     );
   });
 });

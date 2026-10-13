@@ -499,7 +499,8 @@ function readStdin(): string {
 }
 
 /** `dosu knowledge context`: the prompt-submit hook (Claude Code by default; Codex with `--agent
- * codex --format codex`), and the lookup OpenCode and Pi plugins call with `--format plain`.
+ * codex --format codex`; Gemini CLI with `--agent gemini-cli --format gemini`), and the lookup
+ * OpenCode and Pi plugins call with `--format plain`.
  * Hidden -- it is invoked by agents, not by people. Prints nothing and exits 0 unless there is a
  * digest to add, so a logged-out install, OSS mode, shipping switched off, an agent in incognito
  * or a down server all look like Dosu not being there. */
@@ -509,7 +510,7 @@ function contextCommand(): Command {
     .option("--agent <source>", "Trajectory source the session ships as", "claude-code")
     .option(
       "--format <format>",
-      "Output: claude or codex hook JSON, or plain digest text",
+      "Output: claude, codex or gemini hook JSON, or plain digest text",
       "claude",
     )
     .action(async (opts: { agent: string; format: string }) => {
