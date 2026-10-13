@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeLayoutMargin,
   breadcrumb,
   contentWidth,
   frameMaxLines,
@@ -175,6 +176,15 @@ describe("installCenteredLayout", () => {
     installCenteredLayout(stream)();
     stream.write("plain");
     expect(written).toEqual(["plain"]);
+  });
+
+  it("reports the installed margin, and none once restored", () => {
+    expect(activeLayoutMargin()).toBe(0);
+    const { stream } = fakeStream({ columns: 100 });
+    const restore = installCenteredLayout(stream);
+    expect(activeLayoutMargin()).toBe(18);
+    restore();
+    expect(activeLayoutMargin()).toBe(0);
   });
 
   it("nested installs share the outer margin", () => {

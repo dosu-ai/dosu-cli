@@ -3,7 +3,7 @@
 
 import pc from "picocolors";
 import { brand } from "../setup/styles";
-import { contentWidth } from "./layout";
+import { activeLayoutMargin, contentWidth, visibleWidth } from "./layout";
 import { parseKeys, reduceMenuKey } from "./menu";
 
 const ESC = String.fromCharCode(27);
@@ -163,17 +163,24 @@ export function runInteractive<T>(
     if (frameLines > 0) output.write(`${ESC}[${frameLines}A${ESC}[0J`);
     frameLines = 0;
   };
+  // The erase moves the cursor up by terminal rows, so a line wider than the terminal (the key
+  // legend in a narrow pane) counts for every row it wraps onto; counting it once would leave
+  // the frame's first row behind on each repaint. The centered layout's margin is part of the
+  // line's width on screen.
+  const rowsFor = (line: string): number => {
+    const columns = output.columns || 80;
+    return Math.max(1, Math.ceil((activeLayoutMargin() + visibleWidth(line)) / columns));
+  };
   // The active question is the only weighted block on screen: every line
   // carries the brand bar, which disappears when the step commits.
   const draw = () => {
-    const frame = controller
+    const lines = controller
       .render()
       .flatMap((line) => line.split("\n"))
-      .map((line) => `${brand(BAR)} ${line}`)
-      .join("\n");
+      .map((line) => `${brand(BAR)} ${line}`);
     erase();
-    output.write(`${frame}\n`);
-    frameLines = frame.split("\n").length;
+    output.write(`${lines.join("\n")}\n`);
+    frameLines = lines.reduce((total, line) => total + rowsFor(line), 0);
   };
 
   output.write(HIDE_CURSOR);
@@ -328,8 +335,19 @@ export function multiselect<T>(
   let error: string | undefined;
   const picked = new Set<T>(opts.initialValues ?? []);
   // Long values (folder paths) keep their tail — the distinguishing part —
-  // so a row can never wrap and corrupt the in-place repaint.
-  const maxLabel = Math.max(16, contentWidth(output.columns || 80) - 8);
+  // so a row can never wrap and corrupt the in-place repaint. The hint column counts against
+  // the label: the widest hint, or live status in either state, is what a row has to fit after
+  // the longest label, or the repos' session counts wrap in a narrow pane.
+  const suffixWidth = Math.max(
+    0,
+    ...opts.options.map((option) => {
+      const texts = opts.statusFor
+        ? [opts.statusFor(option.value, true), opts.statusFor(option.value, false)]
+        : [option.hint];
+      return Math.max(0, ...texts.map((text) => (text ? visibleWidth(text) + 3 : 0)));
+    }),
+  );
+  const maxLabel = Math.max(16, contentWidth(output.columns || 80) - 8 - suffixWidth);
   const clipLabel = (text: string) =>
     text.length <= maxLabel ? text : `\u2026${text.slice(text.length - maxLabel + 1)}`;
   const labelWidth = Math.max(...opts.options.map((o) => clipLabel(optionLabel(o)).length));

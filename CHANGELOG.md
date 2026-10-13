@@ -1,3 +1,10 @@
+# [0.67.0-beta.5](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.4...v0.67.0-beta.5) (2026-10-13)
+
+
+### Bug Fixes
+
+* **tui:** count wrapped rows when repainting a prompt in place ([#284](https://github.com/dosu-ai/dosu-cli/issues/284)) ([7a98e90](https://github.com/dosu-ai/dosu-cli/commit/7a98e90d3ee6913da6961f1181a34d20770c122c))
+
 # [0.67.0-beta.4](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.3...v0.67.0-beta.4) (2026-10-13)
 
 
