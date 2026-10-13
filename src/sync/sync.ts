@@ -735,7 +735,8 @@ export async function runKnowledgeSync(options: SyncOptions = {}): Promise<SyncO
       if (batch.length > 0) {
         next.last_attempt_at = at;
         next.consecutive_failures = counts.failed > 0 ? next.consecutive_failures + 1 : 0;
-        if (counts.failed > 0) next.last_failure = error ?? "unknown error";
+        // Every failed result set `error`, so this tracks `consecutive_failures`.
+        if (error) next.last_failure = error;
         else delete next.last_failure;
         next.total_shipped = (next.total_shipped ?? 0) + counts.shipped - savedShipped;
         next.run = run;

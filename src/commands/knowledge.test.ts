@@ -1366,6 +1366,31 @@ describe("knowledge sync --status", () => {
     expect(output).toContain("Run 'dosu login'");
   });
 
+  it("prints a failure the hint has nothing to say about on its own", async () => {
+    mockGetSyncStatus.mockReturnValue(
+      statusOf({
+        running: false,
+        state: { ...baseState, consecutive_failures: 1 },
+        backoffUntil: "2026-09-02T23:00:00.000Z",
+        lastFailure: { message: "ingest failed: HTTP 418" },
+        recentActivity: [],
+      }),
+    );
+
+    await run("sync", "--status");
+
+    const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+    const lines = allOutput()
+      .split("\n")
+      .map((line) => line.replace(ansi, ""));
+    const index = lines.findIndex((line) =>
+      line.includes("Last failure:    ingest failed: HTTP 418"),
+    );
+    expect(index).toBeGreaterThan(-1);
+    // No hint line follows: the next line is the backoff, not a blank-labelled continuation.
+    expect(lines[index + 1]).not.toMatch(/^\s{15,}\S/);
+  });
+
   it("renders very recent timestamps as 'just now'", async () => {
     mockGetSyncStatus.mockReturnValue(
       statusOf({
