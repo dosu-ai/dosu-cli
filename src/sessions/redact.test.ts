@@ -121,6 +121,37 @@ describe("redactSecrets", () => {
       expect(redactSecrets(input).text).toBe(input);
     });
 
+    it("redacts a refresh token shorter than the generic 16-character floor", () => {
+      const forms = [
+        [
+          '{\n  "refresh_token": "abc123def456"\n}',
+          '{\n  "refresh_token": "[redacted:credential]"\n}',
+        ],
+        ['{"refresh_token":"abc123def456"}', '{"refresh_token":"[redacted:credential]"}'],
+        [
+          '{\\"refresh_token\\": \\"abc123def456\\"}',
+          '{\\"refresh_token\\": \\"[redacted:credential]\\"}',
+        ],
+        ["refresh_token=abc123def456", "refresh_token=[redacted:credential]"],
+        ["refreshToken: abc123def456", "refreshToken: [redacted:credential]"],
+        ["REFRESH-TOKEN=abc123def456", "REFRESH-TOKEN=[redacted:credential]"],
+      ];
+
+      for (const [input, expected] of forms) {
+        expect(redactSecrets(input)).toEqual({
+          text: expected,
+          count: 1,
+          counts: { credential: 1 },
+        });
+      }
+    });
+
+    it("leaves empty and null refresh tokens alone", () => {
+      for (const input of ['{"refresh_token": null}', '{"refresh_token": ""}']) {
+        expect(redactSecrets(input).text).toBe(input);
+      }
+    });
+
     it("catches non-English credential words", () => {
       const { text, counts } = redactSecrets("пароль: abcd1234efgh5678ijkl");
 
