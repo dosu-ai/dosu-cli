@@ -1,3 +1,10 @@
+# [0.67.0-beta.6](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.5...v0.67.0-beta.6) (2026-10-21)
+
+
+### Bug Fixes
+
+* **redact:** redact short refresh_token values ([#289](https://github.com/dosu-ai/dosu-cli/issues/289)) ([1895af2](https://github.com/dosu-ai/dosu-cli/commit/1895af2ac4a841b61e19c19a5c610fe53608e89c))
+
 ## [0.68.3](https://github.com/dosu-ai/dosu-cli/compare/v0.68.2...v0.68.3) (2026-10-21)
 
 
