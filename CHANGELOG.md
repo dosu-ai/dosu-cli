@@ -1,3 +1,10 @@
+## [0.68.3](https://github.com/dosu-ai/dosu-cli/compare/v0.68.2...v0.68.3) (2026-10-21)
+
+
+### Bug Fixes
+
+* **redact:** redact full sk_user_ keys containing - or _ ([#287](https://github.com/dosu-ai/dosu-cli/issues/287)) ([62dc4a2](https://github.com/dosu-ai/dosu-cli/commit/62dc4a22c1c737faa72ad920a13a9c3089ca2f08))
+
 # [0.67.0-beta.5](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.4...v0.67.0-beta.5) (2026-10-13)
 
 
