@@ -150,6 +150,19 @@ describe("redactSecrets", () => {
       expect(counts[kind]).toBe(1);
       expect(text).toContain(`[redacted:${kind}]`);
     });
+
+    // Dosu keys are `sk_user_` + token_urlsafe, so '-' and '_' appear mid-key.
+    it.each([
+      ["hyphen", "sk_user_aB3xY7pQ9zK2-mN8vR4tWcD5fGh6JkL1mN0pQ2rS4tU6"],
+      ["underscore", "sk_user_aB3xY7pQ9zK2_mN8vR4tWcD5fGh6JkL1mN0pQ2rS4tU6"],
+    ])("redacts a whole sk_user_ key containing a %s", (_name, key) => {
+      const prose = redactSecrets(`use ${key} for auth`);
+      expect(prose.text).toBe("use [redacted:dosu-key] for auth");
+      expect(prose.counts).toEqual({ "dosu-key": 1 });
+
+      const json = redactSecrets(`{"header": "${key}"}`);
+      expect(json.text).toBe('{"header": "[redacted:dosu-key]"}');
+    });
   });
 
   describe("entropy pass", () => {
