@@ -21,6 +21,10 @@ const awsSecretRE =
 // quotes (`api_key\":`) that agents paste constantly.
 const genericKVRE =
   /\b([\w.-]{0,64}?(?:api[_-]?key|secret|token|passwd|password|authorization))(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{16,})(\\*['"]?)/gi;
+// Dosu addition: Supabase refresh tokens can be shorter than genericKVRE's 16-character
+// floor, so a key that names one needs only 8 (`"refresh_token": "abc123def456"`).
+const refreshTokenKVRE =
+  /\b([\w.-]{0,64}?refresh[_-]?token)(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{8,})(\\*['"]?)/gi;
 // Credential env vars can end in plain _KEY (GROQ_KEY); case-sensitive on purpose
 // so lowercase `cache_key:` never matches.
 const envKeyRE =
@@ -251,6 +255,7 @@ export function redactSecrets(text: string): RedactionResult {
     const kvRepl = (m: string[]) =>
       `${m[1]}${m[2]}${m[3]}[redacted:credential]${closingQuote(m[3], m[5])}`;
     s = replaceSubmatch(s, genericKVRE, "credential", counts, kvRepl);
+    s = replaceSubmatch(s, refreshTokenKVRE, "credential", counts, kvRepl);
     s = replaceSubmatch(s, envKeyRE, "credential", counts, kvRepl);
     s = replaceSubmatch(s, genericKVIntlRE, "credential", counts, kvRepl);
   }
