@@ -1,3 +1,10 @@
+# [0.67.0-beta.7](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.6...v0.67.0-beta.7) (2026-10-22)
+
+
+### Bug Fixes
+
+* **redact:** catch JWTs glued to a word character and short access/id tokens ([#292](https://github.com/dosu-ai/dosu-cli/issues/292)) ([2b0529b](https://github.com/dosu-ai/dosu-cli/commit/2b0529bcd7db748e99a386aa45048c3c923c6110)), closes [#289](https://github.com/dosu-ai/dosu-cli/issues/289)
+
 # [0.67.0-beta.6](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.5...v0.67.0-beta.6) (2026-10-21)
 
 
