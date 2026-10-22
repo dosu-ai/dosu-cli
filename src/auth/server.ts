@@ -286,6 +286,9 @@ export interface CallbackServerOptions {
   successVariant?: SuccessVariant;
 }
 
+/** Loopback address the callback server binds to; flow.ts builds the callback URL from it. */
+export const CALLBACK_HOST = "127.0.0.1";
+
 /** Starts a local HTTP server to receive the OAuth callback; the returned promise resolves with
  * the token. */
 export async function startCallbackServer(opts: CallbackServerOptions = {}): Promise<{
@@ -376,9 +379,10 @@ export async function startCallbackServer(opts: CallbackServerOptions = {}): Pro
     res.end(buildSuccessHtml(email ?? undefined, opts.successVariant ?? "auth"));
   });
 
-  // Listen on random port and wait for it to be ready
+  // Listen on a random port on the IPv4 loopback literal. Binding "localhost" let Node pick ::1
+  // only, so browsers that resolve localhost to 127.0.0.1 got "connection refused".
   await new Promise<void>((resolve) => {
-    httpServer.listen(0, "localhost", () => resolve());
+    httpServer.listen(0, CALLBACK_HOST, () => resolve());
   });
   // Never let this server keep the process alive on its own: a leaked server on an error path
   // must not turn into a hung CLI at exit.

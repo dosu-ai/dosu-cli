@@ -14,7 +14,8 @@ vi.mock("open", () => ({
   default: mockOpenDefault,
 }));
 
-vi.mock("./server", () => ({
+vi.mock("./server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server")>()),
   startCallbackServer: mockStartCallbackServer,
 }));
 
@@ -153,7 +154,7 @@ describe("startOAuthFlow", () => {
     expect(mockOpenDefault).toHaveBeenCalledOnce();
     const calledURL = mockOpenDefault.mock.calls[0]?.[0] as string;
     expect(calledURL).toBe(
-      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
+      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2F127.0.0.1%3A12345%2Fcallback",
     );
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
@@ -168,7 +169,7 @@ describe("startOAuthFlow", () => {
     await flowReady();
 
     expect(onAuthURL).toHaveBeenCalledExactlyOnceWith(
-      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2Flocalhost%3A12345%2Fcallback",
+      "https://app.dosu.dev/cli/auth?callback=http%3A%2F%2F127.0.0.1%3A12345%2Fcallback",
     );
 
     resolveToken({ access_token: "a", refresh_token: "r", expires_in: 1 });
