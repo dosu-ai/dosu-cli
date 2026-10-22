@@ -538,6 +538,41 @@ describe("renderActivityFrame", () => {
     expect(frame).toContain("[sync] run started");
   });
 
+  it("says why the last run failed, and what to do, where the user would otherwise see Idle", () => {
+    const frame = stripAnsi(
+      renderActivityFrame(
+        makeStatus({
+          state: { ...emptySyncState(), consecutive_failures: 1 },
+          backoffUntil: "2026-09-02T22:00:00.000Z",
+          lastFailure: {
+            message: "ingest failed: HTTP 401",
+            hint: "Dosu rejected this install's API key. Run 'dosu login' (or 'dosu setup') to get a new one.",
+          },
+        }),
+        [],
+        72,
+      ),
+    );
+    expect(frame).toContain("Last run failed · ingest failed: HTTP 401");
+    expect(frame).toContain("Run 'dosu login'");
+    expect(frame).not.toContain("Idle");
+
+    // While a run is live the failure is the previous run's: the live status wins.
+    const live = stripAnsi(
+      renderActivityFrame(
+        makeStatus({
+          running: true,
+          pid: 42,
+          lastFailure: { message: "ingest failed: HTTP 401", hint: "Run 'dosu login'." },
+        }),
+        [],
+        72,
+      ),
+    );
+    expect(live).toContain("Shipping sessions...");
+    expect(live).not.toContain("dosu login");
+  });
+
   it("underlines the active tab in the quiet two-line strip", () => {
     const [row, rule] = tabBar("shipped", 3, 2, 577, 60).map(stripAnsi);
     // Order: Activity, Studied, Queued, Open.

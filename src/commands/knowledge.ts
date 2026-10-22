@@ -816,6 +816,11 @@ function printSyncStatus(status: SyncStatus, now: Date = new Date()): void {
       `  Last attempt:    ${status.state.last_attempt_at} (${formatAge(status.state.last_attempt_at, now)})`,
     );
   }
+  if (status.lastFailure) {
+    console.log(pc.yellow(`  Last failure:    ${status.lastFailure.message}`));
+    if (status.lastFailure.hint)
+      console.log(pc.yellow(`                   ${status.lastFailure.hint}`));
+  }
   if (status.backoffUntil) {
     const n = status.state.consecutive_failures;
     console.log(
