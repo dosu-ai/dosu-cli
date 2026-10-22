@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import pc from "picocolors";
+import { CALLBACK_HOST } from "../auth/server";
 import { createTypedClient } from "../client/trpc";
 import { getWebAppURL } from "../config/constants";
 import {
@@ -218,7 +219,10 @@ export function sourcesCommand(): Command {
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         try {
           const connectURL = new URL("/cli/connect-github", getWebAppURL());
-          connectURL.searchParams.set("callback", `http://localhost:${server.port}/callback`);
+          connectURL.searchParams.set(
+            "callback",
+            `http://${CALLBACK_HOST}:${server.port}/callback`,
+          );
           const url = connectURL.toString();
 
           if (opts.json) {

@@ -2,6 +2,7 @@
  * returns `{advance: false}` on any failure so runSetup continues. */
 
 import { execSync } from "node:child_process";
+import { CALLBACK_HOST } from "../auth/server";
 import { createTypedClient, type TypedClient } from "../client/trpc";
 import type { Config } from "../config/config";
 import { getWebAppURL } from "../config/constants";
@@ -354,7 +355,7 @@ async function openGitHubInstallFlow(
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    const callbackURL = `http://localhost:${server.port}/callback`;
+    const callbackURL = `http://${CALLBACK_HOST}:${server.port}/callback`;
     const webAppURL = getWebAppURL();
     const middleURL = new URL("/cli/connect-github", webAppURL);
     middleURL.searchParams.set("callback", callbackURL);

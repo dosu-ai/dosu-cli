@@ -346,7 +346,7 @@ describe("stepConnectGitHubRepo", () => {
     expect(mockOpenDefault).toHaveBeenCalledOnce();
     const openedURL = new URL(mockOpenDefault.mock.calls[0]?.[0] as string);
     expect(openedURL.pathname).toBe("/cli/connect-github");
-    expect(openedURL.searchParams.get("callback")).toBe("http://localhost:54321/callback");
+    expect(openedURL.searchParams.get("callback")).toBe("http://127.0.0.1:54321/callback");
     // Two listForOrg calls: pre-flight + post-installation refresh.
     expect(mockTrpc.githubRepository.listForOrg.query).toHaveBeenCalledTimes(2);
     expect(result.advance).toBe(true);

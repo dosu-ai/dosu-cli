@@ -35,7 +35,7 @@ describe("installation callback server", () => {
   it("returns 404 for non-callback paths", async () => {
     const result = await startInstallationCallbackServer();
     server = result.server;
-    const resp = await fetch(`http://localhost:${server.port}/other`);
+    const resp = await fetch(`http://127.0.0.1:${server.port}/other`);
     expect(resp.status).toBe(404);
     expect(await resp.text()).toBe("Not Found");
   });
@@ -44,7 +44,7 @@ describe("installation callback server", () => {
     const result = await startInstallationCallbackServer();
     server = result.server;
 
-    const resp = await fetch(`http://localhost:${server.port}/callback?installation_id=12345`);
+    const resp = await fetch(`http://127.0.0.1:${server.port}/callback?installation_id=12345`);
     expect(resp.status).toBe(200);
     const html = await resp.text();
     expect(html).toContain("GitHub App connected");
@@ -57,7 +57,7 @@ describe("installation callback server", () => {
     const result = await startInstallationCallbackServer();
     server = result.server;
 
-    const resp = await fetch(`http://localhost:${server.port}/callback`);
+    const resp = await fetch(`http://127.0.0.1:${server.port}/callback`);
     expect(resp.status).toBe(400);
     expect(await resp.text()).toBe("Missing installation_id");
     // installationPromise must still be pending
@@ -68,7 +68,7 @@ describe("installation callback server", () => {
     const result = await startInstallationCallbackServer();
     server = result.server;
 
-    const resp = await fetch(`http://localhost:${server.port}/callback?installation_id=abc`);
+    const resp = await fetch(`http://127.0.0.1:${server.port}/callback?installation_id=abc`);
     expect(resp.status).toBe(400);
     expect(await resp.text()).toBe("Missing installation_id");
     void result.installationPromise;
@@ -78,7 +78,7 @@ describe("installation callback server", () => {
     const result = await startInstallationCallbackServer();
     server = result.server;
 
-    const resp = await fetch(`http://localhost:${server.port}/`);
+    const resp = await fetch(`http://127.0.0.1:${server.port}/`);
     expect(resp.status).toBe(404);
   });
 });
