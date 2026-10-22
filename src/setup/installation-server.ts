@@ -1,6 +1,7 @@
 /** Local HTTP server for the GitHub App installation callback: waits for one GET on
  * `/callback?installation_id=<int>` and resolves the pending promise with the id. */
 
+import { CALLBACK_HOST } from "../auth/server";
 import { logger } from "../debug/logger";
 
 export interface InstallationResponse {
@@ -224,7 +225,7 @@ export async function startInstallationCallbackServer(): Promise<{
   });
 
   await new Promise<void>((resolve) => {
-    httpServer.listen(0, "localhost", () => resolve());
+    httpServer.listen(0, CALLBACK_HOST, () => resolve());
   });
   const addr = httpServer.address() as import("node:net").AddressInfo;
   logger.info("installation.server", `Listening on port ${addr.port}`);
