@@ -87,6 +87,28 @@ describe("redactSecrets", () => {
     expect(text).toBe("anon key [redacted:jwt]");
   });
 
+  it("redacts a JWT glued to a preceding word character", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.fake-signature";
+    const forms = [
+      // A JWT on its own line inside JSON-in-a-string: the escaped newline's `n` touches it.
+      [`{"stdout": "output:\\n${jwt}\\n"}`, `{"stdout": "output:\\n[redacted:jwt]\\n"}`],
+      [`"\\t${jwt}"`, `"\\t[redacted:jwt]"`],
+      // URL-encoded `=` and space.
+      [`?q=access_token%3D${jwt}`, `?q=access_token%3D[redacted:jwt]`],
+      [`Authorization:%20${jwt}`, `Authorization:%20[redacted:jwt]`],
+    ];
+
+    for (const [input, expected] of forms) {
+      expect(redactSecrets(input)).toEqual({ text: expected, count: 1, counts: { jwt: 1 } });
+    }
+  });
+
+  it("leaves dotted identifiers that merely contain eyJ alone", () => {
+    for (const input of ["keyJsonSchema.properties.name", "surveyJson.data.items.length"]) {
+      expect(redactSecrets(input).text).toBe(input);
+    }
+  });
+
   describe("generic credential assignments", () => {
     it("keeps the key name and redacts the value", () => {
       const { text, counts } = redactSecrets("export DATABASE_PASSWORD=hunter2hunter2hunter2");
@@ -135,6 +157,25 @@ describe("redactSecrets", () => {
         ["refresh_token=abc123def456", "refresh_token=[redacted:credential]"],
         ["refreshToken: abc123def456", "refreshToken: [redacted:credential]"],
         ["REFRESH-TOKEN=abc123def456", "REFRESH-TOKEN=[redacted:credential]"],
+      ];
+
+      for (const [input, expected] of forms) {
+        expect(redactSecrets(input)).toEqual({
+          text: expected,
+          count: 1,
+          counts: { credential: 1 },
+        });
+      }
+    });
+
+    it("gives access and id tokens the same 8-character floor as refresh tokens", () => {
+      const forms = [
+        ['{"access_token":"opaque12345"}', '{"access_token":"[redacted:credential]"}'],
+        ["id_token=abc123def456", "id_token=[redacted:credential]"],
+        [
+          '\\n  \\"accessToken\\": \\"opaque12345\\"',
+          '\\n  \\"accessToken\\": \\"[redacted:credential]\\"',
+        ],
       ];
 
       for (const [input, expected] of forms) {
