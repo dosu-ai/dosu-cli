@@ -21,10 +21,11 @@ const awsSecretRE =
 // quotes (`api_key\":`) that agents paste constantly.
 const genericKVRE =
   /\b([\w.-]{0,64}?(?:api[_-]?key|secret|token|passwd|password|authorization))(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{16,})(\\*['"]?)/gi;
-// Dosu addition: Supabase refresh tokens can be shorter than genericKVRE's 16-character
-// floor, so a key that names one needs only 8 (`"refresh_token": "abc123def456"`).
-const refreshTokenKVRE =
-  /\b([\w.-]{0,64}?refresh[_-]?token)(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{8,})(\\*['"]?)/gi;
+// Dosu addition: OAuth session tokens can be shorter than genericKVRE's 16-character floor
+// (Supabase refresh tokens are 12), so a key that names an access, refresh, or id token needs
+// only 8 (`"refresh_token": "abc123def456"`).
+const authTokenKVRE =
+  /\b([\w.-]{0,64}?(?:access|refresh|id)[_-]?token)(\\*['"]?\s*[:=]\s*)(\\*['"]?)([A-Za-z0-9/+=._-]{8,})(\\*['"]?)/gi;
 // Credential env vars can end in plain _KEY (GROQ_KEY); case-sensitive on purpose
 // so lowercase `cache_key:` never matches.
 const envKeyRE =
@@ -45,7 +46,14 @@ const pemPrivateRE =
 // `secrets.token_urlsafe` output, so it spans '-' and '_'.
 const providerRE =
   /\b(gh[opsur]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|sk_user_[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]*[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{30,}|xox[bpcs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{30,})\b/g;
-const jwtRE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g;
+// Dosu addition: the second alternative drops the leading \b, which missed a JWT glued to a
+// word character: the `n` of an escaped `\n` in JSON-in-a-string, or URL-encoding's `%3D`.
+// Without the boundary it requires the payload to open with `eyJ` too (both segments are JSON
+// objects), so an identifier like `keyJsonSchema.properties.name` stays. The lookbehind allows
+// at most 8 glued characters: an unbounded start would rescan a long run of base64url from
+// every `eyJ` inside it, which is quadratic.
+const jwtRE =
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b|(?<=(?:^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{1,8})eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g;
 // Password is greedy so a password containing '@' (user:p@ss@host) splits on
 // the last '@' and is redacted whole.
 const connURLRE = /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\s/@:]*):([^\s]+)@([^\s]+)/g;
@@ -255,7 +263,7 @@ export function redactSecrets(text: string): RedactionResult {
     const kvRepl = (m: string[]) =>
       `${m[1]}${m[2]}${m[3]}[redacted:credential]${closingQuote(m[3], m[5])}`;
     s = replaceSubmatch(s, genericKVRE, "credential", counts, kvRepl);
-    s = replaceSubmatch(s, refreshTokenKVRE, "credential", counts, kvRepl);
+    s = replaceSubmatch(s, authTokenKVRE, "credential", counts, kvRepl);
     s = replaceSubmatch(s, envKeyRE, "credential", counts, kvRepl);
     s = replaceSubmatch(s, genericKVIntlRE, "credential", counts, kvRepl);
   }

@@ -519,4 +519,34 @@ describe("redactRecords", () => {
     // The input records are not mutated.
     expect(JSON.stringify(records)).toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
   });
+
+  it("redacts a printed CLI config's session tokens, nested and as JSON inside a string", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.fake-signature";
+    const refresh = "abc123def456";
+    const config = JSON.stringify(
+      { active_account: { session: { access_token: jwt, refresh_token: refresh } } },
+      null,
+      2,
+    );
+    const records = [
+      {
+        role: "tool",
+        tool_call_id: "toolu_01AbCdEfGhJkLmNpQr",
+        // The config as printed, and wrapped as a JSON string by a tool that returns JSON;
+        // `jq -r` puts the bare token at the start of an escaped line.
+        content: [{ type: "text", text: config }],
+        meta: {
+          stdout: JSON.stringify({ output: config }),
+          tail: JSON.stringify(`$ jq -r .active_account.session.access_token\n${jwt}\n`),
+        },
+      },
+    ] as unknown as NormalizedRecord[];
+
+    const shipped = JSON.stringify(redactRecords(records));
+
+    expect(shipped).not.toContain("eyJ");
+    expect(shipped).not.toContain(refresh);
+    expect(shipped).toContain("[redacted:jwt]");
+    expect(shipped).toContain("toolu_01AbCdEfGhJkLmNpQr");
+  });
 });
