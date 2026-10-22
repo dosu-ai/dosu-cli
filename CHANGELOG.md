@@ -1,3 +1,10 @@
+## [0.68.4](https://github.com/dosu-ai/dosu-cli/compare/v0.68.3...v0.68.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* **auth:** bind the login callback to 127.0.0.1 so IPv4-only browsers reach it ([#290](https://github.com/dosu-ai/dosu-cli/issues/290)) ([5edd4d9](https://github.com/dosu-ai/dosu-cli/commit/5edd4d9f7e298450b801f71a0b07a7bdae55f18f))
+
 ## [0.68.3](https://github.com/dosu-ai/dosu-cli/compare/v0.68.2...v0.68.3) (2026-10-21)
 
 
