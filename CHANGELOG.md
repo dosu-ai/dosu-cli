@@ -1,3 +1,10 @@
+## [0.68.5](https://github.com/dosu-ai/dosu-cli/compare/v0.68.4...v0.68.5) (2026-10-22)
+
+
+### Bug Fixes
+
+* **setup:** bind the GitHub install callback to 127.0.0.1 so IPv4-only browsers reach it ([#291](https://github.com/dosu-ai/dosu-cli/issues/291)) ([9ff26ae](https://github.com/dosu-ai/dosu-cli/commit/9ff26ae04e6fda76f130f9ee0c281a57086c63f4))
+
 ## [0.68.4](https://github.com/dosu-ai/dosu-cli/compare/v0.68.3...v0.68.4) (2026-10-22)
 
 
