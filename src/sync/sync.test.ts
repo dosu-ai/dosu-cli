@@ -529,6 +529,32 @@ describe("runKnowledgeSync scan scope", () => {
     expect(arg.limit).toBeUndefined();
     expect(arg.since.toISOString()).toBe(window);
   });
+
+  it.each([
+    [90, new Date(NOW.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString()],
+    [0, new Date(0).toISOString()],
+  ])("--age %i scans back that far (0: everything)", async (ageDays, since) => {
+    mockScanSessions.mockReset().mockReturnValue([]);
+    const { deps } = makeDeps({ listSessions: undefined });
+
+    await runKnowledgeSync({ ageDays, deps });
+
+    expect((mockScanSessions.mock.calls[0][0] as { since: Date }).since.toISOString()).toBe(since);
+  });
+
+  it("a narrower --age still scans the default window but ships only inside its own", async () => {
+    mockScanSessions.mockReset().mockReturnValue([]);
+    const days = (n: number) => session(n * 24 * 60);
+    const ship = shipAll();
+    const { deps } = makeDeps({ listSessions: undefined, ship });
+    mockScanSessions.mockReturnValue([days(2), days(10)]);
+
+    const outcome = await runKnowledgeSync({ ageDays: 5, deps });
+
+    expect((mockScanSessions.mock.calls[0][0] as { since: Date }).since.toISOString()).toBe(window);
+    expect(outcome.sessions.map((s) => s.id)).toEqual([days(2).id]);
+    expect(vi.mocked(ship).mock.calls[0][0].map((s) => s.id)).toEqual([days(2).id]);
+  });
 });
 
 describe("runKnowledgeSync shipping", () => {
@@ -1279,6 +1305,57 @@ describe("runKnowledgeSync shipping", () => {
       "claude/recent",
       "claude/s-60",
     ]);
+  });
+
+  it("never prunes what a wider --age settled, so the next run that wide ships nothing again", async () => {
+    const old = session(100 * 24 * 60);
+    const store = stateStore();
+    const ship = shipAll();
+    const deps = (listed: AgentSession[]) =>
+      makeDeps({ ...store, listSessions: vi.fn().mockResolvedValue(listed), ship }).deps;
+
+    await runKnowledgeSync({ ageDays: 0, deps: deps([old]) });
+    expect(store.get().lookback_since).toBe(new Date(0).toISOString());
+    // A default run no longer lists the old session, and settles something else.
+    await runKnowledgeSync({ deps: deps([session(60)]) });
+    expect(store.get().sessions["claude/s-144000"]).toMatchObject({ outcome: "shipped" });
+    expect(store.get().lookback_since).toBe(new Date(0).toISOString());
+
+    const again = await runKnowledgeSync({ ageDays: 0, deps: deps([old, session(60)]) });
+
+    expect(again.status).toBe("nothing-new");
+    expect(ship).toHaveBeenCalledTimes(2);
+  });
+
+  it("records a wider --age with the first answer it saves, before the run ends", async () => {
+    const store = stateStore();
+    let midRun: string | undefined;
+    const ship: SyncDeps["ship"] = vi.fn(async (sessions, _shipped, _hold, report) => {
+      report?.({ session: sessions[0], outcome: "shipped", taskId: "task-1" });
+      // A run cut short here must still keep this entry from being pruned later.
+      midRun = store.get().lookback_since;
+      return [{ session: sessions[0], outcome: "shipped" as const, taskId: "task-1" }];
+    });
+    const { deps } = makeDeps({
+      ...store,
+      listSessions: vi.fn().mockResolvedValue([session(100 * 24 * 60)]),
+      ship,
+    });
+
+    await runKnowledgeSync({ ageDays: 0, deps });
+
+    expect(midRun).toBe(new Date(0).toISOString());
+  });
+
+  it("a default or narrower run records no lookback of its own", async () => {
+    const { deps, saved } = makeDeps({
+      listSessions: vi.fn().mockResolvedValue([session(60)]),
+      ship: shipAll(),
+    });
+
+    await runKnowledgeSync({ ageDays: 5, deps });
+
+    expect(saved.at(-1)?.lookback_since).toBeUndefined();
   });
 
   it("keeps an old entry while the scan still lists its session", async () => {

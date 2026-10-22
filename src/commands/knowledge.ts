@@ -31,11 +31,11 @@ import {
   shippedSessions,
 } from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
-import { runKnowledgeSync, type SyncDeps, type SyncOutcome } from "../sync/sync";
+import { runKnowledgeSync, SCAN_WINDOW_DAYS, type SyncDeps, type SyncOutcome } from "../sync/sync";
 import { recordCommandFacets } from "../telemetry/telemetry";
 import { VERSION } from "../version/version";
 import { resolveAgents } from "./agent-select";
-import { positiveInteger } from "./arguments";
+import { nonNegativeInteger, positiveInteger } from "./arguments";
 import { requireLoginConfig } from "./auth";
 import { incognitoCommand } from "./knowledge-incognito";
 import { scopeCommand, skipBacklogCommand } from "./knowledge-scope";
@@ -156,6 +156,11 @@ export function knowledgeCommand(): Command {
     .option("--shipped", "Only recently shipped sessions")
     .option("--rejected", "Only sessions the backend refused (retry with sync --retry-rejected)")
     .option("--unsupported", "Only sessions no normalizer could read yet")
+    .option(
+      "--age <days>",
+      `List queued and open sessions from this many days back, as \`sync --age\` would ship them; 0 for no limit (default: ${SCAN_WINDOW_DAYS})`,
+      nonNegativeInteger,
+    )
     .option("--json", "Output as JSON")
     .action(
       (opts: {
@@ -164,6 +169,7 @@ export function knowledgeCommand(): Command {
         shipped?: boolean;
         rejected?: boolean;
         unsupported?: boolean;
+        age?: number;
         json?: boolean;
       }) => {
         const all =
@@ -173,7 +179,9 @@ export function knowledgeCommand(): Command {
         const wantOpen = want(opts.open);
 
         const backlog =
-          wantQueued || wantOpen ? listSessionBacklog() : { queued: [], open: [], subagents: 0 };
+          wantQueued || wantOpen
+            ? listSessionBacklog(new Date(), opts.age)
+            : { queued: [], open: [], subagents: 0 };
         const state =
           want(opts.shipped) || want(opts.rejected) || want(opts.unsupported)
             ? loadSyncState()
@@ -296,7 +304,7 @@ export function knowledgeCommand(): Command {
     .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
     .option(
       "--bootstrap",
-      "Backfill mode: ship every finished session from the last 30 days, draining the backlog (used by setup)",
+      `Backfill mode: ship every finished session from the last ${SCAN_WINDOW_DAYS} days (or --age), draining the backlog (used by setup)`,
     )
     .addOption(
       new Option(
@@ -305,6 +313,11 @@ export function knowledgeCommand(): Command {
       ).conflicts("detach"),
     )
     .option("--retry-rejected", "Ship sessions the backend refused before, once more")
+    .option(
+      "--age <days>",
+      `Ship sessions last active up to this many days ago; 0 for no limit (default: ${SCAN_WINDOW_DAYS}). Each shipped session costs a server-side ingest`,
+      nonNegativeInteger,
+    )
     .option(
       "--ended <harness:id[=transcript]>",
       "A session that just ended, with its transcript when known: ship it now, past the quiet period (session-end hooks set this)",
@@ -332,6 +345,7 @@ export function knowledgeCommand(): Command {
         bootstrap?: boolean;
         flush?: boolean;
         retryRejected?: boolean;
+        age?: number;
         ended?: string[];
         endedPath?: string[];
         status?: boolean;
@@ -376,6 +390,7 @@ export function knowledgeCommand(): Command {
             ...(opts.quiet ? ["--quiet"] : []),
             ...(opts.bootstrap ? ["--bootstrap"] : []),
             ...(opts.retryRejected ? ["--retry-rejected"] : []),
+            ...(opts.age !== undefined ? ["--age", String(opts.age)] : []),
             ...[...ended, ...(hookEnded ? [hookEnded] : [])].flatMap(endedSessionArgs),
             ...(opts.report ? ["--report"] : []),
             ...(opts.out ? ["--out", opts.out] : []),
@@ -397,6 +412,7 @@ export function knowledgeCommand(): Command {
           quiet: opts.quiet,
           ended,
           flush: opts.flush,
+          ageDays: opts.age,
           // Bounded by when this command started, so the run never retries a fresh refusal.
           ...(opts.retryRejected ? { retryRejectedBefore: new Date() } : {}),
           deps,
