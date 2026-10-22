@@ -49,9 +49,11 @@ const providerRE =
 // Dosu addition: the second alternative drops the leading \b, which missed a JWT glued to a
 // word character: the `n` of an escaped `\n` in JSON-in-a-string, or URL-encoding's `%3D`.
 // Without the boundary it requires the payload to open with `eyJ` too (both segments are JSON
-// objects), so an identifier like `keyJsonSchema.properties.name` stays.
+// objects), so an identifier like `keyJsonSchema.properties.name` stays. The lookbehind allows
+// at most 8 glued characters: an unbounded start would rescan a long run of base64url from
+// every `eyJ` inside it, which is quadratic.
 const jwtRE =
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g;
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b|(?<=(?:^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{1,8})eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g;
 // Password is greedy so a password containing '@' (user:p@ss@host) splits on
 // the last '@' and is redacted whole.
 const connURLRE = /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\s/@:]*):([^\s]+)@([^\s]+)/g;

@@ -103,6 +103,16 @@ describe("redactSecrets", () => {
     }
   });
 
+  it("scans a long run of repeated eyJ in linear time", () => {
+    // An unbounded glued-JWT start rescanned the run from every inner `eyJ`: seconds, not ms.
+    const input = "eyJ".repeat(64_000);
+    const started = performance.now();
+    const { text } = redactSecrets(input);
+
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(text).not.toContain("[redacted:jwt]");
+  });
+
   it("leaves dotted identifiers that merely contain eyJ alone", () => {
     for (const input of ["keyJsonSchema.properties.name", "surveyJson.data.items.length"]) {
       expect(redactSecrets(input).text).toBe(input);
