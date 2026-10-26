@@ -1,7 +1,8 @@
 /** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
  * opt-out, normalize the raw log to redacted trajectory-v1 records, and POST them to the Dosu
- * memory ingest API. Fire-and-forget: the accepted task is never polled; the task id and the
- * shareable session_url are returned for the ship watermark state and the report to surface. */
+ * memory ingest API, with the session's token usage when its journal records any.
+ * Fire-and-forget: the accepted task is never polled; the task id and the shareable session_url
+ * are returned for the ship watermark state and the report to surface. */
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { getBackendURL } from "../config/constants";
@@ -10,6 +11,7 @@ import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipSessionResult } from "../sync/sync";
 import { normalizeSessionRecords } from "./normalize";
+import { readSessionUsage, type SessionUsage } from "./usage";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
  * payload): skip past the session instead of wedging the watermark behind a poison pill.
@@ -35,6 +37,7 @@ export interface ShipStepOptions {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (session: AgentSession) => boolean;
   normalize?: (session: AgentSession) => Promise<NormalizedRecord[] | null>;
+  readUsage?: (session: AgentSession) => SessionUsage | null;
   resolveProjectDir?: (session: AgentSession) => string | null;
 }
 
@@ -47,6 +50,7 @@ export function createShipStep(
   const fetchImpl = options.fetchImpl ?? fetch;
   const isIncognito = options.isIncognito ?? isIncognitoSession;
   const normalize = options.normalize ?? normalizeSessionRecords;
+  const readUsage = options.readUsage ?? readSessionUsage;
 
   async function shipOne(
     session: AgentSession,
@@ -59,6 +63,9 @@ export function createShipStep(
     // scanner's project mapping) and branch is omitted — the trajectory meta record still
     // carries git_branch server-side when the harness logged one.
     const repo = resolveDir(session) ?? session.project ?? "unknown";
+    // Token usage rides next to the records (the normalizer drops it); omitted when the
+    // harness logs none, which reads the same as a CLI that predates usage.
+    const usage = readUsage(session);
     const body = JSON.stringify({
       records,
       metadata: {
@@ -67,6 +74,7 @@ export function createShipStep(
         agent: session.harness,
         session_id: session.id,
       },
+      ...(usage ? { usage } : {}),
     });
     try {
       const response = await fetchImpl(`${backendUrl}/v1/memory/ingest/async`, {
