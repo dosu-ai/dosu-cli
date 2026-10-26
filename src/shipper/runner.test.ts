@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../sessions/scan";
 import { createShipStep } from "./runner";
+import type { SessionUsage } from "./usage";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
@@ -33,6 +34,7 @@ interface StepOverrides {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (s: AgentSession) => boolean;
   normalize?: (s: AgentSession) => Promise<typeof RECORDS | null>;
+  readUsage?: (s: AgentSession) => SessionUsage | null;
   resolveProjectDir?: (s: AgentSession) => string | null;
 }
 
@@ -46,6 +48,7 @@ function makeStep(overrides: StepOverrides = {}) {
     isIncognito: overrides.isIncognito ?? (() => false),
     // biome-ignore lint/suspicious/noExplicitAny: test records stand in for the package's type
     normalize: (overrides.normalize ?? (async () => RECORDS)) as any,
+    readUsage: overrides.readUsage ?? (() => null),
     resolveProjectDir: overrides.resolveProjectDir ?? (() => "/repo/app"),
   });
   return { step, fetchImpl: fetchImpl as ReturnType<typeof vi.fn> };
@@ -78,10 +81,13 @@ describe("createShipStep", () => {
           uuid: "a1",
           timestamp: "2026-09-01T00:00:05.000Z",
           sessionId: "sess1",
+          requestId: "req_1",
           message: {
+            id: "msg_1",
             role: "assistant",
             model: "claude-x",
             content: [{ type: "text", text: "single-flight via a pid lock file" }],
+            usage: { input_tokens: 12, output_tokens: 34 },
           },
         }),
       ].join("\n"),
@@ -103,6 +109,10 @@ describe("createShipStep", () => {
       expect(body.records[0]).toMatchObject({ role: "meta", source: "claude-code" });
       // repo resolved from the transcript's own cwd by the default resolver.
       expect(body.metadata.repo).toBe(dir);
+      // usage read from the same journal by the default reader.
+      expect(body.usage.requests).toEqual([
+        expect.objectContaining({ id: "req_1", model: "claude-x", input: 12, output: 34 }),
+      ]);
     } finally {
       delete process.env.DOSU_BACKEND_URL_OVERRIDE;
       rmSync(dir, { recursive: true, force: true });
@@ -138,6 +148,31 @@ describe("createShipStep", () => {
         session_id: "s1",
       },
     });
+  });
+
+  it("ships the session's token usage next to its records when the journal has any", async () => {
+    const usage: SessionUsage = {
+      requests: [
+        {
+          id: "req_1",
+          model: "claude-x",
+          timestamp: "2026-09-01T00:00:05.000Z",
+          input: 1,
+          output: 2,
+          cache_read: 3,
+          cache_write: 4,
+          cache_write_1h: 0,
+          speed: null,
+          tool_call_ids: [],
+        },
+      ],
+    };
+    const { step, fetchImpl } = makeStep({ readUsage: (s) => (s.id === "s1" ? usage : null) });
+
+    await step([session("s1"), session("s2")]);
+
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).usage).toEqual(usage);
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).not.toHaveProperty("usage");
   });
 
   it("omits session_url when the backend returns none", async () => {
