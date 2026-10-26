@@ -1,3 +1,10 @@
+# [0.67.0-beta.8](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.7...v0.67.0-beta.8) (2026-10-26)
+
+
+### Features
+
+* **shipper:** send per-request token usage with ingested sessions ([#294](https://github.com/dosu-ai/dosu-cli/issues/294)) ([0099e04](https://github.com/dosu-ai/dosu-cli/commit/0099e049a33d9bcbe2b13f9b888d8dce7ad5a185))
+
 # [0.67.0-beta.7](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.6...v0.67.0-beta.7) (2026-10-22)
 
 
