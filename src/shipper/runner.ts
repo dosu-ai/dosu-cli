@@ -1,6 +1,7 @@
 /** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
  * opt-out, normalize the raw log to redacted trajectory-v1 records, judge whether they are worth
- * learning from, and POST them to the Dosu memory ingest API. Fire-and-forget: the accepted task is never polled; the task id and the
+ * learning from, and POST them to the Dosu memory ingest API, with the session's token usage when
+ * its journal records any. Fire-and-forget: the accepted task is never polled; the task id and the
  * shareable session_url are returned for the sync ledger and the report to surface. */
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
@@ -13,6 +14,7 @@ import type { ShipHold, ShipSessionResult, SyncDeps } from "../sync/sync";
 import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 import { forkCopy, sessionStartOf } from "./session-start";
+import { readSessionUsage, type SessionUsage } from "./usage";
 import { isTrivialTrajectory } from "./worthiness";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
@@ -39,6 +41,7 @@ export interface ShipStepOptions {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (session: AgentSession) => boolean;
   normalize?: (session: AgentSession) => Promise<NormalizedRecord[] | null>;
+  readUsage?: (session: AgentSession) => SessionUsage | null;
   resolveProject?: (session: AgentSession) => ProjectKey | null;
   /** `at`: when the session's own records began (ISO), the time to ask the reflog about. */
   resolveBranch?: (session: AgentSession, at?: string) => string | null;
@@ -53,6 +56,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
   const fetchImpl = options.fetchImpl ?? fetch;
   const isIncognito = options.isIncognito ?? isIncognitoSession;
   const normalize = options.normalize ?? normalizeSessionRecords;
+  const readUsage = options.readUsage ?? readSessionUsage;
 
   /** One session's result, or null when shipping was turned off before it was sent. */
   async function shipOne(
@@ -92,6 +96,10 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     const start = sessionStartOf(records, copied);
     const branch = start.recorded ?? resolve.resolveBranch(session, start.firstPromptAt);
     const parentSessionId = session.parentId ?? session.forkOf?.id;
+    // Token usage rides next to the records (the normalizer drops it); omitted when the harness
+    // logs none, which reads the same as a CLI that predates usage. It covers the whole journal,
+    // a resumed session's tail included: request ids are stable, so the server dedupes the overlap.
+    const usage = readUsage(session);
     const body = JSON.stringify({
       records: plan.records,
       metadata: {
@@ -105,6 +113,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
         ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
         ...(plan.continuation ? { continuation: plan.continuation } : {}),
       },
+      ...(usage ? { usage } : {}),
     });
     // Normalizing a long session takes a while: the switch is read once more right before sending.
     const late = hold(session);
