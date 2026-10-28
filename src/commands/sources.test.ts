@@ -10,7 +10,7 @@ import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import type { BucketTarget } from "../config/schema";
 import type { SourceStatus } from "../sources/api";
-import { parseStdinCredentials, sourcesCommand } from "./sources";
+import { parseStdinCredentials, sourcesCommand, wizardInputFromOptions } from "./sources";
 
 let home: string;
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -375,5 +375,53 @@ describe("parseStdinCredentials", () => {
     expect(() => parseStdinCredentials("only-one-line")).toThrow(/line 1 .* line 2/);
     expect(() => parseStdinCredentials("{not json")).toThrow(/not valid JSON/);
     expect(() => parseStdinCredentials('{"access_key_id":"id"}')).toThrow(/needs access_key_id/);
+  });
+});
+
+describe("wizardInputFromOptions", () => {
+  it("maps every flag to its wizard answer and leaves out what was not given", () => {
+    expect(wizardInputFromOptions({})).toEqual({});
+    expect(
+      wizardInputFromOptions({
+        provider: "r2",
+        bucket: "team",
+        prefix: "",
+        owner: "james",
+        accountId: "abc",
+        name: "mine",
+        accessKeyId: "W",
+        secretAccessKey: "ws",
+        readAccessKeyId: "R",
+        readSecretAccessKey: "rs",
+        connect: false,
+        default: false,
+        yes: true,
+      }),
+    ).toEqual({
+      provider: "r2",
+      bucket: "team",
+      prefix: "",
+      owner: "james",
+      accountId: "abc",
+      name: "mine",
+      write: { access_key_id: "W", secret_access_key: "ws" },
+      read: { access_key_id: "R", secret_access_key: "rs" },
+      connect: false,
+      makeDefault: false,
+      yes: true,
+    });
+    expect(wizardInputFromOptions({ useEnv: true, readSame: true })).toEqual({
+      write: "env",
+      read: "same",
+    });
+  });
+
+  it("rejects an unknown provider, half a key pair, and two ways of giving the upload keys", () => {
+    expect(() => wizardInputFromOptions({ provider: "gcs" })).toThrow(/--provider must be/);
+    expect(() => wizardInputFromOptions({ accessKeyId: "W" })).toThrow(/go together/);
+    expect(() => wizardInputFromOptions({ readSecretAccessKey: "rs" })).toThrow(/go together/);
+    expect(() =>
+      wizardInputFromOptions({ useEnv: true, accessKeyId: "W", secretAccessKey: "ws" }),
+    ).toThrow(/not both/);
   });
 });

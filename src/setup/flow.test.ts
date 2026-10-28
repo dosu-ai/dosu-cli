@@ -43,6 +43,10 @@ vi.mock("../auth/flow", () => ({
   startOAuthFlow: vi.fn(),
 }));
 
+vi.mock("../sources/wizard", () => ({
+  runBucketWizard: vi.fn(),
+}));
+
 vi.mock("../debug/logger", () => ({
   logger: {
     debug: vi.fn(),
@@ -160,6 +164,7 @@ vi.mock("../statusline/agents", async (importOriginal) => {
 });
 
 import { startOAuthFlow } from "../auth/flow";
+import { CliUsageError } from "../cli/errors";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
@@ -172,6 +177,7 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
+import { runBucketWizard } from "../sources/wizard";
 import {
   loadSyncState,
   saveSyncState,
@@ -185,6 +191,7 @@ import {
   type ConfigResult,
   runSetup,
   runSwitchTarget,
+  stepChooseSessionStorage,
   stepConfigureTools,
   stepDetectTools,
   stepOfferInitialSync,
@@ -3305,5 +3312,86 @@ describe("runSwitchTarget", () => {
 
     expect(vi.mocked(p.log.error).mock.calls.join(" ")).toContain("BadAgent");
     expect(good.install).toHaveBeenCalled();
+  });
+});
+
+describe("stepChooseSessionStorage", () => {
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+  });
+  afterEach(teardownTempEnv);
+
+  const bucket = {
+    name: "s3",
+    url: "s3://acme/dosu",
+    owner: "james",
+    region: "us-east-1",
+    credentials: "env" as const,
+  };
+
+  it("keeps Dosu when chosen, without touching config", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("dosu");
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("dosu");
+
+    expect(runBucketWizard).not.toHaveBeenCalled();
+    expect(loadConfig().default_target).toBeUndefined();
+  });
+
+  it("runs the bucket wizard when the user wants their own bucket", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockResolvedValueOnce({ target: bucket });
+    const cfg = makeCfg();
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
+
+    expect(runBucketWizard).toHaveBeenCalledWith(cfg);
+  });
+
+  it("stops setup where the user cancelled the wizard", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockResolvedValueOnce(null);
+
+    expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
+
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("dosu sources setup");
+  });
+
+  it("falls back to Dosu with the reason when the bucket could not be set up", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockRejectedValueOnce(new CliUsageError("AccessDenied: PutObject"));
+
+    expect(await stepChooseSessionStorage(makeCfg())).toBe("dosu");
+
+    const warned = vi.mocked(p.log.warn).mock.calls.join(" ");
+    expect(warned).toContain("AccessDenied: PutObject");
+    expect(warned).toContain("Sessions ship to Dosu until then");
+  });
+
+  it("keeps a bucket that is already the default and says so, unless --storage asks again", async () => {
+    const cfg = {
+      ...makeCfg(),
+      targets: [{ ...bucket, source_id: "src-1" }],
+      default_target: "s3",
+    };
+    saveConfig(cfg);
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
+    expect(vi.mocked(p.select)).not.toHaveBeenCalled();
+    const said = vi.mocked(p.log.success).mock.calls.join(" ");
+    expect(said).toContain("s3://acme/dosu");
+    expect(said).toContain("which Dosu reads");
+    expect(said).toContain("dosu setup --storage");
+
+    vi.mocked(p.select).mockResolvedValueOnce("dosu");
+    expect(await stepChooseSessionStorage(cfg, { storage: true })).toBe("dosu");
+    expect(loadConfig().default_target).toBe("dosu");
+    expect(loadConfig().targets).toHaveLength(1);
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Sessions ship to Dosu again");
   });
 });

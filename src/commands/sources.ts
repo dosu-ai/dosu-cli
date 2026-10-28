@@ -18,6 +18,7 @@ import {
   type SourcesApi,
   SourcesApiError,
 } from "../sources/api";
+import { type BucketProvider, type BucketWizardInput, runBucketWizard } from "../sources/wizard";
 import { confirm, isCancel } from "../tui/prompts";
 import { formatAge, printResult, printTable, truncate } from "./output";
 
@@ -25,6 +26,7 @@ export function sourcesCommand(): Command {
   const cmd = new Command("sources").description(
     "Bucket targets connected to Dosu, which pulls their sessions into memory",
   );
+  cmd.addCommand(setupCommand());
   cmd.addCommand(connectCommand());
   cmd.addCommand(statusCommand());
   cmd.addCommand(syncCommand());
@@ -109,6 +111,130 @@ async function requireSource(api: SourcesApi, target: BucketTarget): Promise<Sou
     );
   }
   return source;
+}
+
+// --- setup -------------------------------------------------------------------
+
+interface SetupOptions {
+  provider?: string;
+  bucket?: string;
+  prefix?: string;
+  owner?: string;
+  region?: string;
+  accountId?: string;
+  endpoint?: string;
+  name?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  useEnv?: boolean;
+  readAccessKeyId?: string;
+  readSecretAccessKey?: string;
+  readSame?: boolean;
+  connect?: boolean;
+  default?: boolean;
+  yes?: boolean;
+  json?: boolean;
+}
+
+/** `dosu sources setup` flags as wizard answers; a pair given by halves is an error. */
+export function wizardInputFromOptions(opts: SetupOptions): BucketWizardInput {
+  const provider = opts.provider as BucketProvider | undefined;
+  if (provider !== undefined && !["s3", "r2", "compatible"].includes(provider)) {
+    throw new CliUsageError(`--provider must be s3, r2 or compatible, got '${opts.provider}'`);
+  }
+  if (Boolean(opts.accessKeyId) !== Boolean(opts.secretAccessKey)) {
+    throw new CliUsageError("--access-key-id and --secret-access-key go together");
+  }
+  if (Boolean(opts.readAccessKeyId) !== Boolean(opts.readSecretAccessKey)) {
+    throw new CliUsageError("--read-access-key-id and --read-secret-access-key go together");
+  }
+  if (opts.useEnv && opts.accessKeyId) {
+    throw new CliUsageError("--use-env or --access-key-id/--secret-access-key, not both");
+  }
+  const write: BucketWizardInput["write"] = opts.useEnv
+    ? "env"
+    : opts.accessKeyId && opts.secretAccessKey
+      ? { access_key_id: opts.accessKeyId, secret_access_key: opts.secretAccessKey }
+      : undefined;
+  const read: BucketWizardInput["read"] = opts.readSame
+    ? "same"
+    : opts.readAccessKeyId && opts.readSecretAccessKey
+      ? { access_key_id: opts.readAccessKeyId, secret_access_key: opts.readSecretAccessKey }
+      : undefined;
+  return {
+    ...(provider ? { provider } : {}),
+    ...(opts.bucket ? { bucket: opts.bucket } : {}),
+    ...(opts.prefix !== undefined ? { prefix: opts.prefix } : {}),
+    ...(opts.owner ? { owner: opts.owner } : {}),
+    ...(opts.region ? { region: opts.region } : {}),
+    ...(opts.accountId ? { accountId: opts.accountId } : {}),
+    ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
+    ...(opts.name ? { name: opts.name } : {}),
+    ...(write ? { write } : {}),
+    ...(read ? { read } : {}),
+    ...(opts.connect === false ? { connect: false } : {}),
+    ...(opts.default === false ? { makeDefault: false } : {}),
+    ...(opts.yes ? { yes: true } : {}),
+  };
+}
+
+function setupCommand(): Command {
+  return new Command("setup")
+    .alias("add")
+    .description(
+      "Keep your sessions in your own S3 / R2 bucket: a guided setup that checks the bucket, makes it where 'dosu sync' ships, and lets Dosu read it. Every answer can be a flag; --yes never prompts",
+    )
+    .option("--provider <s3|r2|compatible>", "Where the bucket lives")
+    .option("--bucket <name>", "Bucket name")
+    .option("--prefix <path>", "Prefix inside the bucket (default: dosu)")
+    .option(
+      "--owner <id>",
+      "Owner id: sessions land under owners/<id>/ (default: your login email)",
+    )
+    .option("--region <region>", "AWS region, for s3")
+    .option("--account-id <id>", "Cloudflare account id, for r2")
+    .option("--endpoint <url>", "Endpoint URL, for an S3-compatible store")
+    .option("--name <name>", "The target's name in config (default: s3, r2, or the bucket)")
+    .option("--access-key-id <id>", "Key this machine uploads with (saved to the CLI config)")
+    .option("--secret-access-key <secret>", "Secret for --access-key-id")
+    .option("--use-env", "Upload with the AWS_* / R2_* environment and profiles instead")
+    .option("--read-access-key-id <id>", "Key Dosu reads with (read-only is enough)")
+    .option("--read-secret-access-key <secret>", "Secret for --read-access-key-id")
+    .option("--read-same", "Dosu reads with the upload keys")
+    .option("--no-connect", "Save the target without letting Dosu read it")
+    .option("--no-default", "Keep shipping to Dosu; the bucket is reachable with --target")
+    .option("-y, --yes", "Never prompt; every answer comes from flags, environment or defaults")
+    .option("--json", "Output as JSON")
+    .action(async (opts: SetupOptions) => {
+      const cfg = loadConfig();
+      const input = wizardInputFromOptions(opts);
+      const result = await runBucketWizard(cfg, { ...input, ...(opts.json ? { yes: true } : {}) });
+      if (!result) {
+        console.log("Cancelled; nothing saved.");
+        return;
+      }
+      if (opts.json) {
+        printResult(
+          {
+            target: result.target,
+            ...(result.source ? { source: result.source } : {}),
+            ...(result.connectError ? { connect_error: result.connectError } : {}),
+          },
+          opts,
+        );
+        return;
+      }
+      if (result.source) {
+        try {
+          await requireSourcesApi(loadConfig()).sync(result.source.id);
+          console.log(
+            pc.dim("  Dosu is reading the bucket now; 'dosu sources status' follows it."),
+          );
+        } catch {
+          // The scheduled read covers it.
+        }
+      }
+    });
 }
 
 // --- connect -----------------------------------------------------------------
@@ -253,6 +379,29 @@ function connectCommand(): Command {
       }) => {
         const cfg = loadConfig();
         const api = requireSourcesApi(cfg);
+        // Nothing to connect yet and a person at the keyboard: the guided setup instead.
+        if (
+          !opts.target &&
+          configuredTargets(cfg).length === 0 &&
+          process.stdin.isTTY &&
+          !opts.json
+        ) {
+          const result = await runBucketWizard(cfg, {
+            ...(opts.name ? { name: opts.name } : {}),
+            ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
+            ...(opts.accessKeyId && opts.secretAccessKey
+              ? {
+                  read: {
+                    access_key_id: opts.accessKeyId,
+                    secret_access_key: opts.secretAccessKey,
+                    ...(opts.sessionToken ? { session_token: opts.sessionToken } : {}),
+                  },
+                }
+              : {}),
+          });
+          if (!result) console.log("Cancelled; nothing saved.");
+          return;
+        }
         const target = selectBucketTarget(cfg, opts);
         const existing = await findSource(api, target);
         if (existing) {

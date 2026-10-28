@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { OAuthCallbackError } from "../auth/errors";
+import { CliUsageError } from "../cli/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
 import {
   bindAccountIdentity,
@@ -15,6 +16,7 @@ import {
   saveConfig,
   updateTarget,
 } from "../config/config";
+import { configuredTargets } from "../config/targets";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
@@ -24,6 +26,7 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
+import { runBucketWizard } from "../sources/wizard";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
@@ -54,6 +57,8 @@ export interface SetupOptions {
   deploymentID?: string;
   /** Force a specific mode, bypassing the default. "cloud" = standard flow, "oss" = public-libraries-only. */
   mode?: SetupMode | "cloud";
+  /** Ask where sessions are stored even when a bucket is already set up (`--storage`). */
+  storage?: boolean;
 }
 
 export type ConfigAction = "install" | "remove" | "skip";
@@ -234,6 +239,13 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   );
   const mcpCompleted = configuredProviders.length > 0;
 
+  // Where finished sessions go: Dosu, or the user's own bucket that Dosu reads from.
+  if (mcpCompleted && cfg.mode !== MODE_OSS) {
+    const chosen = await stepChooseSessionStorage(cfg, opts);
+    if (chosen === null) return;
+    cfg = loadConfig();
+  }
+
   // Backfill offer: ship the last 30 days now, or pass them over and start from here.
   if (mcpCompleted && cfg.mode !== MODE_OSS) {
     await stepOfferInitialSync(cfg);
@@ -257,6 +269,69 @@ function setupOutroMessage(mcpCompleted: boolean): string {
     `${brand("3.")} Dosu keeps learning from your finished agent sessions automatically`,
   ];
   return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
+}
+
+/** Where finished sessions are kept. Dosu is the default; the alternative is the user's own
+ * S3 / R2 bucket, which `dosu sync` writes and Dosu reads (keeping only what it learns). A bucket
+ * already set up is shown and kept unless `--storage` asks again. Returns null when the user
+ * cancelled the bucket flow mid-way (nothing was saved), so setup stops where they did. */
+export async function stepChooseSessionStorage(
+  cfg: Config,
+  opts: Pick<SetupOptions, "storage"> = {},
+): Promise<"dosu" | "bucket" | null> {
+  const buckets = configuredTargets(cfg).filter((t) => /^(s3|r2):\/\//.test(t.url));
+  const current = buckets.find((t) => t.name === cfg.default_target);
+  if (current && !opts.storage) {
+    p.log.success(
+      wrapLog(
+        `Sessions ship to your bucket ${current.url} (owner ${current.owner})${
+          current.source_id ? ", which Dosu reads" : ""
+        }. ${info("dosu setup --storage")} changes that.`,
+      ),
+    );
+    return "bucket";
+  }
+  logger.info("setup", "Step: choose session storage");
+  p.log.message(
+    wrapLog(
+      "Dosu memory learns from finished agent sessions. The transcripts can live with Dosu, or in a bucket you own: then Dosu reads them from there, keeps only what it learns, and loses access the moment you disconnect.",
+    ),
+  );
+  const choice = await p.select({
+    message: "Where should your agent sessions be stored?",
+    options: [
+      { value: "dosu" as const, label: "Dosu", hint: "simplest; transcripts stored by Dosu" },
+      {
+        value: "bucket" as const,
+        label: "My own bucket",
+        hint: "Amazon S3, Cloudflare R2 or S3-compatible; you hold the keys",
+      },
+    ],
+  });
+  if (p.isCancel(choice) || choice !== "bucket") {
+    if (cfg.default_target !== undefined && cfg.default_target !== "dosu") {
+      cfg.default_target = "dosu";
+      saveConfig(cfg);
+      p.log.info(wrapLog(`Sessions ship to Dosu again; your bucket targets stay in config.`));
+    }
+    return "dosu";
+  }
+  try {
+    const result = await runBucketWizard(cfg);
+    if (!result) {
+      p.log.info(
+        wrapLog(
+          `No bucket set up; sessions ship to Dosu. ${info("dosu sources setup")} tries again.`,
+        ),
+      );
+      return null;
+    }
+    return "bucket";
+  } catch (err) {
+    if (!(err instanceof CliUsageError)) throw err;
+    p.log.warn(wrapLog(`${err.message}\nSessions ship to Dosu until then.`));
+    return "dosu";
+  }
 }
 
 /** Offer to ship the last 30 days of sessions after install. Shipping is on by default, so the
@@ -292,11 +367,12 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const them = n === 1 ? "it" : "them";
   // What happens to the sessions, why it's worth it, and how to keep something out.
   const incognito = installedIncognitoCommands();
+  const bucket = configuredTargets(cfg).find((t) => t.name === cfg.default_target);
   p.log.message(
     wrapLog(
       [
         "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
-        `Sessions are uploaded to Dosu, with secrets redacted on this machine first. ${
+        `Sessions are uploaded to ${bucket ? `your bucket ${bucket.url}` : "Dosu"}, with secrets redacted on this machine first. ${
           incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"
         } dosu knowledge transcripts disable to stop shipping altogether.`,
       ].join("\n"),

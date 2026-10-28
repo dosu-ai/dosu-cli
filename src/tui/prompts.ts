@@ -436,6 +436,70 @@ export function multiselect<T>(
   );
 }
 
+const BACKSPACE = String.fromCharCode(127);
+const CTRL_U = String.fromCharCode(21);
+const CTRL_W = String.fromCharCode(23);
+
+/** A line of text. `initialValue` is the answer enter accepts untouched; `placeholder` only
+ * shows what an answer looks like. `mask` draws dots instead of the value (a secret) and
+ * leaves no echo of it behind. `validate` returns the message to block enter with. */
+export function text(
+  opts: {
+    message: string;
+    initialValue?: string;
+    placeholder?: string;
+    mask?: boolean;
+    validate?: (value: string) => string | undefined;
+  },
+  io: PromptIO = {},
+): Promise<string | symbol> {
+  let value = opts.initialValue ?? "";
+  let error: string | undefined;
+
+  const shown = () => (opts.mask ? "\u2022".repeat(value.length) : value);
+
+  return runInteractive<string>(
+    {
+      render() {
+        const field =
+          value.length > 0
+            ? `${shown()}${brand("\u2588")}`
+            : `${pc.dim(opts.placeholder ?? "")}${brand("\u2588")}`;
+        return [
+          pc.bold(opts.message),
+          "",
+          `  ${field}`,
+          "",
+          error ? pc.yellow(`  ${error}`) : pc.dim(`enter confirm ${DOT} esc cancel`),
+        ];
+      },
+      handle(key) {
+        if (key === "\r" || key === "\n") {
+          error = opts.validate?.(value);
+          if (error) return { type: "render" };
+          const answer = opts.mask ? (value ? "\u2022\u2022\u2022\u2022" : "") : value;
+          return { type: "done", value, echo: answeredEcho(opts.message, answer) };
+        }
+        if (key === CTRL_C || key === ESC) return { type: "cancel" };
+        if (key === BACKSPACE || key === "\b") {
+          value = value.slice(0, -1);
+        } else if (key === CTRL_U) {
+          value = "";
+        } else if (key === CTRL_W) {
+          value = value.replace(/\S+\s*$/, "");
+        } else if (key.length === 1 && key >= " ") {
+          value += key;
+        } else {
+          return { type: "none" };
+        }
+        error = undefined;
+        return { type: "render" };
+      },
+    },
+    io,
+  );
+}
+
 export function confirm(
   opts: { message: string; active?: string; inactive?: string; initialValue?: boolean },
   io: PromptIO = {},

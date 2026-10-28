@@ -454,7 +454,11 @@ export function createProgram(): Command {
     .description("Set up Dosu MCP for your AI tools")
     .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
     .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
-    .action(async (opts: { deployment?: string; mode?: string }) => {
+    .option(
+      "--storage",
+      "Ask again where finished sessions are stored: with Dosu, or in your own S3 / R2 bucket",
+    )
+    .action(async (opts: { deployment?: string; mode?: string; storage?: boolean }) => {
       const { runSetup } = await import("../setup/flow");
       let mode: "oss" | "cloud" | undefined;
       if (opts.mode !== undefined) {
@@ -466,7 +470,7 @@ export function createProgram(): Command {
         }
         mode = normalized;
       }
-      await runSetup({ deploymentID: opts.deployment, mode });
+      await runSetup({ deploymentID: opts.deployment, mode, storage: opts.storage });
     });
 
   // logs
