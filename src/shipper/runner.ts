@@ -1,44 +1,29 @@
 /** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
  * opt-out, normalize the raw log to redacted trajectory-v1 records, judge whether they are worth
- * learning from, and POST them to the Dosu memory ingest API, with the session's token usage when
- * its journal records any. Fire-and-forget: the accepted task is never polled; the task id and the
- * shareable session_url are returned for the sync ledger and the report to surface. */
+ * learning from, and hand them to the target (Dosu's ingest API, or a bucket / folder written
+ * in-process), with the session's token usage when its journal records any. The target's answer
+ * becomes the session's outcome for the sync ledger. */
 
-import type { NormalizedRecord } from "@letta-ai/trajectory";
+import {
+  isTrivialTrajectory,
+  type NormalizedRecord,
+  planShipment,
+  prefixSha256,
+  type ShippedPrefix,
+} from "@dosu/sessionstorage";
 import { getBackendURL } from "../config/constants";
 import type { ProjectKey } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipHold, ShipSessionResult, SyncDeps } from "../sync/sync";
-import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 import { forkCopy, sessionStartOf } from "./session-start";
+import { createDosuTarget, type Target } from "./target";
 import { readSessionUsage, type SessionUsage } from "./usage";
-import { isTrivialTrajectory } from "./worthiness";
 
-/** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
- * payload): the session is settled as rejected instead of failing every run behind a poison
- * pill. Everything else non-202 — auth, rate limit, 5xx, a not-yet-deployed endpoint — is a
- * failure that backs off and retries. */
-const REJECTED_STATUSES = new Set([400, 413, 422]);
-
-/** Per-request cap; ship runs are already detached from the hook, so patience is cheap. */
-const REQUEST_TIMEOUT_MS = 60_000;
-
-interface IngestAccepted {
-  task_id?: string;
-  session_url?: string | null;
-}
-
-export interface ShipStepOptions {
-  apiKey: string;
-  deploymentId: string;
-  /** Defaults to getBackendURL(). */
-  backendUrl?: string;
-  /** Injectable boundaries, for tests. Narrower than `typeof fetch` on purpose: the step only
-   * needs the call signature, and Bun's fetch type carries extras like `preconnect`. */
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+interface ShipStepDeps {
+  /** Injectable boundaries, for tests. */
   isIncognito?: (session: AgentSession) => boolean;
   normalize?: (session: AgentSession) => Promise<NormalizedRecord[] | null>;
   readUsage?: (session: AgentSession) => SessionUsage | null;
@@ -47,13 +32,36 @@ export interface ShipStepOptions {
   resolveBranch?: (session: AgentSession, at?: string) => string | null;
 }
 
+/** Either a ready-made target, or the Dosu target's ingredients (the login's API key and
+ * deployment). */
+export type ShipStepOptions = ShipStepDeps &
+  (
+    | { target: Target }
+    | {
+        apiKey: string;
+        deploymentId: string;
+        /** Defaults to getBackendURL(). */
+        backendUrl?: string;
+        fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+      }
+  );
+
+function targetOf(options: ShipStepOptions): Target {
+  if ("target" in options) return options.target;
+  return createDosuTarget({
+    apiKey: options.apiKey,
+    deploymentId: options.deploymentId,
+    backendUrl: options.backendUrl ?? getBackendURL(),
+    fetchImpl: options.fetchImpl,
+  });
+}
+
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
  * failure, per the SyncDeps contract; the pipeline owns all ledger bookkeeping and says, per
  * session, what earlier runs already shipped of it, and whether the user's switches still let it
  * go (ShipHold). */
 export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["ship"]> {
-  const backendUrl = (options.backendUrl ?? getBackendURL()).replace(/\/$/, "");
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const target = targetOf(options);
   const isIncognito = options.isIncognito ?? isIncognitoSession;
   const normalize = options.normalize ?? normalizeSessionRecords;
   const readUsage = options.readUsage ?? readSessionUsage;
@@ -62,7 +70,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
   async function shipOne(
     session: AgentSession,
     shipped: ShippedPrefix | undefined,
-    resolve: Required<Pick<ShipStepOptions, "resolveProject" | "resolveBranch">>,
+    resolve: Required<Pick<ShipStepDeps, "resolveProject" | "resolveBranch">>,
     hold: ShipHold,
   ): Promise<ShipSessionResult | null> {
     const held = hold(session);
@@ -100,13 +108,14 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     // logs none, which reads the same as a CLI that predates usage. It covers the whole journal,
     // a resumed session's tail included: request ids are stable, so the server dedupes the overlap.
     const usage = readUsage(session);
-    const body = JSON.stringify({
+    // Normalizing a long session takes a while: the switch is read once more right before sending.
+    const late = hold(session);
+    if (late === "stop") return null;
+    if (late === "agent") return { session, outcome: "incognito", byAgent: true };
+    const sent = await target.send({
       records: plan.records,
       metadata: {
-        deployment_id: options.deploymentId,
         project,
-        // Servers that predate `project` require `repo`; same key.
-        repo: project,
         agent: trajectorySourceOf(session.harness) ?? session.harness,
         session_id: session.id,
         ...(branch ? { branch } : {}),
@@ -115,46 +124,27 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
       },
       ...(usage ? { usage } : {}),
     });
-    // Normalizing a long session takes a while: the switch is read once more right before sending.
-    const late = hold(session);
-    if (late === "stop") return null;
-    if (late === "agent") return { session, outcome: "incognito", byAgent: true };
-    try {
-      const response = await fetchImpl(`${backendUrl}/v1/memory/ingest/async`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Dosu-API-Key": options.apiKey,
-        },
-        body,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-      if (response.status === 202) {
-        const accepted = (await response.json().catch(() => ({}))) as IngestAccepted;
-        return {
-          session,
-          outcome: "shipped",
-          taskId: accepted.task_id ?? "unknown",
-          ...(typeof accepted.session_url === "string" ? { sessionUrl: accepted.session_url } : {}),
-          project,
-          // Everything up to here has now shipped, whether this upload was all of it or a tail.
-          records: records.length,
-          prefixSha256: prefixSha256(records, records.length),
-        };
-      }
-      if (REJECTED_STATUSES.has(response.status)) {
-        return {
-          session,
-          outcome: "rejected",
-          httpStatus: response.status,
-          message: `ingest rejected: HTTP ${response.status}`,
-        };
-      }
-      return { session, outcome: "failed", message: `ingest failed: HTTP ${response.status}` };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { session, outcome: "failed", message };
+    if (sent.status === "shipped") {
+      return {
+        session,
+        outcome: "shipped",
+        taskId: sent.taskId ?? "unknown",
+        ...(sent.sessionUrl ? { sessionUrl: sent.sessionUrl } : {}),
+        project,
+        // Everything up to here has now shipped, whether this upload was all of it or a tail.
+        records: records.length,
+        prefixSha256: prefixSha256(records, records.length),
+      };
     }
+    if (sent.status === "rejected") {
+      return {
+        session,
+        outcome: "rejected",
+        ...(sent.httpStatus !== undefined ? { httpStatus: sent.httpStatus } : {}),
+        message: sent.message,
+      };
+    }
+    return { session, outcome: "failed", message: sent.message };
   }
 
   return async (sessions, shippedOf = () => undefined, hold = () => null, settled = () => {}) => {

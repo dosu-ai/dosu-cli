@@ -2,7 +2,12 @@
 
 import { getWebAppURL } from "../config/constants";
 import { logger } from "../debug/logger";
-import { type SuccessVariant, startCallbackServer, type TokenResponse } from "./server";
+import {
+  CALLBACK_HOST,
+  type SuccessVariant,
+  startCallbackServer,
+  type TokenResponse,
+} from "./server";
 
 export type OAuthFlowResult =
   | { browserOpened: true; token: TokenResponse }
@@ -41,7 +46,7 @@ export async function startOAuthFlow(
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    const callbackURL = `http://localhost:${server.port}/callback`;
+    const callbackURL = `http://${CALLBACK_HOST}:${server.port}/callback`;
     logger.debug("auth.flow", `Callback URL: ${callbackURL}`);
     const authURL = buildAuthURL(callbackURL, path, params);
     logger.info("auth.flow", `Auth URL: ${authURL}`);

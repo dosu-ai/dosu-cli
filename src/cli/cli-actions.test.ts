@@ -33,13 +33,6 @@ vi.mock("../auth/device", () => ({
   startDeviceFlow: (...args: unknown[]) => mockStartDeviceFlow(...args),
 }));
 
-const mockRunLoginRequest = vi.fn();
-const mockRunLoginCheck = vi.fn();
-vi.mock("../agent/login-commands", () => ({
-  runLoginRequest: (...args: unknown[]) => mockRunLoginRequest(...args),
-  runLoginCheck: (...args: unknown[]) => mockRunLoginCheck(...args),
-}));
-
 const { mockRefreshToken } = vi.hoisted(() => ({
   mockRefreshToken: vi.fn(),
 }));
@@ -58,11 +51,6 @@ vi.mock("../client/client", () => ({
       return mockRefreshToken(this.cfg);
     }
   },
-}));
-
-const mockRunTUI = vi.fn();
-vi.mock("../tui/tui", () => ({
-  runTUI: (...args: unknown[]) => mockRunTUI(...args),
 }));
 
 const mockRunSetup = vi.fn();
@@ -152,10 +140,14 @@ describe("CLI actions", () => {
   // ── default (no subcommand) ─────────────────────────────────────────────
 
   describe("default action (no subcommand)", () => {
-    it("launches the TUI", async () => {
-      mockRunTUI.mockResolvedValue(undefined);
-      await run();
-      expect(mockRunTUI).toHaveBeenCalledOnce();
+    it("prints the root help", async () => {
+      const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        await run();
+        expect(writeSpy.mock.calls.map((c) => String(c[0])).join("")).toContain("Usage: dosu");
+      } finally {
+        writeSpy.mockRestore();
+      }
     });
   });
 
@@ -175,10 +167,9 @@ describe("CLI actions", () => {
       return errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
     }
 
-    it("reports the unknown command instead of launching the TUI", async () => {
+    it("reports the unknown command", async () => {
       await run("halp");
 
-      expect(mockRunTUI).not.toHaveBeenCalled();
       expect(allErrorOutput()).toContain("unknown command 'halp'");
       expect(allErrorOutput()).toContain("Run 'dosu --help' to see available commands.");
       expect(process.exitCode).toBe(1);
@@ -406,58 +397,6 @@ describe("CLI actions", () => {
 
       expect(errorSpy).toHaveBeenCalledWith("raw error string");
       expect(process.exitCode).toBe(1);
-
-      process.exitCode = originalExitCode;
-      errorSpy.mockRestore();
-    });
-
-    it("--request mints a ticket and exits", async () => {
-      const originalExitCode = process.exitCode;
-      mockRunLoginRequest.mockResolvedValue(0);
-
-      await run("login", "--request");
-
-      expect(mockRunLoginRequest).toHaveBeenCalledWith({ json: false });
-      expect(mockStartOAuthFlow).not.toHaveBeenCalled();
-      expect(process.exitCode).toBe(0);
-
-      process.exitCode = originalExitCode;
-    });
-
-    it("--request --json passes the json flag", async () => {
-      const originalExitCode = process.exitCode;
-      mockRunLoginRequest.mockResolvedValue(0);
-
-      await run("login", "--request", "--json");
-
-      expect(mockRunLoginRequest).toHaveBeenCalledWith({ json: true });
-
-      process.exitCode = originalExitCode;
-    });
-
-    it("--check exchanges a ticket", async () => {
-      const originalExitCode = process.exitCode;
-      mockRunLoginCheck.mockResolvedValue(0);
-
-      await run("login", "--check", "tkt_abc123");
-
-      expect(mockRunLoginCheck).toHaveBeenCalledWith({ ticket: "tkt_abc123", json: false });
-      expect(mockStartOAuthFlow).not.toHaveBeenCalled();
-      expect(process.exitCode).toBe(0);
-
-      process.exitCode = originalExitCode;
-    });
-
-    it("--request and --check combined prints error and exits with code 2", async () => {
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const originalExitCode = process.exitCode;
-
-      await run("login", "--request", "--check", "tkt_abc123");
-
-      expect(errorSpy).toHaveBeenCalledWith("--request and --check cannot be combined.");
-      expect(process.exitCode).toBe(2);
-      expect(mockRunLoginRequest).not.toHaveBeenCalled();
-      expect(mockRunLoginCheck).not.toHaveBeenCalled();
 
       process.exitCode = originalExitCode;
       errorSpy.mockRestore();

@@ -4,8 +4,6 @@ const mocks = vi.hoisted(() => ({
   action: vi.fn<() => void>(),
   checkForIncognitoBackfill: vi.fn<(options?: { notify?: boolean }) => void>(),
   checkForMcpRefresh: vi.fn<(options?: { notify?: boolean }) => void>(),
-  checkForReadyTasks: vi.fn<() => void>(),
-  checkForSkillUpdates: vi.fn<() => void>(),
   checkForUpdates: vi.fn<() => Promise<void>>(),
   loggerInit: vi.fn<() => void>(),
 }));
@@ -13,16 +11,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../version/update-check", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version/update-check")>()),
   checkForUpdates: mocks.checkForUpdates,
-}));
-
-vi.mock("../version/skill-update-check", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../version/skill-update-check")>()),
-  checkForSkillUpdates: mocks.checkForSkillUpdates,
-}));
-
-vi.mock("../version/pending-tasks-check", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../version/pending-tasks-check")>()),
-  checkForReadyTasks: mocks.checkForReadyTasks,
 }));
 
 vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
@@ -108,8 +96,6 @@ describe("createProgram background checks", () => {
           };
         }),
     );
-    mocks.checkForSkillUpdates.mockImplementation(() => events.push("skill"));
-    mocks.checkForReadyTasks.mockImplementation(() => events.push("task"));
     mocks.checkForMcpRefresh.mockImplementation(() => events.push("mcp"));
     mocks.checkForIncognitoBackfill.mockImplementation(() => events.push("incognito"));
     mocks.action.mockImplementation(() => events.push("action"));
@@ -120,8 +106,6 @@ describe("createProgram background checks", () => {
 
     await vi.waitFor(() => expect(mocks.checkForUpdates).toHaveBeenCalledOnce());
     expect(events).toEqual(["registry:start"]);
-    expect(mocks.checkForSkillUpdates).not.toHaveBeenCalled();
-    expect(mocks.checkForReadyTasks).not.toHaveBeenCalled();
     expect(mocks.checkForMcpRefresh).not.toHaveBeenCalled();
     expect(mocks.action).not.toHaveBeenCalled();
     expect(commandFinished).toBe(false);
@@ -130,16 +114,7 @@ describe("createProgram background checks", () => {
     finishRegistryCheck();
     await command;
 
-    expect(events).toEqual([
-      "registry:start",
-      "registry:end",
-      "skill",
-      "task",
-      "mcp",
-      "incognito",
-      "action",
-    ]);
-    // A subcommand prints the refresh notice itself; only the TUI suppresses it.
+    expect(events).toEqual(["registry:start", "registry:end", "mcp", "incognito", "action"]);
     expect(mocks.checkForMcpRefresh).toHaveBeenCalledWith({ notify: true });
     expect(mocks.checkForIncognitoBackfill).toHaveBeenCalledWith({ notify: true });
   });
@@ -148,18 +123,14 @@ describe("createProgram background checks", () => {
     await runCommand("upgrade");
 
     expect(mocks.checkForUpdates).not.toHaveBeenCalled();
-    expect(mocks.checkForSkillUpdates).not.toHaveBeenCalled();
-    expect(mocks.checkForReadyTasks).not.toHaveBeenCalled();
     expect(mocks.checkForMcpRefresh).not.toHaveBeenCalled();
     expect(mocks.checkForIncognitoBackfill).not.toHaveBeenCalled();
     expect(mocks.action).toHaveBeenCalledOnce();
   });
 
-  it("skips the registry check in CI but still runs skill, task, MCP refresh, and command execution", async () => {
+  it("skips the registry check in CI but still runs the MCP refresh and command execution", async () => {
     const events: string[] = [];
     process.env.CI = "true";
-    mocks.checkForSkillUpdates.mockImplementation(() => events.push("skill"));
-    mocks.checkForReadyTasks.mockImplementation(() => events.push("task"));
     mocks.checkForMcpRefresh.mockImplementation(() => events.push("mcp"));
     mocks.checkForIncognitoBackfill.mockImplementation(() => events.push("incognito"));
     mocks.action.mockImplementation(() => events.push("action"));
@@ -167,6 +138,6 @@ describe("createProgram background checks", () => {
     await runCommand("logs");
 
     expect(mocks.checkForUpdates).not.toHaveBeenCalled();
-    expect(events).toEqual(["skill", "task", "mcp", "incognito", "action"]);
+    expect(events).toEqual(["mcp", "incognito", "action"]);
   });
 });

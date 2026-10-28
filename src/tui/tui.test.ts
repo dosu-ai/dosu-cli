@@ -39,20 +39,6 @@ vi.mock("./activity-view", () => ({
   runActivityView: vi.fn(),
 }));
 
-// So does the standalone analytics screen.
-vi.mock("./analytics-view", () => ({
-  runAnalyticsView: vi.fn(),
-}));
-
-// And the Pages screen, which also fetches from the backend.
-vi.mock("./pages-view", () => ({
-  runPagesView: vi.fn(),
-}));
-
-vi.mock("../report/generate", () => ({
-  emitKnowledgeReport: vi.fn(),
-}));
-
 // The banner reads the update cache from disk; tests must not see the
 // developer machine's real cache file.
 vi.mock("../version/update-check", () => ({
@@ -78,13 +64,7 @@ vi.mock("../mcp/providers", () => ({
   allSetupProviders: vi.fn(() => []),
 }));
 
-// The repo row shells out to git and reads AGENTS.md; keep tests hermetic.
-vi.mock("../setup/agents-md-step", () => ({
-  inGitWorkTree: vi.fn(() => false),
-  dosuAgentsSectionState: vi.fn(() => "missing"),
-}));
-
-// The studying-projects picker scans the real session stores.
+// The sync-scope picker scans the real session stores.
 vi.mock("../sessions/scan", () => ({
   scanAgentSessions: vi.fn(() => []),
 }));
@@ -130,19 +110,15 @@ import type { HookAgent } from "../hooks/agents";
 import { getHookAgent } from "../hooks/agents";
 import type { SetupProvider } from "../mcp/providers";
 import { allSetupProviders } from "../mcp/providers";
-import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { scanAgentSessions } from "../sessions/scan";
-import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
 import { runSetup, runSwitchTarget } from "../setup/flow";
 import { lockPath } from "../sync/lock";
 import { emptySyncState, loadSyncState, saveSyncState } from "../sync/state";
 import { runActivityView } from "./activity-view";
-import { runAnalyticsView } from "./analytics-view";
 import { frameTopMargin } from "./layout";
 import { menuSelect } from "./menu";
-import { runPagesView } from "./pages-view";
 import * as p from "./prompts";
 import { handleLogout, runTUI } from "./tui";
 
@@ -151,13 +127,8 @@ const mockConfirm = vi.mocked(p.confirm);
 const mockIsCancel = vi.mocked(p.isCancel);
 const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
 const mockRunSetup = vi.mocked(runSetup);
-const mockInGitWorkTree = vi.mocked(inGitWorkTree);
-const mockSectionState = vi.mocked(dosuAgentsSectionState);
 const mockRunSwitchTarget = vi.mocked(runSwitchTarget);
 const mockRunActivityView = vi.mocked(runActivityView);
-const mockRunAnalyticsView = vi.mocked(runAnalyticsView);
-const mockRunPagesView = vi.mocked(runPagesView);
-const mockEmitReport = vi.mocked(emitKnowledgeReport);
 const mockAllSetupProviders = vi.mocked(allSetupProviders);
 const mockScanSessions = vi.mocked(scanAgentSessions);
 const mockMultiselect = vi.mocked(p.multiselect);
@@ -214,12 +185,9 @@ beforeEach(() => {
         resolve: (s: AgentSession) => (s.project ? `/repo/${s.project}` : null),
         resolveRepo: (s: AgentSession) => (s.project ? `github.com/acme/${s.project}` : null),
         resolveBranch: () => "main",
-        resolveBranchAt: async () => "main",
-        resolveProject: () => null,
-        resolveProjectAt: () => ({ project: "path:/repo", rule: "path" }),
         cached: () => null,
         flush: vi.fn(),
-      }) as ReturnType<typeof createProjectDirResolver>,
+      }) as unknown as ReturnType<typeof createProjectDirResolver>,
   );
   // Restore spinner factory cleared by resetAllMocks
   vi.mocked(p.spinner).mockReturnValue({
@@ -493,18 +461,8 @@ describe("runTUI", () => {
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
     const signedIn = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(signedIn.map((o) => o.value)).toEqual([
-      "sync",
-      "report",
-      "analytics",
-      "pages",
-      "settings",
-      "exit",
-    ]);
-    expect(signedIn.find((o) => o.value === "report")?.hint).toBe("(opens in browser)");
-    expect(signedIn.filter((o) => o.value !== "report").every((o) => o.hint === undefined)).toBe(
-      true,
-    );
+    expect(signedIn.map((o) => o.value)).toEqual(["sync", "settings", "exit"]);
+    expect(signedIn.every((o) => o.hint === undefined)).toBe(true);
 
     // Signed out: nothing works without an account, so the menu is just the
     // door — log in / sign up, or leave.
@@ -590,14 +548,7 @@ describe("runTUI", () => {
       expect(stripAnsi(stdoutWrites.join(""))).toContain("signed in");
       expect(stripAnsi(stdoutWrites.join(""))).not.toContain("session expired");
       const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-      expect(options.map((o) => o.value)).toEqual([
-        "sync",
-        "report",
-        "analytics",
-        "pages",
-        "settings",
-        "exit",
-      ]);
+      expect(options.map((o) => o.value)).toEqual(["sync", "settings", "exit"]);
     });
 
     it("does not declare the session expired on a network or server hiccup", async () => {
@@ -716,40 +667,37 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).not.toHaveBeenCalled();
     const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(options.map((o) => o.value)).toEqual([
-      "sync",
-      "report",
-      "analytics",
-      "pages",
-      "settings",
-      "exit",
-    ]);
+    expect(options.map((o) => o.value)).toEqual(["sync", "settings", "exit"]);
   });
 
-  it("flags the repo's AGENTS.md on the banner only inside a git work tree", async () => {
+  it("shows where sessions ship on the banner once set up", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
 
-    // Outside a work tree there is no repo row at all.
+    // Dosu holds the sessions by default.
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
-    expect(stdoutWrites.join("")).not.toContain("repo");
+    expect(stripAnsi(stdoutWrites.join(""))).toMatch(/storage\s+\u2714 Dosu/);
 
-    // Inside one with no Dosu section, the row warns and points at Setup.
+    // A bucket set as the default target is named instead.
     stdoutWrites.length = 0;
-    mockInGitWorkTree.mockReturnValue(true);
-    mockSectionState.mockReturnValue("missing");
+    const cfg = readRealConfig();
+    cfg.targets = [
+      { name: "r2", url: "r2://session-db-test/dosu", owner: "owner-1", account_id: "acct" },
+    ];
+    cfg.default_target = "r2";
+    writeRealConfig(cfg);
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
-    expect(stdoutWrites.join("")).toContain("AGENTS.md missing the Dosu section");
+    expect(stripAnsi(stdoutWrites.join(""))).toContain("r2://session-db-test/dosu");
 
-    // With the current section, the row is a checkmark.
+    // Mid-setup, the next step is what matters; the row waits.
     stdoutWrites.length = 0;
-    mockSectionState.mockReturnValue("current");
+    writeRealConfig(makeCfg({ access_token: "tok", org_id: "org-1" }));
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
-    expect(stdoutWrites.join("")).toContain("AGENTS.md has the Dosu section");
+    expect(stdoutWrites.join("")).not.toContain("storage");
   });
 
   it("keeps Setup at the top with the missing steps when setup was interrupted", async () => {
@@ -786,7 +734,7 @@ describe("runTUI", () => {
     expect(afterLogout.map((o) => o.value)).toContain("auth");
   });
 
-  it("marks the Activity entry with the studying books while a run is live", async () => {
+  it("marks the Activity entry with the books while a sync run is live", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
@@ -864,47 +812,19 @@ describe("runTUI", () => {
     expect(mockRunActivityView).toHaveBeenCalledOnce();
   });
 
-  it("analytics action opens the standalone analytics screen", async () => {
+  it("session storage setting reruns setup's storage step and reloads the config", async () => {
     writeRealConfig(makeCfg({}));
-    mockRunAnalyticsView.mockResolvedValue();
-    mockMenuSelect.mockResolvedValueOnce("analytics").mockResolvedValueOnce("exit");
+    mockMenuSelect
+      .mockResolvedValueOnce("settings")
+      .mockResolvedValueOnce("storage")
+      .mockResolvedValueOnce("back")
+      .mockResolvedValueOnce("exit");
 
     await runTUI();
 
-    expect(mockRunAnalyticsView).toHaveBeenCalledOnce();
-    expect(mockRunActivityView).not.toHaveBeenCalled();
-  });
-
-  it("pages action opens the Library pages screen", async () => {
-    writeRealConfig(makeCfg({}));
-    mockRunPagesView.mockResolvedValue();
-    mockMenuSelect.mockResolvedValueOnce("pages").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(mockRunPagesView).toHaveBeenCalledOnce();
-    expect(mockRunActivityView).not.toHaveBeenCalled();
-  });
-
-  it("report action writes and opens the harvest HTML", async () => {
-    writeRealConfig(makeCfg({}));
-    mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
-    mockMenuSelect.mockResolvedValueOnce("report").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(mockEmitReport).toHaveBeenCalledWith({ open: true });
-    expect(mockRunActivityView).not.toHaveBeenCalled();
-  });
-
-  it("report action surfaces a write failure without leaving the TUI", async () => {
-    writeRealConfig(makeCfg({}));
-    mockEmitReport.mockRejectedValue(new Error("disk full"));
-    mockMenuSelect.mockResolvedValueOnce("report").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(p.log.error).toHaveBeenCalledWith("disk full");
+    expect(mockRunSetup).toHaveBeenCalledWith({ storage: true });
+    const settingsOptions = mockMenuSelect.mock.calls[1]?.[1] ?? [];
+    expect(settingsOptions.find((o) => o.value === "storage")?.hint).toBe("Dosu");
   });
 
   it("settings submenu shows the active target and goes back", async () => {
@@ -930,19 +850,20 @@ describe("runTUI", () => {
       "switch-org",
       "switch-library",
       "projects",
+      "storage",
       "setup",
       "logout",
       "back",
     ]);
     // Each entry hints its own current value: org name on the org row,
-    // Library name on the Library row, studying scope on the projects row.
+    // Library name on the Library row, sync scope on the projects row.
     expect(settingsOptions[0]?.hint).toBe("Acme");
     expect(settingsOptions[1]?.hint).toBe("Docs Library");
     expect(settingsOptions[2]?.hint).toBe("all repos");
     expect(mockRunSwitchTarget).not.toHaveBeenCalled();
   });
 
-  it("study scope setting saves a subset of repos", async () => {
+  it("sync scope setting saves a subset of repos", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
@@ -973,13 +894,12 @@ describe("runTUI", () => {
     expect(refreshed.find((o) => o.value === "projects")?.hint).toBe("acme/dosu-cli");
   });
 
-  it("study scope setting preselects a legacy folder scope's repos and clears it on save", async () => {
+  it("sync scope setting preselects a legacy folder scope's repos and clears it on save", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     saveSyncState({
       ...emptySyncState(),
-      consecutive_failures: 0,
       project_filter: ["/repo/dosu-cli"],
     });
     mockIsCancel.mockReturnValue(false);
@@ -1008,13 +928,12 @@ describe("runTUI", () => {
     expect(state.repo_filter).toBeUndefined();
   });
 
-  it("study scope setting keeps a picked repo with no remaining sessions removable", async () => {
+  it("sync scope setting keeps a picked repo with no remaining sessions removable", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
     saveSyncState({
       ...emptySyncState(),
-      consecutive_failures: 0,
       repo_filter: ["github.com/acme/gone"],
     });
     mockIsCancel.mockReturnValue(false);
@@ -1034,7 +953,7 @@ describe("runTUI", () => {
     expect(loadSyncState().repo_filter).toEqual(["github.com/acme/dosu-cli"]);
   });
 
-  it("study scope setting explains an empty picker when no session ran in a repo", async () => {
+  it("sync scope setting explains an empty picker when no session ran in a repo", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
@@ -1053,7 +972,7 @@ describe("runTUI", () => {
     expect(mockMultiselect).not.toHaveBeenCalled();
   });
 
-  it("study scope picker summarizes and validates the selection", async () => {
+  it("sync scope picker summarizes and validates the selection", async () => {
     writeRealConfig(
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
@@ -1089,7 +1008,6 @@ describe("runTUI", () => {
     writeRealConfig(makeCfg({}));
     saveSyncState({
       ...emptySyncState(),
-      consecutive_failures: 0,
       repo_filter: repoFilter,
     });
     mockMenuSelect

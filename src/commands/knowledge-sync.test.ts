@@ -984,3 +984,77 @@ describe("knowledge sync --status", () => {
     expect(out.split("\n").filter((line) => line.includes("opencode/ses_"))).toHaveLength(1);
   });
 });
+
+describe("knowledge sync to a bucket target connected as a Dosu source", () => {
+  /** A folder target standing in for the bucket; `source_id` is what connect would have kept. */
+  function configureStoreTarget(sourceId?: string): void {
+    saveConfig({
+      ...makeTestConfig({
+        access_token: "t",
+        refresh_token: "r",
+        expires_at: 0,
+        api_key: "sk_test",
+        deployment_id: "dep1",
+      }),
+      targets: [
+        {
+          name: "team",
+          url: join(home, "store"),
+          owner: "james",
+          ...(sourceId ? { source_id: sourceId } : {}),
+        },
+      ],
+      default_target: "team",
+    });
+  }
+
+  it("asks Dosu to read the bucket now once something shipped there", async () => {
+    configureStoreTarget("src-1");
+    fetchImpl.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ id: "src-1", status: "queued", workflow_id: "wf" }), {
+          status: 202,
+        }),
+    );
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 30);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await dosu("sync");
+
+    expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ["https://api.dosu.test/v1/memory/sources/src-1/sync", "POST"],
+    ]);
+    const out = log.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(out).toContain("Shipped 1 session to team");
+    expect(out).toContain("Dosu asked to read the bucket now");
+  });
+
+  it("leaves the schedule to it when the nudge fails, without failing the run", async () => {
+    configureStoreTarget("src-1");
+    fetchImpl.mockImplementation(async () => new Response("", { status: 503 }));
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 30);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await dosu("sync");
+
+    expect(process.exitCode).toBeUndefined();
+    const out = log.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(out).toContain("Shipped 1 session to team");
+    expect(out).toContain("sync-now failed: HTTP 503");
+  });
+
+  it("does not call Dosu for a bucket that is only an archive, or when nothing shipped", async () => {
+    configureStoreTarget();
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 30);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await dosu("sync");
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    configureStoreTarget("src-1");
+    await dosu("sync"); // Already shipped: nothing new, no nudge.
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

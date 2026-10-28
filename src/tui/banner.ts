@@ -22,10 +22,10 @@ export interface BannerContext {
   agents: string[];
   /** Setup steps still missing ("Library", "MCP", "agents", "hooks"); rendered as warning rows. */
   setupMissing?: string[];
-  /** Dosu section state in this repo's AGENTS.md; only set inside a git work tree. */
-  repoAgentsMd?: "current" | "outdated" | "missing";
-  /** True when a knowledge-sync run is shipping right now. */
-  studying?: boolean;
+  /** Where finished sessions ship: the user's own bucket (its URL), or Dosu when unset. */
+  storage?: string;
+  /** True when a knowledge-sync run is shipping sessions right now. */
+  syncing?: boolean;
   /** A newer published version, when the update check found one. */
   update?: { version: string; hint: string };
 }
@@ -121,22 +121,13 @@ function checklistRows(ctx: BannerContext, width: number): string[] {
   else if (ctx.deploymentName) rows.push(["mcp", `${on} ${ctx.deploymentName}`]);
   if (missing.has("Library")) rows.push(["library", warnRow]);
   else if (ctx.libraryName) rows.push(["library", `${on} ${ctx.libraryName}`]);
-  if (ctx.repoAgentsMd) {
-    rows.push([
-      "repo",
-      ctx.repoAgentsMd === "current"
-        ? `${on} AGENTS.md has the Dosu section`
-        : `${off} ${pc.yellow(
-            ctx.repoAgentsMd === "outdated"
-              ? "AGENTS.md Dosu section outdated"
-              : "AGENTS.md missing the Dosu section",
-          )} ${pc.dim(`${DOT} run Setup`)}`,
-    ]);
+  if (ctx.signedIn && !ctx.sessionExpired && missing.size === 0) {
+    rows.push(["storage", ctx.storage ? `${on} ${ctx.storage}` : `${on} Dosu`]);
   }
   if (missing.has("agents")) rows.push(["agents", warnRow]);
   else if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(LIST_SEP)}`]);
   if (missing.has("hooks")) rows.push(["hooks", warnRow]);
-  if (ctx.studying) {
+  if (ctx.syncing) {
     rows.push([
       "sync",
       `\uD83D\uDCDA ${brand("shipping sessions...")} ${pc.dim(`${DOT} see activity`)}`,

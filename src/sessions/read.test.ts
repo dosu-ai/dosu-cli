@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { countRediscoveryToolCalls, estimateSessionTokens, readSessionTurns } from "./read";
+import { readSessionTurns } from "./read";
 import type { AgentSession } from "./scan";
 
 let dir: string;
@@ -440,127 +440,5 @@ describe("readSessionTurns for pi", () => {
       { role: "assistant", text: "On it." },
       { role: "user", text: "and test it" },
     ]);
-  });
-
-  it("counts pi's built-in investigation tools", () => {
-    const path = piLog([
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [
-            { type: "toolCall", name: "read" },
-            { type: "toolCall", name: "bash" },
-            { type: "toolCall", name: "search_memory" },
-            { type: "text", text: "done" },
-          ],
-        },
-      },
-      { type: "message", message: { role: "assistant", content: "plain" } },
-    ]);
-
-    expect(countRediscoveryToolCalls(session("pi", path))).toBe(2);
-  });
-});
-
-describe("countRediscoveryToolCalls", () => {
-  it("counts Cursor/Claude tool_use names in REDISCOVERY_TOOLS", () => {
-    const path = writeLog("tools.jsonl", [
-      { type: "user", message: { role: "user", content: "why?" } },
-      {
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            { type: "text", text: "looking" },
-            { type: "tool_use", name: "Read", input: {} },
-            { type: "tool_use", name: "Grep", input: {} },
-            { type: "tool_use", name: "TodoWrite", input: {} },
-          ],
-        },
-      },
-    ]);
-    expect(countRediscoveryToolCalls(session("claude", path))).toBe(2);
-  });
-
-  it("counts Cursor role/message tool_use the same way", () => {
-    const path = writeLog("cursor-tools.jsonl", [
-      {
-        role: "assistant",
-        message: {
-          content: [
-            { type: "text", text: "looking" },
-            { type: "tool_use", name: "Read" },
-            { type: "tool_use", name: "Grep" },
-            { type: "tool_use", name: "TodoWrite" },
-          ],
-        },
-      },
-    ]);
-    expect(countRediscoveryToolCalls(session("cursor", path))).toBe(2);
-  });
-
-  it("counts Codex function_call names", () => {
-    const path = writeLog("codex.jsonl", [
-      { type: "response_item", payload: { type: "function_call", name: "read_file" } },
-      { type: "response_item", payload: { type: "function_call", name: "exec_command" } },
-      { type: "response_item", payload: { type: "function_call", name: "unknown_tool" } },
-    ]);
-    expect(countRediscoveryToolCalls(session("codex", path))).toBe(2);
-  });
-
-  it("ignores Codex records that are not named function_calls", () => {
-    const path = writeLog("codex-mixed.jsonl", [
-      { type: "response_item", payload: { type: "message", role: "user", content: "hi" } },
-      { type: "response_item", payload: { type: "function_call" } },
-      { type: "response_item", payload: { type: "function_call", name: 42 } },
-      { type: "response_item" },
-      { type: "event_msg", payload: { type: "token_count" } },
-      { type: "response_item", payload: { type: "function_call", name: "web_search_preview" } },
-    ]);
-    expect(countRediscoveryToolCalls(session("codex", path))).toBe(1);
-  });
-
-  it("ignores Claude/Cursor records without an object message or array content", () => {
-    const path = writeLog("no-tools.jsonl", [
-      { type: "user", message: "bare" },
-      { type: "assistant", message: { role: "assistant", content: "text only" } },
-      { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use" }, 3] } },
-      { type: "file-history-snapshot" },
-    ]);
-    expect(countRediscoveryToolCalls(session("claude", path))).toBe(0);
-  });
-
-  it("returns 0 for an unreadable session", () => {
-    expect(countRediscoveryToolCalls(session("claude", join(dir, "missing.jsonl")))).toBe(0);
-  });
-
-  it("returns 0 for opencode sessions", () => {
-    expect(countRediscoveryToolCalls(session("opencode", join(dir, "missing.db")))).toBe(0);
-  });
-});
-
-describe("estimateSessionTokens", () => {
-  it("estimates chars ÷ 4 over the conversational turns only", () => {
-    const path = writeLog("est.jsonl", [
-      { type: "user", message: { role: "user", content: "x".repeat(400) } },
-      {
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            { type: "text", text: "y".repeat(600) },
-            // Tool noise must not count toward the learning estimate.
-            { type: "tool_use", name: "Read", input: { big: "z".repeat(10_000) } },
-          ],
-        },
-      },
-    ]);
-
-    expect(estimateSessionTokens(session("claude", path))).toBe(250);
-  });
-
-  it("returns 0 for an unreadable session", () => {
-    expect(estimateSessionTokens(session("claude", join(dir, "missing.jsonl")))).toBe(0);
   });
 });

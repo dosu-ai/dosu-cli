@@ -13,8 +13,6 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
 });
 
-vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
-
 vi.mock("../version/auto-update", () => ({
   AUTO_UPDATE_ENV: "DOSU_DISABLE_AUTOUPDATE",
   autoUpdateDisabledReason: vi.fn(),
@@ -54,7 +52,6 @@ import {
   setAutoUpdateEnabled,
 } from "../version/auto-update";
 import { canRefreshMcp, writeMcpRefreshCache } from "../version/mcp-refresh-check";
-import { checkForSkillUpdates } from "../version/skill-update-check";
 import {
   buildPackageManagerInvocation,
   completeUpgrade,
@@ -132,7 +129,6 @@ function errors(): string {
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-upgrade-test-"));
   mockSpawnSync.mockReset();
-  vi.mocked(checkForSkillUpdates).mockClear();
   vi.mocked(runSetup).mockClear();
   vi.mocked(refreshProviders).mockReset();
   vi.mocked(refreshProviders).mockReturnValue({ updated: [], failed: [] });
@@ -559,7 +555,6 @@ describe("runUpgrade", () => {
       [entrypoint, ...FINISH_ARGS],
       expect.anything(),
     );
-    expect(vi.mocked(checkForSkillUpdates)).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
   });
 });
@@ -672,16 +667,15 @@ describe("completeUpgrade", () => {
 describe("finishUpgrade", () => {
   const cursor = { name: () => "Cursor" } as ReturnType<typeof staleProviders>[number];
 
-  it("re-applies hooks and skills when every configured entry is already current", async () => {
+  it("re-applies hooks when every configured entry is already current", async () => {
     const status = await finishUpgrade("0.57.2", { interactive: true });
 
     expect(status).toBe(0);
     expect(staleProviders).toHaveBeenCalledWith({});
     expect(runSetup).not.toHaveBeenCalled();
     expect(refreshProviders).not.toHaveBeenCalled();
-    expect(checkForSkillUpdates).toHaveBeenCalledOnce();
     expect(writeMcpRefreshCache).toHaveBeenCalledWith({ version: "0.60.1" });
-    expect(output()).toContain("hooks and bundled skills");
+    expect(output()).toContain("hooks are up to date");
     expect(refreshEnabledHooks).toHaveBeenCalledOnce();
   });
 
@@ -692,7 +686,6 @@ describe("finishUpgrade", () => {
 
     expect(status).toBe(0);
     expect(runSetup).toHaveBeenCalledOnce();
-    expect(checkForSkillUpdates).not.toHaveBeenCalled();
   });
 
   it("refreshes only the out-of-date entries without a TTY", async () => {
@@ -708,7 +701,6 @@ describe("finishUpgrade", () => {
     expect(status).toBe(0);
     expect(runSetup).not.toHaveBeenCalled();
     expect(refreshProviders).toHaveBeenCalledWith({}, [cursor, zed]);
-    expect(checkForSkillUpdates).toHaveBeenCalledOnce();
     expect(writeMcpRefreshCache).toHaveBeenCalledWith({ version: "0.60.1" });
     expect(output()).toContain("✓ Cursor");
     expect(output()).toContain("✗ Zed: read-only");
@@ -745,8 +737,6 @@ describe("finishUpgrade", () => {
 
   it("is reachable through the hidden --finish option", async () => {
     await upgradeCommand().parseAsync(["--finish", "0.57.2"], { from: "user" });
-
-    expect(checkForSkillUpdates).toHaveBeenCalledOnce();
     expect(process.exitCode).toBeUndefined();
   });
 });

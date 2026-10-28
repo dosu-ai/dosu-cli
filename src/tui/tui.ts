@@ -13,27 +13,23 @@ import {
   saveConfig,
 } from "../config/config";
 import { getWebAppURL } from "../config/constants";
+import { configuredTargets } from "../config/targets";
 import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
-import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { displayRepo } from "../sessions/repo";
-import { type AgentSession, scanAgentSessions } from "../sessions/scan";
-import { dosuAgentsSectionState, inGitWorkTree } from "../setup/agents-md-step";
+import { scanAgentSessions } from "../sessions/scan";
 import { runSetup, runSwitchTarget } from "../setup/flow";
-import { type ScopeCandidate, scopeCandidates, stepPickSyncScope } from "../setup/scope-step";
 import { brand, browserFallbackHint, dim } from "../setup/styles";
-import { loadSyncState, studyRepoFilter } from "../sync/state";
+import { loadSyncState, saveRepoFilter, studyRepoFilter } from "../sync/state";
 import { getSyncStatus } from "../sync/status";
 import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
 import { enterAltScreen } from "./alt-screen";
-import { runAnalyticsView } from "./analytics-view";
 import { type BannerContext, renderBanner } from "./banner";
 import { frameTopMargin, installCenteredLayout } from "./layout";
 import { type MenuOption, menuSelect } from "./menu";
-import { runPagesView } from "./pages-view";
 import * as p from "./prompts";
 
 /** Session state the banner and menu key off. `expired` means the tokens on disk are past
@@ -55,6 +51,12 @@ async function probeSession(cfg: Config): Promise<SessionState> {
   }
 }
 
+/** The bucket sessions ship to, when the default target is one; Dosu otherwise. */
+function sessionStorage(cfg: Config): string | undefined {
+  const target = configuredTargets(cfg).find((t) => t.name === cfg.default_target);
+  return target && /^(s3|r2):\/\//.test(target.url) ? target.url : undefined;
+}
+
 /** Gather the live machine state the welcome banner shows. */
 function bannerContext(cfg: Config, session: SessionState): BannerContext {
   let webAppHost = "app.dosu.dev";
@@ -74,6 +76,7 @@ function bannerContext(cfg: Config, session: SessionState): BannerContext {
     .map((provider) => provider.name());
   // The preAction hook already refreshed the update cache without printing.
   const latest = getAvailableUpdate();
+  const storage = sessionStorage(cfg);
   return {
     version: getVersionString(),
     webAppHost,
@@ -84,9 +87,9 @@ function bannerContext(cfg: Config, session: SessionState): BannerContext {
     libraryName: cfg.active_account?.target?.library_name,
     // Signed out or expired, the account row already names the next step; don't repeat it.
     setupMissing: isAuthenticated(cfg) && !session.expired ? missingSetupSteps(cfg) : [],
-    ...(inGitWorkTree() ? { repoAgentsMd: dosuAgentsSectionState() } : {}),
+    ...(storage ? { storage } : {}),
     agents,
-    studying: isStudying(),
+    syncing: isSyncing(),
     ...(latest
       ? { update: { version: latest, hint: buildUpdateHint(INSTALL_CHANNEL, isNpxInvocation()) } }
       : {}),
@@ -169,12 +172,12 @@ function setupHint(cfg: Config): string {
   );
 }
 
-/** Lock-file check only (no log read): is a study run active right now? */
-function isStudying(): boolean {
+/** Lock-file check only (no log read): is a sync run shipping right now? */
+function isSyncing(): boolean {
   try {
     return getSyncStatus({ readLog: () => "" }).running;
   } catch {
-    // Studying state is cosmetic in the banner and menu; never block on it.
+    // Syncing state is cosmetic in the banner and menu; never block on it.
     return false;
   }
 }
@@ -191,20 +194,26 @@ function drawHome(cfg: Config, session: SessionState): void {
   process.stdout.write(`${renderBanner(bannerContext(cfg, session))}\n`);
 }
 
+/** Setup and target switches persist a new config; keep the in-memory one in step. */
+function reload(cfg: Config): void {
+  const fresh = loadConfig();
+  cfg.mode = fresh.mode;
+  cfg.active_account = fresh.active_account;
+  cfg.targets = fresh.targets;
+  cfg.default_target = fresh.default_target;
+}
+
 async function runMainMenu(): Promise<void> {
   const cfg = loadConfig();
   // Refresh mutates cfg in place, so a successful probe also leaves fresh tokens for the views.
   const session = await probeSession(cfg);
 
-  // Setup may change deployment, api_key, etc.; keep the in-memory cfg in step.
   const runSetupAndReload = async (): Promise<void> => {
     await runSetup();
-    const fresh = loadConfig();
-    cfg.mode = fresh.mode;
-    cfg.active_account = fresh.active_account;
+    reload(cfg);
   };
 
-  // Re-polled while the menu is open so background studying updates the label.
+  // Re-polled while the menu is open so a background sync updates the label.
   // Signed out (or expired), the menu is just the login door; Setup leads until complete.
   const buildOptions = (): MenuOption[] => {
     if (session.expired) {
@@ -231,15 +240,12 @@ async function runMainMenu(): Promise<void> {
         { label: "exit", value: "exit" },
       ];
     }
-    const studying = isStudying();
+    const syncing = isSyncing();
     return [
       {
-        label: studying ? `activity \uD83D\uDCDA ${brand("shipping sessions...")}` : "activity",
+        label: syncing ? `activity \uD83D\uDCDA ${brand("shipping sessions...")}` : "activity",
         value: "sync",
       },
-      { label: "knowledge report", hint: "(opens in browser)", value: "report" },
-      { label: "analytics", value: "analytics" },
-      { label: "pages", value: "pages" },
       { label: "settings", value: "settings" },
       { label: "exit", value: "exit" },
     ];
@@ -258,7 +264,7 @@ async function runMainMenu(): Promise<void> {
   // Main menu
   while (true) {
     const action = await menuSelect("What would you like to do?", buildOptions(), {
-      // Repaint home when the studying lock flips so banner and label stay fresh.
+      // Repaint home when the sync lock flips so banner and label stay fresh.
       refresh: { options: buildOptions, redrawScreen: home },
     });
 
@@ -270,18 +276,6 @@ async function runMainMenu(): Promise<void> {
     switch (action) {
       case "sync":
         await runActivityView();
-        home();
-        break;
-      case "report":
-        await runKnowledgeReport();
-        home();
-        break;
-      case "analytics":
-        await runAnalyticsView();
-        home();
-        break;
-      case "pages":
-        await runPagesView();
         home();
         break;
       case "settings":
@@ -307,21 +301,9 @@ async function runMainMenu(): Promise<void> {
   }
 }
 
-/** Write the harvest HTML from persisted notes and open it, same as `dosu knowledge report`. */
-async function runKnowledgeReport(): Promise<void> {
-  const s = p.spinner();
-  s.start("Writing knowledge report...");
-  try {
-    const path = await emitKnowledgeReport({ open: true });
-    s.stop(`Opened ${path}`);
-  } catch (err) {
-    s.stop("Could not write the report");
-    p.log.error(err instanceof Error ? err.message : String(err));
-  }
-}
-
-/** Settings submenu: switch org/Library, rerun the wizard, or log out. Library switches stay
- * in the current org; org switches run the full chain. */
+/** Settings submenu: switch org/Library, scope syncing, pick session storage, rerun the
+ * wizard, or log out. Library switches stay in the current org; org switches run the full
+ * chain. */
 async function runSettings(cfg: Config): Promise<void> {
   while (true) {
     const target = cfg.active_account?.target;
@@ -343,21 +325,26 @@ async function runSettings(cfg: Config): Promise<void> {
       { label: "switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "switch library", hint: library, value: "switch-library" },
       { label: "sync scope", hint: scope, value: "projects" },
+      { label: "session storage", hint: sessionStorage(cfg) ?? "Dosu", value: "storage" },
       { label: "run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "log out", hint: "clear stored credentials", value: "logout" },
       { label: "back", value: "back" },
     ]);
     if (action === null || action === "back") return;
     if (action === "projects") {
-      await runStudyingProjectsSetting();
+      await runSyncScopeSetting();
+      continue;
+    }
+    if (action === "storage") {
+      // Setup's storage step alone: it re-asks even when a bucket is already in place.
+      await runSetup({ storage: true });
+      reload(cfg);
       continue;
     }
     if (action === "setup") {
       await runSetup();
       // Reload so the submenu hints and banner reflect any target change.
-      const fresh = loadConfig();
-      cfg.mode = fresh.mode;
-      cfg.active_account = fresh.active_account;
+      reload(cfg);
       continue;
     }
     if (action === "logout") {
@@ -367,44 +354,60 @@ async function runSettings(cfg: Config): Promise<void> {
     if (action === "switch-org" || action === "switch-library") {
       await runSwitchTarget(action === "switch-org" ? "org" : "library");
       // Keep the in-memory config in step with the persisted new target.
-      const fresh = loadConfig();
-      cfg.mode = fresh.mode;
-      cfg.active_account = fresh.active_account;
+      reload(cfg);
     }
   }
 }
 
 /** Repos the local sessions ran in plus the current scope, most sessions first; sessions
- * outside a git repo have no repo to pick, and are studied only when every repo is. */
-function discoverSessionRepos(current: readonly string[] | null): ScopeCandidate[] {
-  const inRepos: AgentSession[] = [];
+ * outside a git repo have no repo to pick, and are shipped only when every repo is. */
+function discoverSessionRepos(current: readonly string[] | null): string[] {
+  const counts = new Map<string, number>();
   try {
     const resolver = createProjectDirResolver();
     for (const session of scanAgentSessions({})) {
       const repo = resolver.resolveRepo(session);
-      if (repo) inRepos.push({ ...session, repo });
+      if (repo) counts.set(repo, (counts.get(repo) ?? 0) + 1);
     }
     resolver.flush();
   } catch {
     // An unreadable session store just yields an empty picker.
   }
-  return scopeCandidates(inRepos, current);
+  // A picked repo whose sessions have all aged out must stay removable.
+  for (const repo of current ?? []) if (!counts.has(repo)) counts.set(repo, 0);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([repo]) => repo);
 }
 
-/** Scope shipping to selected repos; picking everything clears the filter so new repos are
- * shipped too. */
-async function runStudyingProjectsSetting(): Promise<void> {
+/** Scope syncing to selected repos; picking everything clears the filter so new repos ship
+ * too. */
+async function runSyncScopeSetting(): Promise<void> {
   const state = loadSyncState();
   const current = studyRepoFilter(state, () => scanAgentSessions({}), createProjectDirResolver());
-  const candidates = discoverSessionRepos(current);
-  if (candidates.length === 0) {
+  const repos = discoverSessionRepos(current);
+  if (repos.length === 0) {
     p.log.info("No agent sessions inside a git repo found yet; nothing to scope.");
     return;
   }
-  await stepPickSyncScope(candidates, current);
+  const selected = await p.multiselect({
+    message: "Ship sessions from which repos?",
+    options: repos.map((repo) => ({ label: displayRepo(repo), hint: repo, value: repo })),
+    initialValues: current ?? repos,
+    summary: (picked) =>
+      picked.length === repos.length
+        ? "all repos \u00B7 new ones included automatically"
+        : `${picked.length} of ${repos.length} repos`,
+    validate: (picked) => (picked.length === 0 ? "Select at least one repo." : undefined),
+  });
+  if (p.isCancel(selected)) return;
+
+  // saveRepoFilter reloads right before writing: a background sync may have advanced the state.
+  const all = selected.length === repos.length;
+  saveRepoFilter(all ? null : [...selected]);
+  const scope = all ? "all repos" : (selected as string[]).map(displayRepo).join(", ");
+  p.log.success(`Sync scope ${dim(`\u00B7 ${scope}`)}`);
 }
 
-async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
+async function handleAuthenticate(cfg: Config): Promise<void> {
   // The menu only offers this when signed out: straight to the browser login.
   const shouldLogin = await p.confirm({ message: "Open browser to log in?" });
   if (p.isCancel(shouldLogin) || !shouldLogin) return;
@@ -441,7 +444,7 @@ async function handleAuthenticate(cfg: ReturnType<typeof loadConfig>): Promise<v
   }
 }
 
-export function handleLogout(cfg: ReturnType<typeof loadConfig>): void {
+export function handleLogout(cfg: Config): void {
   if (!isAuthenticated(cfg)) {
     p.log.warn("You are not logged in.");
     return;

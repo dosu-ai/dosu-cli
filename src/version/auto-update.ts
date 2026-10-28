@@ -216,8 +216,7 @@ export function startAutoUpdate(version: string, options: StartOptions = {}): Au
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        // The install is not a command the person ran; keep it out of command analytics.
-        env: { ...env, DOSU_TELEMETRY_DISABLED: "1" },
+        env,
       });
       child.on("error", releaseLock);
       child.unref();

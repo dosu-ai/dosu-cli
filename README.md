@@ -101,41 +101,28 @@ Or right-click the binary, select "Open", and click "Open" in the dialog.
 | `dosu mcp add <tool>` | Add the Dosu MCP server to a specific tool |
 | `dosu mcp refresh` | Rewrite the Dosu MCP entry in every already-configured tool from the current setup |
 | `dosu logs` | View or manage debug logs (`--tail`, `--clear`) |
-| `dosu telemetry` | Manage usage analytics and error diagnostics (`status`, `enable`, `disable`, `reset`) |
 
 `dosu mcp add` takes `-g, --global` to install for all projects instead of project-local, and `--show-secret` to print the full manual config.
 
-`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it hands off to the new version, which re-applies the bundled skills and, only when a configured agent's MCP entry is out of date, runs `dosu setup` (or the non-interactive `dosu mcp refresh` without a TTY). An entry is out of date when it doesn't match the shape the current provider code writes. Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: on the first command of a new version, the CLI checks each configured provider, silently rewrites only the out-of-date entries, and prompts you to run `dosu setup` for the rest; the bundled agent skills are always re-applied on the first command after any version change.
+`dosu upgrade` delegates to npm, pnpm, Yarn Classic, or Homebrew only after confirming which manager owns the current installation. Temporary package-runner invocations stay ephemeral, ambiguous or local installs are left unchanged, and standalone binaries receive the latest safe manual download path. After a successful update it hands off to the new version, which, only when a configured agent's MCP entry is out of date, runs `dosu setup` (or the non-interactive `dosu mcp refresh` without a TTY). An entry is out of date when it doesn't match the shape the current provider code writes. Upgrades done outside `dosu upgrade` (npm, brew, `npx @dosu/cli@latest`) get a safety net: on the first command of a new version, the CLI checks each configured provider, silently rewrites only the out-of-date entries, and prompts you to run `dosu setup` for the rest.
 
-Dosu also updates itself automatically. When the update check (every six hours) finds a newer release, npm, pnpm, Yarn Classic, and Homebrew installs start the same package-manager update in a detached background process. The current command runs unchanged, and your next command uses the new version, whose first run applies the skill and MCP refreshes above. Hooks, rules, and the status line still need `dosu setup` when a release changes them. Background updates never run for `npx` invocations, standalone binaries, CI, or `DOSU_DEV=true`. A failed install (for example, a global npm prefix that needs `sudo`) falls back to the "Run `dosu upgrade`" notice and is retried after six hours. Turn background updates off with `dosu upgrade --auto off` (and back on with `--auto on`), or with `DOSU_DISABLE_AUTOUPDATE=1` for a single environment.
+Dosu also updates itself automatically. When the update check (every six hours) finds a newer release, npm, pnpm, Yarn Classic, and Homebrew installs start the same package-manager update in a detached background process. The current command runs unchanged, and your next command uses the new version, whose first run applies the MCP refresh above. Hooks, rules, and the status line still need `dosu setup` when a release changes them. Background updates never run for `npx` invocations, standalone binaries, CI, or `DOSU_DEV=true`. A failed install (for example, a global npm prefix that needs `sudo`) falls back to the "Run `dosu upgrade`" notice and is retried after six hours. Turn background updates off with `dosu upgrade --auto off` (and back on with `--auto on`), or with `DOSU_DISABLE_AUTOUPDATE=1` for a single environment.
 
-### Platform commands
-
-Once authenticated against a deployment, you can drive the Dosu platform without leaving the terminal:
+### Session commands
 
 | Command | Description |
 |---|---|
-| `dosu ask` | Ask a question and get an AI-generated answer |
-| `dosu knowledge` | Search and browse your knowledge base |
-| `dosu docs` | Manage documents (list, create, update, import, publish) |
-| `dosu threads` | List and manage conversation threads |
-| `dosu review` | Document review workflow for the selected Library, plus `review notifications` to route a Library's or Agent's reviews to a Slack channel |
-| `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
-| `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
-| `dosu topics` | List knowledge base topics and their pages |
-| `dosu members` | Invite organization members |
-| `dosu org` | Show organization information |
-| `dosu deployments` | List / show / switch Dosu MCP deployments |
-| `dosu analytics` | View usage statistics |
-| `dosu skill` | Install / update / remove the bundled Dosu agent skills |
+| `dosu sync` | Ship finished local agent sessions to Dosu memory or your own session store |
+| `dosu knowledge` | Capture finished agent sessions: `sync`, `hooks`, `incognito`, `scope`, `statusline`, `transcripts` |
+| `dosu memory` | Search Dosu memory, learned from earlier agent sessions, as an agent's MCP tools do |
+| `dosu project` | Show or link the project key Dosu memory scopes a directory's sessions by |
+| `dosu sources` | Bucket targets connected to Dosu, which pulls their sessions into memory (`setup`, `connect`, `status`, `sync`, `disconnect`) |
+| `dosu get <session>` | Show a shipped session: its metadata and current trace |
+| `dosu export <session>` | Write a shipped session's current trace as JSON |
+| `dosu changes` | List a target's change feed: traces published, sessions redacted |
+| `dosu redact <session>` | Remove a shipped session from its target |
 
 Run `dosu <command> --help` for subcommands and flags.
-
-### Agent skills
-
-The `dosu` skill — which teaches coding agents how to operate Dosu through this CLI — lives in [`skills/dosu`](skills/dosu) and is embedded in the CLI at build time, so the copy an agent reads always matches the installed CLI version. `dosu setup` (and `dosu skill install`) writes it to `~/.agents/skills/dosu`, the universal location read by Cursor, Codex, Gemini CLI, Copilot, and OpenCode, and symlinks Claude Code's `~/.claude/skills/dosu` at that copy. After a CLI upgrade, the first command re-applies the skill automatically; `dosu skill update` does the same on demand. The former standalone [`dosu-ai/dosu-skill`](https://github.com/dosu-ai/dosu-skill) repository is deprecated in favour of this bundle.
-
-To change a skill, edit `skills/<name>/…` and run `bun run embed:skills` to regenerate `src/generated/skills.ts` (a test fails if the two drift).
 
 ### Supported AI tools
 
@@ -157,13 +144,8 @@ Tools with no such log (Claude Desktop, VS Code, Windsurf, Zed, Cline, Antigravi
 
 ### Non-interactive / agent setup
 
-For coding agents and CI, `setup` has a non-interactive mode:
-
-```bash
-dosu setup --agent --tool claude
-```
-
-Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt.
+For CI and headless machines, `dosu login --no-browser` prints a URL to open elsewhere and waits
+for the sign-in, and `dosu setup --mode oss|cloud` skips the mode prompt.
 
 ### Studying sessions: status line and incognito
 
@@ -194,33 +176,7 @@ finished while incognito was on stay unstudied permanently, even if a later sync
 To keep a single chat out instead, type `/dosu-incognito` in it; setup installs that command with
 the hook. It marks the session's transcript so studying skips it (the whole session, and for the
 rest of it — start a new session to turn Dosu back on) and tells the model not to use Dosu
-tools. See [docs/studying.md](docs/studying.md).
-
-### Telemetry and privacy
-
-Dosu collects privacy-preserving usage analytics and error diagnostics by default. One global switch
-controls both; setup does not show a telemetry prompt.
-
-```bash
-dosu telemetry status [--json]
-dosu telemetry enable
-dosu telemetry disable
-dosu telemetry reset
-```
-
-`reset` rotates the local pseudonymous telemetry ID; it does not delete already retained events.
-Signed-out command analytics uses that ID. Signed-in command analytics and minimal error diagnostics
-use the same Dosu user ID as the web app; Sentry may also receive the account email. Prior
-installation history is never aliased to an account. Setup-funnel events are linked after sign-in
-and may include documented coarse setup choices. `DO_NOT_TRACK=1` and
-`DOSU_TELEMETRY_DISABLED=1` disable all telemetry for the process. Dosu never collects
-prompts, raw command lines, free-form argument or option values, user source code, file contents,
-local paths, credentials, raw error messages, or `debug.log`. Environment-variable names and values
-are not collected, with one exception: when a managed Claude Code settings conflict prevents a
-study run, Dosu reports the allowlisted public Claude Code setting/variable names that caused the
-conflict (never their values) to help diagnose why knowledge sync fails due to settings conflicts.
-See [Telemetry and privacy](docs/telemetry.md) for the exact event fields, destinations, retention,
-and controls.
+tools. See [docs/syncing.md](docs/syncing.md).
 
 ## Configuration
 
@@ -233,21 +189,12 @@ To repoint a published build at a different backend without rebuilding, set any 
 - `SUPABASE_URL_OVERRIDE`
 - `SUPABASE_ANON_KEY_OVERRIDE`
 
-Telemetry destination settings are:
-
-- Build time: `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_CLI_SENTRY_DSN`
-- Runtime overrides: `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE`, `DOSU_CLI_SENTRY_DSN_OVERRIDE`
-- Privacy controls: `DO_NOT_TRACK=1`, `DOSU_TELEMETRY_DISABLED=1`,
-  `DOSU_TELEMETRY_DEBUG=1` (print the exact payload to stderr without sending it)
-
-PostHog project tokens and Sentry DSNs are public client-side ingestion credentials. Never put a
-PostHog personal API key, Sentry auth token, or admin/management credential in these variables.
-
 ## Development
 
 ```bash
 bun install        # install dependencies
 bun run dev        # run the CLI from source
+bun run dev:local  # same, against the local Dosu stack (.env.development)
 bun run test       # run tests (vitest)
 bun run check      # lint + format check (Biome)
 bun run typecheck  # tsc --noEmit

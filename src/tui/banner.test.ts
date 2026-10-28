@@ -139,18 +139,20 @@ describe("renderBanner", () => {
     expect(warnRows).toHaveLength(2);
   });
 
-  it("shows the repo row only when a work-tree state is known", () => {
-    expect(stripAnsi(renderBanner(makeContext()))).not.toContain("repo");
+  it("shows where sessions ship once setup is complete", () => {
+    const row = (banner: string) => banner.split("\n").find((line) => line.includes("storage"));
 
-    const current = stripAnsi(renderBanner(makeContext({ repoAgentsMd: "current" })));
-    expect(current).toContain("repo");
-    expect(current).toContain("AGENTS.md has the Dosu section");
+    expect(row(stripAnsi(renderBanner(makeContext())))).toContain("Dosu");
+    expect(
+      row(stripAnsi(renderBanner(makeContext({ storage: "r2://session-db-test/dosu" })))),
+    ).toContain("r2://session-db-test/dosu");
 
-    const missing = stripAnsi(renderBanner(makeContext({ repoAgentsMd: "missing" })));
-    expect(missing).toContain("AGENTS.md missing the Dosu section \u00B7 run Setup");
-
-    const outdated = stripAnsi(renderBanner(makeContext({ repoAgentsMd: "outdated" })));
-    expect(outdated).toContain("AGENTS.md Dosu section outdated \u00B7 run Setup");
+    // Signed out, expired, or mid-setup, the row would only distract from the next step.
+    expect(stripAnsi(renderBanner(makeContext({ signedIn: false })))).not.toContain("storage");
+    expect(stripAnsi(renderBanner(makeContext({ sessionExpired: true })))).not.toContain("storage");
+    expect(stripAnsi(renderBanner(makeContext({ setupMissing: ["MCP"] })))).not.toContain(
+      "storage",
+    );
   });
 
   it("lets a missing step outrank a stale display name", () => {
@@ -170,10 +172,10 @@ describe("renderBanner", () => {
     expect(rows[0].startsWith(LOGO_MARK[0])).toBe(true);
   });
 
-  it("includes the sync row only when a study run is active", () => {
+  it("includes the sync row only when a sync run is active", () => {
     expect(stripAnsi(renderBanner(makeContext()))).not.toContain("shipping sessions");
 
-    const active = stripAnsi(renderBanner(makeContext({ studying: true })));
+    const active = stripAnsi(renderBanner(makeContext({ syncing: true })));
     expect(active).toContain("sync");
     expect(active).toContain("\uD83D\uDCDA shipping sessions... \u00B7 see activity");
   });

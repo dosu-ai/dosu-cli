@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
-/** Dosu CLI: manage MCP servers for AI tools. */
+/** Dosu CLI: capture coding-agent sessions. */
 
 import { printFatalError } from "./cli/fatal-error";
 import { isStatuslineRenderArgv } from "./statusline/argv";
 
-// Ensure Ctrl+C always exits immediately, even when @clack/prompts
-// intercepts SIGINT and swallows it as a cancel symbol.
+// Ensure Ctrl+C always exits immediately, even when a prompt intercepts SIGINT and swallows it
+// as a cancel symbol.
 process.on("SIGINT", () => process.exit(0));
 
 async function main(): Promise<void> {

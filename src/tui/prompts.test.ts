@@ -1,7 +1,17 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installCenteredLayout } from "./layout";
-import { confirm, intro, isCancel, log, multiselect, outro, select, spinner } from "./prompts";
+import {
+  confirm,
+  intro,
+  isCancel,
+  log,
+  multiselect,
+  outro,
+  select,
+  spinner,
+  text,
+} from "./prompts";
 
 const ESC = String.fromCharCode(27);
 const UP = `${ESC}[A`;
@@ -528,5 +538,73 @@ describe("confirm", () => {
     const result = confirm({ message: "Proceed?" }, { input, output });
     input.emit("data", "q");
     expect(isCancel(await result)).toBe(true);
+  });
+});
+
+describe("text", () => {
+  it("collects typed characters and resolves on enter, leaving the answer behind", async () => {
+    const { input, output, text: screen } = fakeIO();
+    const result = text({ message: "Bucket name" }, { input, output });
+    input.emit("data", "my-");
+    input.emit("data", "bucket");
+    input.emit("data", "\r");
+    await expect(result).resolves.toBe("my-bucket");
+    expect(screen()).toContain("\u2714 Bucket name \u00B7 my-bucket");
+  });
+
+  it("accepts the initial value untouched, and edits it with backspace", async () => {
+    const a = fakeIO();
+    const kept = text({ message: "Prefix", initialValue: "dosu" }, a);
+    a.input.emit("data", "\r");
+    await expect(kept).resolves.toBe("dosu");
+
+    const b = fakeIO();
+    const edited = text({ message: "Prefix", initialValue: "dosu" }, b);
+    b.input.emit("data", String.fromCharCode(127));
+    b.input.emit("data", "e\r");
+    await expect(edited).resolves.toBe("dose");
+  });
+
+  it("clears the line with ctrl-u and the last word with ctrl-w", async () => {
+    const a = fakeIO();
+    const cleared = text({ message: "Owner", initialValue: "someone@example.com" }, a);
+    a.input.emit("data", `${String.fromCharCode(21)}james\r`);
+    await expect(cleared).resolves.toBe("james");
+
+    const b = fakeIO();
+    const trimmed = text({ message: "Owner", initialValue: "one two" }, b);
+    b.input.emit("data", `${String.fromCharCode(23)}\r`);
+    await expect(trimmed).resolves.toBe("one ");
+  });
+
+  it("blocks enter with the validation message until the value passes", async () => {
+    const { input, output, text: screen } = fakeIO();
+    const result = text(
+      { message: "Region", validate: (v) => (v ? undefined : "The region is required") },
+      { input, output },
+    );
+    input.emit("data", "\r");
+    expect(screen()).toContain("The region is required");
+    input.emit("data", "us-east-1\r");
+    await expect(result).resolves.toBe("us-east-1");
+  });
+
+  it("masks a secret on screen and in the echo", async () => {
+    const { input, output, text: screen } = fakeIO();
+    const result = text({ message: "Secret", mask: true }, { input, output });
+    input.emit("data", "hunter2\r");
+    await expect(result).resolves.toBe("hunter2");
+    expect(screen()).not.toContain("hunter2");
+    expect(screen()).toContain("\u2714 Secret \u00B7 \u2022\u2022\u2022\u2022");
+  });
+
+  it("cancels on escape and resolves cancelled without a TTY", async () => {
+    const { input, output } = fakeIO();
+    const result = text({ message: "Bucket name" }, { input, output });
+    input.emit("data", ESC);
+    expect(isCancel(await result)).toBe(true);
+
+    const noTTY = fakeIO({ inputTTY: false });
+    expect(isCancel(await text({ message: "Bucket name" }, noTTY))).toBe(true);
   });
 });

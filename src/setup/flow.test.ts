@@ -43,6 +43,10 @@ vi.mock("../auth/flow", () => ({
   startOAuthFlow: vi.fn(),
 }));
 
+vi.mock("../sources/wizard", () => ({
+  runBucketWizard: vi.fn(),
+}));
+
 vi.mock("../debug/logger", () => ({
   logger: {
     debug: vi.fn(),
@@ -52,10 +56,6 @@ vi.mock("../debug/logger", () => ({
     init: vi.fn(),
     getLogPath: vi.fn(() => "/tmp/test-debug.log"),
   },
-}));
-
-vi.mock("../telemetry/settings", () => ({
-  isTelemetryEnabled: vi.fn(() => true),
 }));
 
 // tRPC client for onboarding and github-step calls; override any path via
@@ -118,46 +118,10 @@ vi.mock("../client/client", () => {
   };
 });
 
-const mockInstallSkill = vi.fn();
-vi.mock("../commands/skill", () => ({
-  installSkill: (...args: unknown[]) => mockInstallSkill(...args),
-  skillAgentIDsForProviders: (providerIDs: string[]) =>
-    providerIDs
-      .map(
-        (providerID) =>
-          ({ claude: "claude-code", cursor: "cursor" })[providerID as "claude" | "cursor"],
-      )
-      .filter(Boolean),
-  skillInstallTargetForProvider: (providerID: string) => {
-    const target = {
-      claude: { path: "/skills/claude/dosu", symlink: true },
-      cursor: { path: "/skills/cursor/dosu", symlink: false },
-    }[providerID as "claude" | "cursor"];
-    return target ?? null;
-  },
-  skillCommand: vi.fn(),
-}));
-
 const { mockStepConnectGitHubRepo } = vi.hoisted(() => ({
   mockStepConnectGitHubRepo: vi.fn(),
 }));
 
-// AGENTS.md step: mocked so flow tests never write an AGENTS.md into the real repo cwd.
-const { mockInGitWorkTree, mockStepUpdateAgentsMd } = vi.hoisted(() => ({
-  mockInGitWorkTree: vi.fn(),
-  mockStepUpdateAgentsMd: vi.fn(),
-}));
-vi.mock("./agents-md-step", () => ({
-  inGitWorkTree: (...args: unknown[]) => mockInGitWorkTree(...args),
-  stepUpdateAgentsMd: (...args: unknown[]) => mockStepUpdateAgentsMd(...args),
-}));
-
-const { mockStepConfigureAgentRules } = vi.hoisted(() => ({
-  mockStepConfigureAgentRules: vi.fn(),
-}));
-vi.mock("./rules-step", () => ({
-  stepConfigureAgentRules: (...args: unknown[]) => mockStepConfigureAgentRules(...args),
-}));
 vi.mock("./github-step", () => ({
   stepConnectGitHubRepo: (...args: unknown[]) => mockStepConnectGitHubRepo(...args),
   detectGitRepo: vi.fn(() => null),
@@ -185,11 +149,6 @@ vi.mock("../sync/detach", async (importOriginal) => ({
   spawnDetachedSelf: (...args: unknown[]) => mockSpawnDetachedSelf(...args),
 }));
 
-// The live Activity view needs a raw-mode TTY and polls the debug log.
-vi.mock("../tui/activity-view", () => ({
-  runActivityView: vi.fn(),
-}));
-
 // The status line installer runs for real against the temp home; this override stays inert
 // (undefined → real registry) unless a test needs an installer that misbehaves.
 const { mockGetStatuslineAgent } = vi.hoisted(() => ({
@@ -204,8 +163,8 @@ vi.mock("../statusline/agents", async (importOriginal) => {
   };
 });
 
-import { OAuthCallbackError } from "../auth/errors";
 import { startOAuthFlow } from "../auth/flow";
+import { CliUsageError } from "../cli/errors";
 import { Client } from "../client/client";
 import type { Config } from "../config/config";
 import { loadConfig, saveConfig } from "../config/config";
@@ -218,23 +177,21 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
+import { runBucketWizard } from "../sources/wizard";
 import {
   loadSyncState,
   saveSyncState,
   setAgentsIncognito,
   setShipTranscripts,
 } from "../sync/state";
-import { consumeCommandFacets } from "../telemetry/telemetry";
-import { runActivityView } from "../tui/activity-view";
 import * as p from "../tui/prompts";
 import { readMcpRefreshCache } from "../version/mcp-refresh-check";
 import { VERSION } from "../version/version";
 import {
   type ConfigResult,
-  cliAuthFailureReason,
-  runInstallSkill,
   runSetup,
   runSwitchTarget,
+  stepChooseSessionStorage,
   stepConfigureTools,
   stepDetectTools,
   stepOfferInitialSync,
@@ -289,9 +246,6 @@ function trpcNotFoundError(path: string): Error {
 
 function installSetupStepDefaults() {
   mockStepConnectGitHubRepo.mockResolvedValue({ advance: false, has_connected_repo: false });
-  mockInGitWorkTree.mockReturnValue(false);
-  mockStepUpdateAgentsMd.mockReturnValue(true);
-  mockStepConfigureAgentRules.mockResolvedValue([]);
 }
 
 function installRemoteSetupDefaults() {
@@ -324,18 +278,15 @@ let tempDir: string;
 let origHome: string | undefined;
 let origXdg: string | undefined;
 let origWebAppURLOverride: string | undefined;
-let origPostHogTokenOverride: string | undefined;
 
 function setupTempEnv() {
   tempDir = mkdtempSync(join(tmpdir(), "dosu-flow-test-"));
   origHome = process.env.HOME;
   origXdg = process.env.XDG_CONFIG_HOME;
   origWebAppURLOverride = process.env.DOSU_WEB_APP_URL_OVERRIDE;
-  origPostHogTokenOverride = process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE;
   process.env.HOME = tempDir;
   process.env.XDG_CONFIG_HOME = tempDir;
   process.env.DOSU_WEB_APP_URL_OVERRIDE = "https://app.test.dev";
-  process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE = "phc_test_public";
 }
 
 function teardownTempEnv() {
@@ -349,11 +300,6 @@ function teardownTempEnv() {
     process.env.DOSU_WEB_APP_URL_OVERRIDE = origWebAppURLOverride;
   } else {
     delete process.env.DOSU_WEB_APP_URL_OVERRIDE;
-  }
-  if (origPostHogTokenOverride !== undefined) {
-    process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE = origPostHogTokenOverride;
-  } else {
-    delete process.env.DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE;
   }
   rmSync(tempDir, { recursive: true, force: true });
 }
@@ -403,10 +349,6 @@ function makeDeployment(overrides: Record<string, unknown> = {}) {
     space_id: "s1",
     ...overrides,
   };
-}
-
-function trackedCliOnboardingEvents() {
-  return mockTrpc.user.trackCliOnboardingEvent.mutate.mock.calls.map(([input]) => input);
 }
 
 // --- 1. stepDetectTools: real providers, temp HOME ---
@@ -1146,7 +1088,6 @@ describe("runSetup integration", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -1169,29 +1110,6 @@ describe("runSetup integration", () => {
     });
     return clientMethods;
   }
-
-  it("does not block setup when telemetry is hung", async () => {
-    let releaseTelemetry: (() => void) | undefined;
-    mockTrpc.user.trackCliOnboardingPreAuthEvent.mutate.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseTelemetry = () => resolve({ ok: true });
-        }),
-    );
-    mockStartOAuthFlow.mockRejectedValue(new Error("auth unavailable"));
-
-    const setup = runSetup();
-    try {
-      const completedPromptly = await Promise.race([
-        setup.then(() => true),
-        new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
-      ]);
-      expect(completedPromptly).toBe(true);
-    } finally {
-      releaseTelemetry?.();
-      await setup;
-    }
-  });
 
   it("starts the OAuth flow without a confirm prompt and prints the login link", async () => {
     // No token in config (fresh state via temp dir)
@@ -1220,49 +1138,6 @@ describe("runSetup integration", () => {
         "If your browser doesn't open automatically, visit:\nhttps://app.dosu.dev/cli/auth?callback=x",
       ),
     );
-  });
-
-  it("logs curated OAuth callback errors during browser login", async () => {
-    mockStartOAuthFlow.mockRejectedValue(
-      new OAuthCallbackError("OAuth state expired", {
-        errorCode: "bad_oauth_state",
-        errorDescription: "OAuth state expired",
-      }),
-    );
-
-    await runSetup();
-
-    expect(p.log.error).toHaveBeenCalledWith(
-      "Authentication failed: OAuth state expired. Run `dosu login` again.",
-    );
-    expect(
-      cliAuthFailureReason(
-        new OAuthCallbackError("OAuth state expired", {
-          errorCode: "bad_oauth_state",
-          errorDescription: "secret callback detail",
-        }),
-      ),
-    ).toBe("bad_oauth_state");
-    expect(
-      cliAuthFailureReason(
-        new OAuthCallbackError("private", { errorCode: "customer_private_value" }),
-      ),
-    ).toBe("oauth_callback_error");
-  });
-
-  it("never sends a raw unexpected authentication error as analytics", async () => {
-    mockStartOAuthFlow.mockRejectedValue(
-      new Error("token=secret-value failed in /Users/alice/private-repo"),
-    );
-
-    await runSetup();
-
-    const reason = cliAuthFailureReason(
-      new Error("token=secret-value failed in /Users/alice/private-repo"),
-    );
-    expect(reason).toBe("unexpected_auth_error");
-    expect(reason).not.toContain("secret-value");
-    expect(reason).not.toContain("private-repo");
   });
 
   it("completes full flow with existing token and no tools", async () => {
@@ -1343,38 +1218,6 @@ describe("runSetup integration", () => {
     expect(p.confirm).not.toHaveBeenCalled();
     expect(mockStepConnectGitHubRepo).not.toHaveBeenCalled();
     expect(clientMethods.validateAPIKey).toHaveBeenCalled();
-  });
-
-  it("completes full flow with tool install via real filesystem", async () => {
-    // Save a real config with token but no deployment — forces the picker.
-    const cfg = makeCfg({ deployment_id: undefined, deployment_name: undefined });
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-
-    // Create Cursor detect path
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-
-    // User selects cursor in multiselect
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    // Verify the config was actually written to disk
-    const cursorConfigPath = join(tempDir, ".cursor", "mcp.json");
-    expect(existsSync(cursorConfigPath)).toBe(true);
-    const cursorConfig = loadJSONConfig(cursorConfigPath);
-    expect(cursorConfig.mcpServers.dosu).toBeDefined();
-    expect(cursorConfig.mcpServers.dosu.url).toContain("d1");
-
-    // Verify summary was shown
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
-    expect(mockStepConfigureAgentRules).toHaveBeenCalledWith(
-      expect.objectContaining({ toInstall: [expect.objectContaining({})] }),
-      [expect.objectContaining({ action: "install" })],
-    );
   });
 
   it("runs OAuth flow and saves tokens to real config", async () => {
@@ -2125,66 +1968,6 @@ describe("runSetup integration", () => {
     expect(p.log.info).toHaveBeenCalledWith(expect.stringContaining("Removed from 1 agent"));
   });
 
-  it("OSS mode configures MCP inside a git work tree", async () => {
-    const cfg = makeCfg({ mode: "oss" });
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mockInGitWorkTree.mockReturnValue(true);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Configured 1 agent"));
-  });
-
-  it("installs the skill automatically for the selected agent", async () => {
-    const cfg = makeCfg();
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/cursor/dosu"));
-  });
-
-  it("does not install the skill when no agent is selected", async () => {
-    const cfg = makeCfg({ mode: "oss" });
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection([]);
-
-    await runSetup();
-
-    expect(mockInstallSkill).not.toHaveBeenCalled();
-    expect(p.outro).toHaveBeenCalledWith(expect.stringContaining("open-source libraries only"));
-  });
-
-  it("installs the selected agent skill in OSS mode", async () => {
-    const cfg = makeCfg({ mode: "oss" });
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(mockInstallSkill).toHaveBeenCalledWith(["cursor"]);
-  });
-
   it("goes directly to agent selection without a component-selection prompt", async () => {
     const cfg = makeCfg();
     saveConfig(cfg);
@@ -2260,145 +2043,9 @@ describe("runSetup integration", () => {
     expect(validate([])).toContain("Select at least one agent");
     expect(validate(["cursor"])).toBeUndefined();
   });
-
-  it("automatically updates AGENTS.md after configuring an agent in a git work tree", async () => {
-    const cfg = makeCfg();
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mockInGitWorkTree.mockReturnValue(true);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(mockStepUpdateAgentsMd).toHaveBeenCalledTimes(1);
-
-    const completed = trackedCliOnboardingEvents().find(
-      (e) => e.event === "cli_onboarding_completed",
-    );
-    expect(completed?.properties.completed_agents_md).toBe(true);
-    // Cursor's knowledge sync hook rode along with the MCP install.
-    expect(completed?.properties).toMatchObject({ completed_hooks: true, hook_count: 1 });
-  });
-
-  it("reports completed_hooks=false when the hook could not be enabled", async () => {
-    const cfg = makeCfg();
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    // An unparseable hooks file makes the hook step fail open while MCP still installs.
-    writeFileSync(join(tempDir, ".cursor", "hooks.json"), "not json {");
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    const completed = trackedCliOnboardingEvents().find(
-      (e) => e.event === "cli_onboarding_completed",
-    );
-    expect(completed?.properties).toMatchObject({
-      completed_mcp: true,
-      completed_hooks: false,
-      hook_count: 0,
-    });
-  });
-
-  it("does not update AGENTS.md when no agent was configured", async () => {
-    const cfg = makeCfg();
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mockInGitWorkTree.mockReturnValue(true);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection([]);
-
-    await runSetup();
-
-    expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
-  });
-
-  it("does not update AGENTS.md outside a git work tree", async () => {
-    const cfg = makeCfg();
-    saveConfig(cfg);
-
-    setupAuthenticatedClient();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(mockStepUpdateAgentsMd).not.toHaveBeenCalled();
-  });
 });
 
 // --- 6. runInstallSkill: focused unit tests ---
-
-describe("runInstallSkill", () => {
-  beforeEach(() => {
-    setupTempEnv();
-    vi.resetAllMocks();
-    installSetupStepDefaults();
-    installRemoteSetupDefaults();
-    vi.mocked(p.isCancel).mockReturnValue(false);
-    installMultiselectDefault();
-  });
-  afterEach(teardownTempEnv);
-
-  it("calls installSkill and returns true on success", async () => {
-    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
-
-    const result = await runInstallSkill([ClaudeProvider()]);
-    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
-
-    expect(result).toBe(true);
-    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
-    expect(spinner?.stop).toHaveBeenCalledWith("Skill installed");
-    expect(mockInstallSkill).toHaveBeenCalledWith(["claude"]);
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 1 agent"));
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Claude Code"));
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("/skills/claude/dosu"));
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("(symlink)"));
-  });
-
-  it("uses plural loading copy for multiple selected agents", async () => {
-    mockInstallSkill.mockResolvedValue({ success: true });
-
-    await runInstallSkill([ClaudeProvider(), CursorProvider()]);
-    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
-
-    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 2 agents");
-    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("Skill ready for 2 agent"));
-  });
-
-  it("returns false and logs error when installSkill reports failure", async () => {
-    mockInstallSkill.mockResolvedValue({ success: false });
-
-    const result = await runInstallSkill([ClaudeProvider()]);
-    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
-
-    expect(result).toBe(false);
-    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
-    expect(spinner?.stop).toHaveBeenCalledWith("Skill install failed");
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
-  });
-
-  it("returns false and logs error when installSkill throws", async () => {
-    mockInstallSkill.mockRejectedValue(new Error("boom"));
-
-    const result = await runInstallSkill([ClaudeProvider()]);
-    const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
-
-    expect(result).toBe(false);
-    expect(spinner?.start).toHaveBeenCalledWith("Installing skill for 1 agent");
-    expect(spinner?.stop).toHaveBeenCalledWith("Skill install failed");
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("boom"));
-  });
-});
 
 // --- 7. Checkpoint-aware resume (M1) ---
 
@@ -2413,7 +2060,6 @@ describe("runSetup checkpoint behavior", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -2448,36 +2094,6 @@ describe("runSetup checkpoint behavior", () => {
     for (const [args] of calls) {
       expect(String(args.message).toLowerCase()).not.toContain("mode");
     }
-  });
-
-  it("warns when no AI agents are detected", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("No supported AI agents detected"),
-    );
-  });
-
-  it("reports the failure when every MCP install errors", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mockInGitWorkTree.mockReturnValue(true);
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    const cursor = CursorProvider();
-    vi.spyOn(cursor, "install").mockImplementation(() => {
-      throw new Error("disk full");
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [cursor]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to configure Cursor"));
   });
 
   it("persists a fresh token after successful authentication", async () => {
@@ -2533,29 +2149,6 @@ describe("runSetup checkpoint behavior", () => {
     await runSetup();
 
     expect(mockTrpc.user.updateProfile.mutate).not.toHaveBeenCalled();
-  });
-
-  it("tracks completion when at least one valuable onboarding action succeeds", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    expect(trackedCliOnboardingEvents()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ event: "cli_onboarding_skill_installed" }),
-        expect.objectContaining({
-          event: "cli_onboarding_completed",
-          properties: expect.objectContaining({
-            completed_mcp: true,
-            completed_skill: true,
-          }),
-        }),
-      ]),
-    );
   });
 
   it("does not call updateProfile during ordinary cloud setup", async () => {
@@ -2635,36 +2228,6 @@ describe("runSetup checkpoint behavior", () => {
     const saved = loadConfig();
     expect(saved.active_account?.session.access_token).toBe("tok-minted");
     expect(saved.active_account?.session.refresh_token).toBe("ref-minted");
-  });
-
-  it("aborts and tracks failure when the web onboarding handoff does not complete", async () => {
-    saveConfig(makeCfg());
-    const methods = setupAuthed();
-    mockTrpc.user.getCliOnboardingContext.query.mockResolvedValue({
-      user_id: "test-user-id",
-      finished_onboarding: false,
-      cli_onboarding_enabled: true,
-    });
-    mockStartOAuthFlow.mockRejectedValue(new Error("timed out"));
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    // The timeout guidance names the likeliest cause (account mismatch) and
-    // its cure — never a bare "go finish in the browser" loop.
-    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("`dosu logout`"));
-    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("re-run `dosu setup`"));
-    expect(trackedCliOnboardingEvents()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "cli_onboarding_failed",
-          properties: expect.objectContaining({ reason: "web_onboarding_incomplete" }),
-        }),
-      ]),
-    );
-    // Never reached deployment binding or agent selection.
-    expect(methods.getDeployments).not.toHaveBeenCalled();
-    expect(p.multiselect).not.toHaveBeenCalled();
   });
 
   it("re-resolves everything when the handshake hands back a different account", async () => {
@@ -2809,7 +2372,6 @@ describe("runSetup additional branches", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(teardownTempEnv);
 
@@ -2845,13 +2407,6 @@ describe("runSetup additional branches", () => {
     expect(p.log.error).toHaveBeenCalledWith("Could not load your profile.");
     // Never advanced to agent selection / outro.
     expect(p.outro).not.toHaveBeenCalled();
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_failed" &&
-          e.properties?.reason === "cloud_setup_context_failed",
-      ),
-    ).toBe(true);
   });
 
   it("aborts when the cloud setup context query throws", async () => {
@@ -2892,13 +2447,6 @@ describe("runSetup additional branches", () => {
 
     expect(p.log.error).toHaveBeenCalledWith("No organizations found for your account");
     expect(p.outro).not.toHaveBeenCalled();
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_failed" &&
-          e.properties?.reason === "deployment_resolution_failed",
-      ),
-    ).toBe(true);
   });
 
   it("aborts when the handshake account's org has no MCPs", async () => {
@@ -2931,13 +2479,6 @@ describe("runSetup additional branches", () => {
 
     expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("No MCPs found for Org B"));
     expect(p.outro).not.toHaveBeenCalled();
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_failed" &&
-          e.properties?.reason === "deployment_resolution_failed",
-      ),
-    ).toBe(true);
   });
 
   it("asks instead of guessing when the org has several deployments but no dosu_mcp", async () => {
@@ -2984,20 +2525,6 @@ describe("runSetup additional branches", () => {
     expect(saved.active_account?.target?.deployment_id).toBe("dep-x");
   });
 
-  it("does not emit the removed component-selection telemetry event", async () => {
-    saveConfig(makeCfg());
-    setupAuthed();
-    vi.spyOn(providersModule, "allSetupProviders").mockReturnValue([]);
-
-    await runSetup();
-
-    expect(mockInstallSkill).not.toHaveBeenCalled();
-    expect(p.outro).toHaveBeenCalled();
-    expect(trackedCliOnboardingEvents().map((event) => event.event)).not.toContain(
-      "cli_onboarding_options_selected",
-    );
-  });
-
   it("returns early when the MCP tool selection is cancelled", async () => {
     saveConfig(makeCfg());
     setupAuthed();
@@ -3011,13 +2538,6 @@ describe("runSetup additional branches", () => {
     await runSetup();
 
     expect(p.outro).not.toHaveBeenCalled();
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_cancelled" &&
-          e.properties?.reason === "mcp_selection_cancelled",
-      ),
-    ).toBe(true);
   });
 
   it("switches mode from OSS to Cloud when --mode cloud is passed over an OSS config", async () => {
@@ -3029,23 +2549,6 @@ describe("runSetup additional branches", () => {
 
     const saved = loadConfig();
     expect(saved.mode).toBeUndefined();
-  });
-
-  it("continues to the outro when the skill install reports failure", async () => {
-    // skillCompleted is false → the `if (skillCompleted)` tracking branch is
-    // skipped, but the flow still completes (MCP/docs unaffected).
-    saveConfig(makeCfg());
-    setupAuthed();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-    mockInstallSkill.mockResolvedValue({ success: false });
-
-    await runSetup();
-
-    expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to install skill"));
-    const skillEvents = trackedCliOnboardingEvents().map((e) => e.event);
-    expect(skillEvents).not.toContain("cli_onboarding_skill_installed");
   });
 
   it("neither installs nor removes a detected tool that is unconfigured and left unticked", async () => {
@@ -3103,37 +2606,6 @@ describe("runSetup additional branches", () => {
     expect(saved.active_account?.target?.deployment_id).toBeUndefined();
     expect(p.outro).not.toHaveBeenCalled();
   });
-
-  it("tracks MCP configuration after the setup handshake hands back", async () => {
-    // First-run: the browser handshake hands back, then the MCP tool
-    // configuration still runs (and is tracked) in the terminal.
-    saveConfig(makeCfg());
-    setupAuthed();
-    mkdirSync(join(tempDir, ".cursor"), { recursive: true });
-    mockTrpc.user.getCliOnboardingContext.query
-      .mockResolvedValueOnce({
-        user_id: "test-user-id",
-        finished_onboarding: false,
-        cli_onboarding_enabled: false,
-      })
-      .mockResolvedValueOnce({
-        user_id: "test-user-id",
-        finished_onboarding: true,
-        cli_onboarding_enabled: false,
-      });
-    vi.mocked(startOAuthFlow).mockResolvedValue({
-      browserOpened: true,
-      token: { access_token: "tok-web", refresh_token: "ref-web", expires_in: 3600 },
-    });
-    vi.spyOn(providersModule, "allSetupProviders").mockImplementation(() => [CursorProvider()]);
-    mockToolSelection(["cursor"]);
-
-    await runSetup();
-
-    const events = trackedCliOnboardingEvents().map((input) => input.event);
-    expect(events).toContain("cli_onboarding_mcp_configured");
-    expect(events).toContain("cli_onboarding_completed");
-  });
 });
 
 // --- 9. Single-handshake protocol: /cli/auth owns onboarding routing ---
@@ -3150,7 +2622,6 @@ describe("runSetup single-handshake protocol", () => {
     installRemoteSetupDefaults();
     vi.mocked(p.isCancel).mockReturnValue(false);
     installMultiselectDefault();
-    mockInstallSkill.mockResolvedValue({ success: true, version: "1.2.3" });
   });
   afterEach(() => {
     process.exitCode = undefined;
@@ -3261,13 +2732,6 @@ describe("runSetup single-handshake protocol", () => {
       expect.stringContaining("The authentication service rejected the request"),
     );
     expect(p.log.warn).not.toHaveBeenCalledWith(expect.stringContaining("Didn't hear back"));
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_failed" &&
-          e.properties?.reason === "web_onboarding_incomplete",
-      ),
-    ).toBe(true);
   });
 
   it("keeps the same account's stored target after the handshake (everyday semantics)", async () => {
@@ -3327,13 +2791,6 @@ describe("runSetup single-handshake protocol", () => {
     expect(mockStartOAuthFlow).toHaveBeenCalledTimes(1);
     expect(p.outro).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
-    expect(
-      trackedCliOnboardingEvents().some(
-        (e) =>
-          e.event === "cli_onboarding_failed" &&
-          e.properties?.reason === "onboarding_incomplete_after_handshake",
-      ),
-    ).toBe(true);
   });
 
   it("keeps the OSS first hop free of the setup intent", async () => {
@@ -3453,35 +2910,6 @@ describe("stepOfferInitialSync", () => {
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
   });
 
-  it("spawns the detached bootstrap drain on consent and offers the live view", async () => {
-    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(12));
-    vi.mocked(p.confirm).mockResolvedValue(true);
-    mockSpawnDetachedSelf.mockReturnValue(true);
-
-    await stepOfferInitialSync(makeCfg());
-
-    expect(mockSpawnDetachedSelf).toHaveBeenCalledWith([
-      "knowledge",
-      "sync",
-      "--quiet",
-      "--bootstrap",
-    ]);
-    expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 12 sessions");
-    // Both prompts answered "yes": the live Activity view opens.
-    expect(vi.mocked(runActivityView)).toHaveBeenCalledOnce();
-  });
-
-  it("goes straight back when the user declines the live view", async () => {
-    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(12));
-    vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    mockSpawnDetachedSelf.mockReturnValue(true);
-
-    await stepOfferInitialSync(makeCfg());
-
-    expect(mockSpawnDetachedSelf).toHaveBeenCalled();
-    expect(vi.mocked(runActivityView)).not.toHaveBeenCalled();
-  });
-
   it("uses the singular for a single session", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
     vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -3586,24 +3014,6 @@ describe("stepOfferInitialSync", () => {
     expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("No recent agent sessions"));
   });
 
-  it("offers nothing when every pending session was settled before", async () => {
-    const trivial = {
-      updated: "2026-08-01T00:00:00.000Z",
-      outcome: "trivial" as const,
-      at: "2026-08-01T00:05:00.000Z",
-      cli_version: "0.1.0",
-    };
-    saveSyncState({ ...loadSyncState(), sessions: { "claude/offered-0": trivial } });
-    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
-    consumeCommandFacets();
-
-    await stepOfferInitialSync(makeCfg());
-
-    expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
-    expect(loadSyncState().sessions).toEqual({ "claude/offered-0": trivial });
-    expect(consumeCommandFacets()).toEqual({ backfill_offer: "not-offered" });
-  });
-
   it("treats a cancelled prompt as a decline", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
     vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
@@ -3626,223 +3036,6 @@ describe("stepOfferInitialSync", () => {
     await stepOfferInitialSync(makeCfg());
 
     expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Could not start");
-  });
-
-  describe("sync scope picker", () => {
-    const CLI = "github.com/dosu-ai/dosu-cli";
-    const WEB = "github.com/dosu-ai/dosu";
-    let tty: PropertyDescriptor | undefined;
-
-    beforeEach(() => {
-      tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-    });
-    afterEach(() => {
-      if (tty) Object.defineProperty(process.stdin, "isTTY", tty);
-      else delete (process.stdin as { isTTY?: boolean }).isTTY;
-    });
-
-    /** Every repo's backlog, as the offer's everyRepo run reports it: each session tagged with
-     * its repo, two in CLI, one in WEB, one outside any repo. */
-    function reposOutcome() {
-      const outcome = backlogOutcome(4);
-      const repos = [CLI, CLI, WEB, undefined];
-      const sessions = outcome.sessions.map((session, i) => ({
-        ...session,
-        ...(repos[i] ? { repo: repos[i] } : {}),
-      }));
-      return { ...outcome, sessions };
-    }
-
-    function spinnerStops(): string {
-      return vi
-        .mocked(p.spinner)
-        .mock.results.flatMap((r) => r.value.stop.mock.calls)
-        .join(" ");
-    }
-
-    it("asks for the backlog of every repo, whatever the stored scope", async () => {
-      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
-      vi.mocked(p.multiselect).mockResolvedValue([CLI, WEB] as unknown as never);
-      vi.mocked(p.confirm).mockResolvedValue(false);
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(mockRunKnowledgeSync).toHaveBeenCalledWith({ everyRepo: true });
-    });
-
-    it("picks repos before the offer: the pick is saved and only its sessions are offered", async () => {
-      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
-      vi.mocked(p.multiselect).mockResolvedValue([CLI] as unknown as never);
-      vi.mocked(p.confirm).mockResolvedValue(false);
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(spinnerStops()).toContain("Found 4 agent sessions");
-      const [picker] = vi.mocked(p.multiselect).mock.calls[0] ?? [];
-      expect(picker?.options.map((o) => [o.value, o.hint])).toEqual([
-        [CLI, "2 sessions"],
-        [WEB, "1 session"],
-      ]);
-      // No scope yet: every repo starts picked, as before the picker existed.
-      expect(picker?.initialValues).toEqual([CLI, WEB]);
-      expect(vi.mocked(p.multiselect).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(p.confirm).mock.invocationCallOrder[0],
-      );
-      const saved = loadSyncState();
-      expect(saved.repo_filter).toEqual([CLI]);
-      // Declining passes over only the picked repo's sessions; the rest wait for a wider scope.
-      expect(Object.keys(saved.sessions).sort()).toEqual(["claude/offered-0", "claude/offered-1"]);
-    });
-
-    it("the backfill drains under the saved scope", async () => {
-      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
-      vi.mocked(p.multiselect).mockResolvedValue([WEB] as unknown as never);
-      vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      let scopeAtSpawn: string[] | undefined;
-      mockSpawnDetachedSelf.mockImplementation(() => {
-        scopeAtSpawn = loadSyncState().repo_filter;
-        return true;
-      });
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(scopeAtSpawn).toEqual([WEB]);
-      expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 1 session in");
-    });
-
-    it("picking every repo keeps every session, those outside a repo too", async () => {
-      saveSyncState({ ...loadSyncState(), repo_filter: [CLI] });
-      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
-      vi.mocked(p.multiselect).mockResolvedValue([CLI, WEB] as unknown as never);
-      vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      mockSpawnDetachedSelf.mockReturnValue(true);
-
-      await stepOfferInitialSync(makeCfg());
-
-      const [picker] = vi.mocked(p.multiselect).mock.calls[0] ?? [];
-      // The stored scope is what starts picked.
-      expect(picker?.initialValues).toEqual([CLI]);
-      expect(loadSyncState().repo_filter).toBeUndefined();
-      expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 4 sessions");
-    });
-
-    it("offers nothing when the pick has no sessions waiting", async () => {
-      saveSyncState({ ...loadSyncState(), repo_filter: ["github.com/dosu-ai/idle"] });
-      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
-      vi.mocked(p.multiselect).mockResolvedValue(["github.com/dosu-ai/idle"] as unknown as never);
-      consumeCommandFacets();
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
-      expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("No sessions from those repos");
-      expect(consumeCommandFacets()).toEqual({ backfill_offer: "not-offered" });
-    });
-
-    it("skips the picker with a single repo and applies the stored scope", async () => {
-      saveSyncState({ ...loadSyncState(), repo_filter: [CLI] });
-      const outcome = reposOutcome();
-      mockRunKnowledgeSync.mockResolvedValue({
-        ...outcome,
-        sessions: outcome.sessions.filter((s) => s.repo !== WEB),
-      });
-      vi.mocked(p.confirm).mockResolvedValue(false);
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(p.multiselect).not.toHaveBeenCalled();
-      expect(spinnerStops()).toContain("Found 2 agent sessions");
-      expect(Object.keys(loadSyncState().sessions).sort()).toEqual([
-        "claude/offered-0",
-        "claude/offered-1",
-      ]);
-    });
-
-    it("never asks without a terminal: the stored scope stands, as before", async () => {
-      Object.defineProperty(process.stdin, "isTTY", { value: undefined, configurable: true });
-      saveSyncState({ ...loadSyncState(), repo_filter: [WEB] });
-      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
-      vi.mocked(p.confirm).mockResolvedValue(false);
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(p.multiselect).not.toHaveBeenCalled();
-      expect(spinnerStops()).toContain("Found 1 agent session ");
-      const saved = loadSyncState();
-      expect(saved.repo_filter).toEqual([WEB]);
-      expect(Object.keys(saved.sessions)).toEqual(["claude/offered-2"]);
-    });
-
-    it("says there is nothing to ship when the stored scope holds none of the backlog", async () => {
-      Object.defineProperty(process.stdin, "isTTY", { value: undefined, configurable: true });
-      saveSyncState({ ...loadSyncState(), repo_filter: ["github.com/dosu-ai/idle"] });
-      mockRunKnowledgeSync.mockResolvedValue(reposOutcome());
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
-      expect(spinnerStops()).toContain("No recent agent sessions");
-    });
-  });
-
-  describe("analytics facet on the setup completion event", () => {
-    beforeEach(() => {
-      consumeCommandFacets();
-    });
-
-    it("records nothing when the step is skipped for a missing credential", async () => {
-      await stepOfferInitialSync(makeCfg({ api_key: undefined }));
-
-      expect(consumeCommandFacets()).toBeUndefined();
-    });
-
-    it("records not-offered when there is no backlog", async () => {
-      mockRunKnowledgeSync.mockResolvedValue({
-        status: "nothing-new",
-        readySessions: 0,
-        inFlightSessions: 0,
-        sessions: [],
-      });
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(consumeCommandFacets()).toEqual({ backfill_offer: "not-offered" });
-    });
-
-    it("records accepted once the drain is spawned", async () => {
-      mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(4));
-      vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      mockSpawnDetachedSelf.mockReturnValue(true);
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(consumeCommandFacets()).toEqual({ backfill_offer: "accepted" });
-    });
-
-    it("records declined vs cancelled separately", async () => {
-      mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
-      vi.mocked(p.confirm).mockResolvedValue(false);
-      await stepOfferInitialSync(makeCfg());
-      expect(consumeCommandFacets()).toEqual({ backfill_offer: "declined" });
-
-      // A fresh machine: the decline above settled the first backlog, which is never re-offered.
-      saveSyncState({ ...loadSyncState(), sessions: {} });
-      vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
-      vi.mocked(p.isCancel).mockReturnValue(true);
-      await stepOfferInitialSync(makeCfg());
-      expect(consumeCommandFacets()).toEqual({ backfill_offer: "cancelled" });
-    });
-
-    it("records spawn-failed when the detached drain cannot start", async () => {
-      mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
-      vi.mocked(p.confirm).mockResolvedValue(true);
-      mockSpawnDetachedSelf.mockReturnValue(false);
-
-      await stepOfferInitialSync(makeCfg());
-
-      expect(consumeCommandFacets()).toEqual({ backfill_offer: "spawn-failed" });
-    });
   });
 });
 
@@ -4119,5 +3312,86 @@ describe("runSwitchTarget", () => {
 
     expect(vi.mocked(p.log.error).mock.calls.join(" ")).toContain("BadAgent");
     expect(good.install).toHaveBeenCalled();
+  });
+});
+
+describe("stepChooseSessionStorage", () => {
+  beforeEach(() => {
+    setupTempEnv();
+    vi.resetAllMocks();
+    installSetupStepDefaults();
+    vi.mocked(p.isCancel).mockReturnValue(false);
+  });
+  afterEach(teardownTempEnv);
+
+  const bucket = {
+    name: "s3",
+    url: "s3://acme/dosu",
+    owner: "james",
+    region: "us-east-1",
+    credentials: "env" as const,
+  };
+
+  it("keeps Dosu when chosen, without touching config", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("dosu");
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("dosu");
+
+    expect(runBucketWizard).not.toHaveBeenCalled();
+    expect(loadConfig().default_target).toBeUndefined();
+  });
+
+  it("runs the bucket wizard when the user wants their own bucket", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockResolvedValueOnce({ target: bucket });
+    const cfg = makeCfg();
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
+
+    expect(runBucketWizard).toHaveBeenCalledWith(cfg);
+  });
+
+  it("stops setup where the user cancelled the wizard", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockResolvedValueOnce(null);
+
+    expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
+
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("dosu sources setup");
+  });
+
+  it("falls back to Dosu with the reason when the bucket could not be set up", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockRejectedValueOnce(new CliUsageError("AccessDenied: PutObject"));
+
+    expect(await stepChooseSessionStorage(makeCfg())).toBe("dosu");
+
+    const warned = vi.mocked(p.log.warn).mock.calls.join(" ");
+    expect(warned).toContain("AccessDenied: PutObject");
+    expect(warned).toContain("Sessions ship to Dosu until then");
+  });
+
+  it("keeps a bucket that is already the default and says so, unless --storage asks again", async () => {
+    const cfg = {
+      ...makeCfg(),
+      targets: [{ ...bucket, source_id: "src-1" }],
+      default_target: "s3",
+    };
+    saveConfig(cfg);
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
+    expect(vi.mocked(p.select)).not.toHaveBeenCalled();
+    const said = vi.mocked(p.log.success).mock.calls.join(" ");
+    expect(said).toContain("s3://acme/dosu");
+    expect(said).toContain("which Dosu reads");
+    expect(said).toContain("dosu setup --storage");
+
+    vi.mocked(p.select).mockResolvedValueOnce("dosu");
+    expect(await stepChooseSessionStorage(cfg, { storage: true })).toBe("dosu");
+    expect(loadConfig().default_target).toBe("dosu");
+    expect(loadConfig().targets).toHaveLength(1);
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Sessions ship to Dosu again");
   });
 });

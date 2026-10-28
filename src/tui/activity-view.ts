@@ -1,4 +1,4 @@
-/** Live Activity screen: shipping status plus tabbed lists and a manual sync trigger. Pure
+/** Live Activity screen: sync status plus tabbed lists and a manual sync trigger. Pure
  * render/reduce functions wired to injectable IO, like menu.ts. */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -6,7 +6,6 @@ import { basename } from "node:path";
 import pc from "picocolors";
 import { createLogFollower } from "../debug/follow";
 import { logger, stripAnsiCodes } from "../debug/logger";
-import { displayProjectKey } from "../sessions/project";
 import { createProjectDirResolver, unmungeSlug } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { createSessionTitleResolver, reconstructSession } from "../sessions/session-title";
@@ -77,7 +76,7 @@ export type ActivityViewAction =
   | "none";
 
 /** q/esc/ctrl-c back, tab/→ and ← cycle tabs, ↑↓ (or k/j) scroll, s syncs, f toggles full
- * rows, c clears shipping history. */
+ * rows, c clears study history. */
 export function reduceActivityViewKey(key: string): ActivityViewAction {
   if (key === "q" || key === ESC || key === CTRL_C) return "back";
   if (key === "\t" || key === KEY_RIGHT) return "tab";
@@ -107,7 +106,7 @@ export function reduceSyncConfirmKey(key: string): SyncConfirmAction {
 }
 
 /** Which confirmation is up: `s` means stop a live run, resume a paused pipeline, or start;
- * `c` means clear the shipping history so the next run starts from scratch. */
+ * `c` means clear the ledger so the next run considers every local session again. */
 export type SyncConfirmMode = "start" | "stop" | "resume" | "clear";
 
 function syncConfirmMode(status: SyncStatus): SyncConfirmMode {
@@ -156,11 +155,8 @@ export function formatShippedRow(
   const slash = record.session.indexOf("/");
   const harness = slash > 0 ? record.session.slice(0, slash) : "-";
   const id = slash > 0 ? record.session.slice(slash + 1) : record.session;
-  // History carried over from the watermark state has only the scanner's workspace.
-  const rawProject = record.project ?? record.workspace ?? "-";
-  const project = full
-    ? rawProject
-    : clip(record.project ? displayProjectKey(record.project) : rawProject, 28);
+  const rawProject = record.project ?? "-";
+  const project = full ? rawProject : clip(rawProject, 28);
   const label = full ? (name ? `${name} \u00B7 ${id}` : id) : clip(name ?? id, 44);
   return `${harness.padEnd(8)}  ${stamp}  ${project}  ${label}`;
 }
@@ -227,6 +223,37 @@ export function latestBacklog(text: string): SyncBacklog | null {
   return latest;
 }
 
+/** Within-batch shipping progress, folded live from the sync's log lines. */
+export interface RunProgress {
+  /** Batch size from the latest "[sync] shipping N ready sessions" marker. */
+  batch: number;
+  /** Distinct session keys the run has settled so far this batch. */
+  done: Set<string>;
+}
+
+/** Fold a log chunk into within-batch progress: the bar steps off each settled session, and the
+ * run's closing line clears the fold so stale steps never double-count. */
+export function foldRunProgress(progress: RunProgress | null, chunk: string): RunProgress | null {
+  let current = progress;
+  for (const line of chunk.split("\n")) {
+    const start = line.match(/\[sync\] shipping (\d+) ready sessions/);
+    if (start) {
+      current = { batch: Number.parseInt(start[1], 10), done: new Set() };
+      continue;
+    }
+    if (/\[sync\] (?:ship phase:|sync failed:)/.test(line)) {
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const settled = line.match(
+      /\[sync\] (?:shipped session (\S+) →|not shipping \w+ session (\S+)|shipping failed at (\S+):)/,
+    );
+    if (settled) current.done.add(settled[1] ?? settled[2] ?? settled[3] ?? "");
+  }
+  return current;
+}
+
 function localTime(iso: string): string {
   const parsed = new Date(iso);
   return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleTimeString();
@@ -258,7 +285,7 @@ export function progressLine(done: number, ready: number, width: number): string
   const total = done + ready;
   if (total <= 0) return null;
   // Leave room for the " done/total shipped · NN%" suffix.
-  const cells = Math.max(10, Math.min(30, width - 24));
+  const cells = Math.max(10, Math.min(30, width - 30));
   const ratio = Math.max(0, Math.min(1, done / total));
   const filled = Math.min(cells, Math.round(ratio * cells));
   const bar = brand("\u2588".repeat(filled)) + pc.dim("\u2591".repeat(cells - filled));
@@ -335,22 +362,22 @@ export function confirmBox(
   // Each dialog says what happens, why, and what to expect when it's done.
   const scope =
     mode === "clear"
-      ? "Forgets which local sessions were already shipped, so the next run ships the last 30 days again. Memory already built in Dosu is kept, and transcripts it already has are not ingested twice."
+      ? "Forgets how each local session was settled, so the next run considers them all again and ships what it has not sent. Use this after changing where sessions go. Memory already in Dosu is kept."
       : mode === "stop"
-        ? "Kills the run mid-batch and pauses shipping, so new sessions pile up in the queue instead of being uploaded. Nothing is lost; press s again to resume from where it left off."
+        ? "Kills the run mid-batch and pauses syncing, so new sessions pile up in the queue instead of shipping. Nothing is lost; press s again to resume from where it left off."
         : mode === "resume"
-          ? `Shipping picks up where it stopped: ${sessions} queued${inFlight}. Runs in the background; Dosu memory learns from each session after it arrives.`
+          ? `Syncing picks up where it stopped: ${sessions} queued${inFlight}. Runs in the background; Dosu learns from each session as it lands.`
           : queuedCount > 0
-            ? `Uploads ${sessions}${inFlight} to Dosu memory, secrets redacted locally first. Runs in the background; memory learns from each session after it arrives.`
+            ? `Dosu ships ${sessions}${inFlight} to your session store and learns from them. Runs in the background; memory appears in Dosu as each batch lands.`
             : `Queue is empty${inFlight}. A run now would only pick up sessions that finish from here; hooks already do that automatically.`;
   const title =
     mode === "clear"
-      ? "Clear shipping history?"
+      ? "Clear sync history?"
       : mode === "stop"
-        ? "Stop shipping?"
+        ? "Stop syncing?"
         : mode === "resume"
-          ? "Resume shipping?"
-          : "Ship sessions now?";
+          ? "Resume syncing?"
+          : "Sync now?";
   const verb =
     mode === "clear" ? "clear" : mode === "stop" ? "stop" : mode === "resume" ? "resume" : "start";
   const maxInner = Math.max(20, Math.min(width, contentWidth()) - 4);
@@ -371,9 +398,9 @@ export function confirmBox(
   ];
 }
 
-/** Whether the ledger holds anything for `c` to clear. */
-function hasSettled(status: SyncStatus): boolean {
-  return Object.keys(status.state.sessions).length > 0;
+/** The ledger has settled something: the c key (clear) has an effect. */
+function canClear(status: SyncStatus): boolean {
+  return Object.keys(status.state.sessions).length > 0 || (status.state.total_shipped ?? 0) > 0;
 }
 
 /** Render the full sync-status block, left-anchored within `width` columns. Returns the frame's
@@ -390,6 +417,8 @@ export function buildActivityFrame(
   shippedBeforeRun = 0,
   /** Live (still-active) sessions for the Open tab. */
   open: readonly AgentSession[] = [],
+  /** Within-batch step progress folded from the sync's log lines. */
+  runProgress: RunProgress | null = null,
   /** Friendly project names by `harness/id` key; rows fall back to the stored slug. */
   projectNames: Readonly<Record<string, string>> = {},
   /** Session display names by `harness/id` key; rows fall back to the session id. */
@@ -398,11 +427,13 @@ export function buildActivityFrame(
    * the list shrinks to whatever is left. Omitted: the fixed default window heights. */
   frameLines?: number,
 ): { lines: string[]; listHeight: number } {
-  // Shipped history is the ledger's, one row per session (its latest pass).
+  // Oldest first from the ledger; the history tab shows the end of the list.
   const shipped = shippedSessions(status.state);
-  const lastShipped = shipped.at(-1);
-  const shippedSummary = lastShipped
-    ? `Last shipped a session at ${localTime(lastShipped.at)}`
+  const last = shipped.at(-1);
+  const shippedLine = last
+    ? `Last shipped ${localTime(last.at)} \u00B7 ${shipped.length} session${
+        shipped.length === 1 ? "" : "s"
+      } on record`
     : "Nothing shipped yet";
   // Queue and open-session counts live in the tab bar, not a header line.
   const queueDetail: string[] = [];
@@ -411,15 +442,27 @@ export function buildActivityFrame(
     queueDetail.push(`retrying after ${localTime(status.backoffUntil)} \u00B7 s syncs now`);
   }
 
-  // Run-scoped drain progress, advanced as each session's answer is saved.
-  const progress =
-    status.running && backlog
-      ? progressLine(
-          Math.max(0, (status.state.total_shipped ?? 0) - shippedBeforeRun),
-          backlog.ready,
+  // Run-scoped drain progress: batch commits advance it (total_shipped moves and the gate
+  // re-logs a smaller ready count), and within a batch the sync's per-session log lines do, so
+  // a one-batch queue still shows motion. Settled steps shift ready → done rather than growing
+  // the total; the fold clears when the batch commits, so nothing is counted twice.
+  let progress: string | null = null;
+  if (status.running && backlog) {
+    const shippedDelta = Math.max(0, (status.state.total_shipped ?? 0) - shippedBeforeRun);
+    const stepDone = runProgress ? Math.min(runProgress.done.size, backlog.ready) : 0;
+    progress = progressLine(shippedDelta + stepDone, Math.max(0, backlog.ready - stepDone), width);
+  }
+
+  // Sessions the backend refused or the CLI could not read explain an Idle-with-backlog view;
+  // `dosu knowledge sync --status` names them.
+  const attention = !status.running ? status.attention.length : 0;
+  const attentionLines =
+    attention > 0
+      ? wrapLine(
+          `! ${attention} session${attention === 1 ? "" : "s"} could not ship \u00B7 see dosu knowledge sync --status`,
           width,
-        )
-      : null;
+        ).map((line) => pc.yellow(line))
+      : [];
 
   // Rows clip to the frame width so nothing runs past the tab rule — unless the f toggle
   // asked for full rows, which render unclipped and wrap below instead. One toggle, every tab:
@@ -452,6 +495,12 @@ export function buildActivityFrame(
         : pane.tab === "open"
           ? openRows
           : shippedRows;
+  // The ledger prunes shipped entries whose transcripts are gone, so a long-running install
+  // may have shipped plenty while the list is empty — say so instead of denying it.
+  const emptyShipped =
+    (status.state.total_shipped ?? 0) > 0
+      ? `No shipped sessions on record (${status.state.total_shipped} shipped all time).`
+      : "No shipped sessions yet.";
   const empty =
     pane.tab === "activity"
       ? "No sync activity in the log yet."
@@ -459,18 +508,19 @@ export function buildActivityFrame(
         ? "Queue empty. Finished agent sessions appear here."
         : pane.tab === "open"
           ? "No open sessions. Live agent sessions sit here until they go quiet."
-          : "No sessions shipped yet.";
+          : emptyShipped;
   // Header and footer are built first: on a short terminal they must always fit, so the list
   // gets whatever room is left rather than pushing the breadcrumb and tabs off the top.
   const header = [
     breadcrumb(["home", "activity"], width),
     "",
     statusLine(status),
-    pc.dim(shippedSummary),
+    pc.dim(shippedLine),
     ...(queueDetail.length > 0
       ? wrapLine(queueDetail.join(" \u00B7 "), width).map((line) => pc.dim(line))
       : []),
     ...(progress ? [progress] : []),
+    ...attentionLines,
     "",
     ...tabBar(pane.tab, queued.length, open.length, shipped.length, width),
   ];
@@ -481,8 +531,8 @@ export function buildActivityFrame(
       ? centerBlock(confirmBox(queued.length, backlog, width, pane.confirm), width)
       : [
           // s stops a live run, resumes a paused pipeline, or starts a sync while idle;
-          // f flips between clipped and full (wrapped) rows; c (idle, something shipped)
-          // clears the history so the next run starts from scratch. Wrapped: on a narrow
+          // f flips between clipped and full (wrapped) rows; c (idle, something settled)
+          // clears the ledger so the next run considers every session again. Wrapped: on a narrow
           // frame the full legend can outrun the width.
           ...wrapLine(
             [
@@ -490,7 +540,7 @@ export function buildActivityFrame(
               "\u2191\u2193 scroll",
               fullRows ? "f clip" : "f full rows",
               status.running ? "s stop" : status.state.paused ? "s resume" : "s sync now",
-              ...(!status.running && hasSettled(status) ? ["c clear"] : []),
+              ...(!status.running && canClear(status) ? ["c clear"] : []),
               "esc back",
             ].join(" \u00B7 "),
             width,
@@ -548,9 +598,9 @@ export interface ActivityViewIO {
   stopSync?: (pid: number) => boolean;
   /** Persists the pause switch hooks honor; stop sets it, resume clears it. */
   setPaused?: (paused: boolean) => void;
-  /** Forgets the ledger (shipping history included); pressing `c` while idle calls this. */
+  /** Forgets the ledger; pressing `c` while idle calls this. */
   clearHistory?: () => void;
-  /** The scanned backlog for the Queued and Open tabs; re-run when the ledger changes. */
+  /** The scanned backlog for the Queued and Open tabs; re-run when the ledger moves. */
   listBacklog?: () => SessionBacklog;
   /** Friendly project and session names by `harness/id` key for the session rows. */
   rowNames?: (status: SyncStatus, backlog: SessionBacklog) => RowNames;
@@ -649,7 +699,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const readLog = io.readLog ?? defaultReadLog;
   const createFollower =
     io.createFollower ?? ((emit) => createLogFollower(logger.getLogPath(), emit));
-  // Bootstrap mode ships the whole displayed queue. Deliberately not
+  // Bootstrap mode drains the whole displayed queue, not just one batch. Deliberately not
   // --quiet: quiet runs honor the failure backoff and would silently skip, but pressing s is
   // an explicit request — manual runs retry immediately (stdio is detached, so no output leaks).
   const startSync = io.startSync ?? (() => spawnDetachedSelf(["knowledge", "sync", "--bootstrap"]));
@@ -663,12 +713,14 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const seed = readLog();
   let activity = appendSyncActivity([], seed);
   let backlog = latestBacklog(seed);
+  // Seeded from the full log so a view opened mid-run starts at the true step.
+  let runProgress = foldRunProgress(null, seed);
   let tab: ActivityViewTab = "activity";
   let scroll = 0;
   let fullRows = false;
   let confirmSync: SyncConfirmMode | null = null;
   let status = getStatus();
-  // Rescan when a run settles something and on tab switches, not every poll (a scan
+  // Rescan on ledger moves and tab switches, not every poll (a scan
   // stats every local session file).
   let sessions = listBacklog();
   let queuedStamp = ledgerStamp(status.state);
@@ -676,6 +728,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
   const follower = createFollower((chunk) => {
     activity = appendSyncActivity(activity, chunk);
     backlog = latestBacklog(chunk) ?? backlog;
+    runProgress = foldRunProgress(runProgress, chunk);
   });
 
   const activeListLength = () => {
@@ -691,8 +744,8 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
 
   // Identical frames skip the terminal write entirely (most ticks change nothing).
   let lastFrame: string | null = null;
-  // The run's total_shipped baseline so the bar is run-scoped; persisted in sync state, with
-  // the first-observation snapshot as fallback.
+  // The run's total_shipped baseline so the bar is run-scoped; persisted in sync state, with the
+  // first-observation snapshot as fallback.
   let shippedBeforeRun: number | null = null;
   const draw = () => {
     status = getStatus();
@@ -706,8 +759,9 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
     } else {
       shippedBeforeRun = null;
     }
-    if (ledgerStamp(status.state) !== queuedStamp) {
-      queuedStamp = ledgerStamp(status.state);
+    const stamp = ledgerStamp(status.state);
+    if (stamp !== queuedStamp) {
+      queuedStamp = stamp;
       sessions = listBacklog();
     }
     // A run starting or ending elsewhere makes the pending confirmation moot.
@@ -726,6 +780,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
       sessions.queued,
       shippedBeforeRun ?? 0,
       sessions.open,
+      runProgress,
       rowNames.projects,
       rowNames.titles,
       frameMaxLines(output.rows ?? 24),
@@ -786,32 +841,27 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
             const mode = confirmSync;
             confirmSync = null;
             let note: string;
-            try {
-              if (mode === "clear") {
-                // An empty ledger makes every local session pending; draw() rescans on the
-                // change so the Queued tab fills immediately.
-                clearHistory();
-                shippedBeforeRun = null;
-                note =
-                  "[sync] shipping history cleared \u00B7 the next run ships the last 30 days again";
-              } else if (mode === "stop") {
-                // Kill first, then flip the pause switch: a dying run's last state save
-                // could otherwise overwrite the flag with its pre-pause snapshot.
-                const ok = status.pid !== undefined && stopSync(status.pid);
-                if (ok) setPaused(true);
-                note = ok
-                  ? "[sync] shipping stopped \u00B7 paused until you resume"
-                  : "[sync] could not stop the run \u00B7 it may have just finished";
-              } else {
-                if (mode === "resume") setPaused(false);
-                const ok = startSync();
-                note = ok
-                  ? "[sync] sync requested \u00B7 starting a background run"
-                  : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
-              }
-            } catch (err) {
-              // The state file could not be saved (one it cannot read is never saved over).
-              note = `[sync] could not save the setting \u00B7 ${err instanceof Error ? err.message : String(err)}`;
+            if (mode === "clear") {
+              // An empty ledger re-gates every local session; draw() rescans on the change so
+              // the Queued tab fills immediately.
+              clearHistory();
+              shippedBeforeRun = null;
+              note =
+                "[sync] sync history cleared \u00B7 the next run considers every local session again";
+            } else if (mode === "stop") {
+              // Kill first, then flip the pause switch: a dying run's last state save
+              // could otherwise overwrite the flag with its pre-pause snapshot.
+              const ok = status.pid !== undefined && stopSync(status.pid);
+              if (ok) setPaused(true);
+              note = ok
+                ? "[sync] syncing stopped \u00B7 paused until you resume"
+                : "[sync] could not stop the run \u00B7 it may have just finished";
+            } else {
+              if (mode === "resume") setPaused(false);
+              const ok = startSync();
+              note = ok
+                ? "[sync] sync requested \u00B7 starting a background run"
+                : "[sync] could not start a background run \u00B7 try `dosu knowledge sync`";
             }
             // Immediate feed feedback; the real run's log lines follow.
             activity = appendSyncActivity(
@@ -834,9 +884,9 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           confirmSync = syncConfirmMode(status);
           draw();
         } else if (action === "clear") {
-          // Only offered when idle with something shipped; otherwise the key is inert, matching
+          // Only offered when idle with something settled; otherwise the key is inert, matching
           // the legend.
-          if (!status.running && hasSettled(status)) {
+          if (!status.running && canClear(status)) {
             confirmSync = "clear";
             draw();
           }
@@ -844,7 +894,7 @@ export function runActivityView(io: ActivityViewIO = {}): Promise<void> {
           tab = cycleTab(tab, action === "tab" ? 1 : -1);
           scroll = 0;
           // Rescan on entry: open sessions drain into the queue without the
-          // ledger ever changing.
+          // ledger ever moving.
           if (tab === "queued" || tab === "open") sessions = listBacklog();
           draw();
         } else if (action === "full") {

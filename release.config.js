@@ -24,7 +24,7 @@ export default {
         // upload itself had already succeeded. A Sentry hiccup must never stop
         // us shipping to npm — the run log still carries the failure.
         prepareCmd:
-          "bun run build:npm && (bun run upload:sourcemaps || echo '::warning::sentry sourcemap upload failed (non-fatal)') && bash scripts/build-release.sh ${nextRelease.version} ${nextRelease.gitHead}",
+          "bun run build:npm && bash scripts/build-release.sh ${nextRelease.version} ${nextRelease.gitHead}",
         successCmd:
           "echo 'released=true' >> $GITHUB_OUTPUT && echo 'version=${nextRelease.version}' >> $GITHUB_OUTPUT",
       },

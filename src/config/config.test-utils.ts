@@ -53,8 +53,3 @@ export function testTarget(cfg: Config) {
   if (!target) throw new Error("test config has no target");
   return target;
 }
-
-export function testAccessTokenFor(userID: string): string {
-  const payload = Buffer.from(JSON.stringify({ sub: userID })).toString("base64url");
-  return `test.${payload}.signature`;
-}

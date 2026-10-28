@@ -58,7 +58,7 @@ export interface LedgerEntry {
    * but `by_agent` ones). */
   cli_version: string;
   /** How many normalized records of the session have shipped so far, from the start, and the
-   * sha256 of their canonical JSON (shipper/continuation.ts): a session that grows ships only
+   * sha256 of their canonical JSON (@dosu/sessionstorage continuation): a session that grows ships only
    * its tail. Kept when a later attempt is refused or passed over. */
   records?: number;
   prefix_sha256?: string;
