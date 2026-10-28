@@ -97,10 +97,26 @@ function script(answers: Record<string, unknown>): void {
   vi.mocked(p.confirm).mockImplementation(answer as typeof p.confirm);
 }
 
+/** Everything logged at a level, with the line wrapping undone. */
+function logged(level: keyof typeof p.log): string {
+  return vi
+    .mocked(p.log[level])
+    .mock.calls.map(([message]) => message)
+    .join(" ")
+    .replace(/\s+/g, " ");
+}
+
 function asked(): string[] {
   return [p.text, p.select, p.confirm].flatMap((fn) =>
     vi.mocked(fn).mock.calls.map(([opts]) => (opts as { message: string }).message),
   );
+}
+
+/** The connect calls (POSTs) made so far, as [url, parsed body]. */
+function connects(): [string, Record<string, unknown>][] {
+  return fetchImpl.mock.calls
+    .filter(([, init]) => init?.method === "POST")
+    .map(([url, init]) => [url, JSON.parse((init as RequestInit).body as string)]);
 }
 
 const FLAGS = {
@@ -130,11 +146,16 @@ beforeEach(() => {
   ]) {
     vi.stubEnv(name, undefined);
   }
-  fetchImpl = vi.fn<Fetch>(async () => new Response(JSON.stringify(connected()), { status: 200 }));
+  fetchImpl = vi.fn<Fetch>(async (_url, init) =>
+    init?.method === "POST"
+      ? new Response(JSON.stringify(connected()), { status: 200 })
+      : new Response(JSON.stringify({ sources: [] }), { status: 200 }),
+  );
   vi.stubGlobal("fetch", fetchImpl);
   vi.mocked(p.text).mockReset();
   vi.mocked(p.select).mockReset();
   vi.mocked(p.confirm).mockReset();
+  for (const fn of Object.values(p.log)) vi.mocked(fn).mockReset();
   probe.probe.mockReset().mockResolvedValue(undefined);
   probe.ensureLayout.mockReset().mockResolvedValue({ created_by: "dosu-cli/test" });
   configure();
@@ -167,9 +188,9 @@ describe("the whole flow with --yes", () => {
         source_id: connected().id,
       },
     ]);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const [url, body] = connects()[0] as [string, Record<string, unknown>];
     expect(url).toBe("https://api.dosu.test/v1/memory/sources");
-    expect(JSON.parse(init.body as string)).toEqual({
+    expect(body).toEqual({
       deployment_id: "dep1",
       kind: "s3",
       bucket: "acme-sessions",
@@ -201,9 +222,7 @@ describe("the whole flow with --yes", () => {
     vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAREAD");
     vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "readsecret");
     await runBucketWizard(loadConfig(), { ...FLAGS, write: "env", yes: true });
-    const body = JSON.parse(
-      (fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string,
-    ) as Record<string, string>;
+    const body = connects()[0]?.[1] as Record<string, string>;
     expect(body.access_key_id).toBe("AKIAREAD");
     expect(body.secret_access_key).toBe("readsecret");
   });
@@ -239,9 +258,7 @@ describe("prompting", () => {
       credentials: { access_key_id: "R2WRITE", secret_access_key: "r2secret" },
     });
     expect(asked()).toContain("Keys Dosu reads the bucket with");
-    const body = JSON.parse(
-      (fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string,
-    ) as Record<string, string>;
+    const body = connects()[0]?.[1] as Record<string, string>;
     expect(body).toMatchObject({
       kind: "r2",
       access_key_id: "R2READ",
@@ -277,7 +294,7 @@ describe("prompting", () => {
     expect(result?.source).toBeUndefined();
     expect(result?.target.credentials).toBe("env");
     expect(loadConfig().default_target).toBeUndefined();
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(connects()).toEqual([]);
   });
 
   it("returns null when a prompt is cancelled, saving nothing", async () => {
@@ -294,7 +311,7 @@ describe("the write probe", () => {
       /AccessDenied: PutObject[\s\S]*region and keys/,
     );
     expect(loadConfig().targets ?? []).toEqual([]);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(connects()).toEqual([]);
   });
 
   it("interactively offers to re-enter the keys, and probes again with them", async () => {
@@ -312,7 +329,7 @@ describe("the write probe", () => {
 
     const result = await runBucketWizard(loadConfig(), FLAGS);
 
-    expect(vi.mocked(p.log.error).mock.calls.join(" ")).toContain("SignatureDoesNotMatch");
+    expect(logged("error")).toContain("SignatureDoesNotMatch");
     expect(probe.probe).toHaveBeenCalledTimes(2);
     expect(result?.target.credentials).toEqual({
       access_key_id: "AKIAFIXED",
@@ -386,13 +403,17 @@ describe("the write probe", () => {
 
 describe("connecting", () => {
   it("interactively offers other keys for Dosu first when Dosu could not read with them", async () => {
-    fetchImpl
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ detail: "could not list owners/james/changes/" }), {
-          status: 422,
-        }),
-      )
-      .mockResolvedValueOnce(new Response(JSON.stringify(connected()), { status: 200 }));
+    const answers = [
+      new Response(JSON.stringify({ detail: "could not list owners/james/changes/" }), {
+        status: 422,
+      }),
+      new Response(JSON.stringify(connected()), { status: 200 }),
+    ];
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? (answers.shift() as Response)
+        : new Response(JSON.stringify({ sources: [] }), { status: 200 }),
+    );
     script({
       "Ship finished sessions there instead of to Dosu?": true,
       "Let Dosu read the bucket and learn from the sessions in it?": true,
@@ -405,20 +426,19 @@ describe("connecting", () => {
     const result = await runBucketWizard(loadConfig(), FLAGS);
 
     expect(result?.source?.id).toBe(connected().id);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    const second = JSON.parse(
-      (fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string,
-    ) as Record<string, string>;
-    expect(second.access_key_id).toBe("AKIAREAD2");
+    expect(connects()).toHaveLength(2);
+    expect((connects()[1]?.[1] as Record<string, string>).access_key_id).toBe("AKIAREAD2");
     const whatNow = vi.mocked(p.select).mock.calls.find(([o]) => o.message === "What now?")?.[0];
     expect(whatNow?.options[0]?.value).toBe("keys");
     expect(loadConfig().targets?.[0]?.source_id).toBe(connected().id);
   });
 
   it("interactively tries again first for any other failure, and skipping keeps the target", async () => {
-    fetchImpl
-      .mockResolvedValueOnce(new Response("", { status: 404 }))
-      .mockResolvedValueOnce(new Response("", { status: 404 }));
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? new Response("", { status: 404 })
+        : new Response(JSON.stringify({ sources: [] }), { status: 200 }),
+    );
     const answers: Record<string, unknown[]> = { "What now?": ["retry", "skip"] };
     script({
       "Ship finished sessions there instead of to Dosu?": true,
@@ -434,20 +454,20 @@ describe("connecting", () => {
 
     expect(result?.source).toBeUndefined();
     expect(result?.connectError).toMatch(/did not accept the source/);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(connects()).toHaveLength(2);
     const whatNow = vi.mocked(p.select).mock.calls.find(([o]) => o.message === "What now?")?.[0];
     expect(whatNow?.options[0]?.value).toBe("retry");
     expect(loadConfig().targets?.[0]).toMatchObject({ name: "s3" });
-    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain(
-      "dosu sources connect --target s3",
-    );
+    expect(logged("warn")).toContain("dosu sources connect --target s3");
   });
 
   it("with --yes keeps the saved target and reports why when Dosu cannot read the bucket", async () => {
-    fetchImpl.mockResolvedValue(
-      new Response(JSON.stringify({ detail: "could not list owners/james/changes/" }), {
-        status: 422,
-      }),
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? new Response(JSON.stringify({ detail: "could not list owners/james/changes/" }), {
+            status: 422,
+          })
+        : new Response(JSON.stringify({ sources: [] }), { status: 200 }),
     );
     const result = await runBucketWizard(loadConfig(), { ...FLAGS, read: "same", yes: true });
     expect(result?.source).toBeUndefined();
@@ -456,9 +476,7 @@ describe("connecting", () => {
     );
     expect(loadConfig().targets?.[0]).toMatchObject({ name: "s3" });
     expect(loadConfig().targets?.[0]?.source_id).toBeUndefined();
-    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain(
-      "dosu sources connect --target s3",
-    );
+    expect(logged("warn")).toContain("dosu sources connect --target s3");
   });
 
   it("leaves the bucket an archive when not logged in", async () => {
@@ -467,6 +485,58 @@ describe("connecting", () => {
     expect(result?.source).toBeUndefined();
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(loadConfig().default_target).toBe("s3");
+  });
+});
+
+describe("the Dosu preflight", () => {
+  it("runs before any bucket question and says which Dosu is ready", async () => {
+    await runBucketWizard(loadConfig(), { ...FLAGS, read: "same", yes: true });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("GET");
+    expect(url).toBe("https://api.dosu.test/v1/memory/sources?deployment_id=dep1");
+  });
+
+  it("reports a Dosu without the sources API up front, with its URL; the bucket can still be set up", async () => {
+    fetchImpl.mockImplementation(async () => new Response("", { status: 404 }));
+    script({
+      "What now?": "continue",
+      "Ship finished sessions there instead of to Dosu?": true,
+    });
+
+    const result = await runBucketWizard(loadConfig(), FLAGS);
+
+    const warned = logged("warn");
+    expect(warned).toContain("Dosu at https://api.dosu.test has no session sources API (HTTP 404)");
+    expect(asked()[0]).toBe("What now?");
+    expect(asked()).not.toContain("Let Dosu read the bucket and learn from the sessions in it?");
+    expect(connects()).toEqual([]);
+    expect(result?.source).toBeUndefined();
+    expect(result?.connectError).toMatch(/HTTP 404/);
+    expect(loadConfig().default_target).toBe("s3");
+  });
+
+  it("reports an unreachable Dosu the same way", async () => {
+    fetchImpl.mockRejectedValue(new TypeError("fetch failed"));
+    script({ "What now?": "cancel" });
+
+    expect(await runBucketWizard(loadConfig(), FLAGS)).toBeNull();
+
+    expect(logged("warn")).toContain("Could not reach Dosu at https://api.dosu.test: fetch failed");
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
+
+  it("with --yes warns, sets the bucket up, and skips the connect", async () => {
+    fetchImpl.mockImplementation(async () => new Response("", { status: 503 }));
+    const result = await runBucketWizard(loadConfig(), { ...FLAGS, read: "same", yes: true });
+    expect(asked()).toEqual([]);
+    expect(connects()).toEqual([]);
+    expect(result?.connectError).toMatch(/HTTP 503/);
+    expect(loadConfig().default_target).toBe("s3");
+  });
+
+  it("is skipped when Dosu was not asked for", async () => {
+    await runBucketWizard(loadConfig(), { ...FLAGS, connect: false, yes: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

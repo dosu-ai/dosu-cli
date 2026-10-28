@@ -17,7 +17,13 @@ import { logger } from "../debug/logger";
 import { info, wrapLog } from "../setup/styles";
 import * as p from "../tui/prompts";
 import { VERSION } from "../version/version";
-import { type ConnectSourceRequest, type SourceStatus, SourcesApiError, sourcesApi } from "./api";
+import {
+  type ConnectSourceRequest,
+  type SourceStatus,
+  type SourcesApi,
+  SourcesApiError,
+  sourcesApi,
+} from "./api";
 
 export type BucketProvider = "s3" | "r2" | "compatible";
 
@@ -236,6 +242,39 @@ async function wizard(
 ): Promise<BucketWizardResult> {
   const ask = asker(input.yes ?? false, io);
   logger.info("sources", "bucket wizard started");
+  const s = p.spinner(io);
+
+  // --- can Dosu be asked at all? Found out first, not after every bucket question. --------
+  const api = sourcesApi(cfg);
+  let dosuUnavailable: string | undefined;
+  if (api && input.connect !== false) {
+    s.start(`Checking Dosu at ${api.backendUrl}...`);
+    dosuUnavailable = await preflight(api);
+    if (dosuUnavailable) {
+      s.stop(`Dosu at ${api.backendUrl} cannot connect buckets`, 1);
+      p.log.warn(
+        wrapLog(
+          `${dosuUnavailable}\nThe bucket can still be set up as where ${info("dosu sync")} ships; ${info("dosu sources connect")} lets Dosu read it once that is fixed.`,
+        ),
+        io,
+      );
+      if (!input.yes) {
+        const next = await ask.select(
+          {
+            message: "What now?",
+            options: [
+              { value: "continue" as const, label: "Set up the bucket anyway" },
+              { value: "cancel" as const, label: "Cancel" },
+            ],
+          },
+          undefined,
+        );
+        if (next === "cancel") throw new WizardCancelled();
+      }
+    } else {
+      s.stop(`Dosu at ${api.backendUrl} is ready`);
+    }
+  }
 
   // --- where ---------------------------------------------------------------
   const provider = await ask.select(
@@ -344,7 +383,6 @@ async function wizard(
 
   // --- can this machine write there? A failure is something to fix, not the end: re-enter
   // the keys, try again, or start over with the other answers kept. ------------------------
-  const s = p.spinner(io);
   let target: BucketTarget;
   for (;;) {
     target = {
@@ -431,7 +469,6 @@ async function wizard(
   );
 
   // --- let Dosu read it ---------------------------------------------------------
-  const api = sourcesApi(cfg);
   if (!api) {
     p.log.info(
       wrapLog(
@@ -440,6 +477,15 @@ async function wizard(
       io,
     );
     return { target };
+  }
+  if (dosuUnavailable) {
+    p.log.info(
+      wrapLog(
+        `Archive for now. ${info(`dosu sources connect --target ${name}`)} connects it once Dosu is reachable.`,
+      ),
+      io,
+    );
+    return { target, connectError: dosuUnavailable };
   }
   const connect = await ask.confirm(
     {
@@ -562,6 +608,23 @@ async function wizard(
     io,
   );
   return { target, source };
+}
+
+/** Why Dosu cannot connect a bucket right now, or undefined when it can: the sources API
+ * answered. A 404 is a Dosu without the feature; anything else is reported as it came. */
+async function preflight(api: SourcesApi): Promise<string | undefined> {
+  try {
+    await api.list();
+    return undefined;
+  } catch (err) {
+    if (err instanceof SourcesApiError) {
+      return err.status === 404
+        ? `Dosu at ${api.backendUrl} has no session sources API (HTTP 404): it is an older or different Dosu than this CLI expects.`
+        : `Dosu at ${api.backendUrl} answered ${err.message}.`;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return `Could not reach Dosu at ${api.backendUrl}: ${message}`;
+  }
 }
 
 function requireStatic(write: "env" | BucketCredentials): BucketCredentials {

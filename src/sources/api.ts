@@ -69,6 +69,8 @@ interface SyncQueued {
 
 export interface SourcesApi {
   deploymentId: string;
+  /** The Dosu this client talks to, for messages that say which one failed. */
+  backendUrl: string;
   connect(body: Omit<ConnectSourceRequest, "deployment_id">): Promise<SourceStatus>;
   list(): Promise<SourceStatus[]>;
   get(id: string): Promise<SourceStatus>;
@@ -124,6 +126,7 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
 
   return {
     deploymentId,
+    backendUrl: backendUrl.replace(/\/$/, ""),
     connect: (body) => call("POST", "", { deployment_id: deploymentId, ...body }),
     list: async () =>
       (await call<{ sources: SourceStatus[] }>("GET", `?deployment_id=${deploymentId}`)).sources,
