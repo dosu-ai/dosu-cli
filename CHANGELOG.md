@@ -1,3 +1,64 @@
+# [0.67.0-beta.8](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.7...v0.67.0-beta.8) (2026-10-26)
+
+
+### Features
+
+* **shipper:** send per-request token usage with ingested sessions ([#294](https://github.com/dosu-ai/dosu-cli/issues/294)) ([0099e04](https://github.com/dosu-ai/dosu-cli/commit/0099e049a33d9bcbe2b13f9b888d8dce7ad5a185))
+
+# [0.67.0-beta.7](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.6...v0.67.0-beta.7) (2026-10-22)
+
+
+### Bug Fixes
+
+* **redact:** catch JWTs glued to a word character and short access/id tokens ([#292](https://github.com/dosu-ai/dosu-cli/issues/292)) ([2b0529b](https://github.com/dosu-ai/dosu-cli/commit/2b0529bcd7db748e99a386aa45048c3c923c6110)), closes [#289](https://github.com/dosu-ai/dosu-cli/issues/289)
+
+# [0.67.0-beta.6](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.5...v0.67.0-beta.6) (2026-10-21)
+
+
+### Bug Fixes
+
+* **redact:** redact short refresh_token values ([#289](https://github.com/dosu-ai/dosu-cli/issues/289)) ([1895af2](https://github.com/dosu-ai/dosu-cli/commit/1895af2ac4a841b61e19c19a5c610fe53608e89c))
+
+## [0.68.3](https://github.com/dosu-ai/dosu-cli/compare/v0.68.2...v0.68.3) (2026-10-21)
+
+
+### Bug Fixes
+
+* **redact:** redact full sk_user_ keys containing - or _ ([#287](https://github.com/dosu-ai/dosu-cli/issues/287)) ([62dc4a2](https://github.com/dosu-ai/dosu-cli/commit/62dc4a22c1c737faa72ad920a13a9c3089ca2f08))
+
+# [0.67.0-beta.5](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.4...v0.67.0-beta.5) (2026-10-13)
+
+
+### Bug Fixes
+
+* **tui:** count wrapped rows when repainting a prompt in place ([#284](https://github.com/dosu-ai/dosu-cli/issues/284)) ([7a98e90](https://github.com/dosu-ai/dosu-cli/commit/7a98e90d3ee6913da6961f1181a34d20770c122c))
+
+# [0.67.0-beta.4](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.3...v0.67.0-beta.4) (2026-10-13)
+
+
+### Features
+
+* drop unlearnable-agent providers; ship Cursor sessions on sessionEnd ([#282](https://github.com/dosu-ai/dosu-cli/issues/282)) ([23468d4](https://github.com/dosu-ai/dosu-cli/commit/23468d4d62a58eca0949ba3216f4bbd33ccae95a))
+
+# [0.67.0-beta.3](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.2...v0.67.0-beta.3) (2026-10-13)
+
+
+### Bug Fixes
+
+* **setup:** wrap log prose to the centered content column ([#281](https://github.com/dosu-ai/dosu-cli/issues/281)) ([ac69162](https://github.com/dosu-ai/dosu-cli/commit/ac69162325b95a1b27cb26dc543f6802b651f0ec))
+
+# [0.67.0-beta.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.1...v0.67.0-beta.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* **sync:** ship every ready session in one run ([#277](https://github.com/dosu-ai/dosu-cli/issues/277)) ([c9e1741](https://github.com/dosu-ai/dosu-cli/commit/c9e1741feb1fbcbc003f32c8cec42e4025f5677a))
+
+
+### Features
+
+* **setup:** pick the sync scope before the backfill offer ([#279](https://github.com/dosu-ai/dosu-cli/issues/279)) ([b464244](https://github.com/dosu-ai/dosu-cli/commit/b464244aefc20b4dede654eeed963cad9b355bb0))
+
 # [0.67.0-beta.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0-beta.1) (2026-10-13)
 
 

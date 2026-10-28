@@ -87,6 +87,38 @@ describe("redactSecrets", () => {
     expect(text).toBe("anon key [redacted:jwt]");
   });
 
+  it("redacts a JWT glued to a preceding word character", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.fake-signature";
+    const forms = [
+      // A JWT on its own line inside JSON-in-a-string: the escaped newline's `n` touches it.
+      [`{"stdout": "output:\\n${jwt}\\n"}`, `{"stdout": "output:\\n[redacted:jwt]\\n"}`],
+      [`"\\t${jwt}"`, `"\\t[redacted:jwt]"`],
+      // URL-encoded `=` and space.
+      [`?q=access_token%3D${jwt}`, `?q=access_token%3D[redacted:jwt]`],
+      [`Authorization:%20${jwt}`, `Authorization:%20[redacted:jwt]`],
+    ];
+
+    for (const [input, expected] of forms) {
+      expect(redactSecrets(input)).toEqual({ text: expected, count: 1, counts: { jwt: 1 } });
+    }
+  });
+
+  it("scans a long run of repeated eyJ in linear time", () => {
+    // An unbounded glued-JWT start rescanned the run from every inner `eyJ`: seconds, not ms.
+    const input = "eyJ".repeat(64_000);
+    const started = performance.now();
+    const { text } = redactSecrets(input);
+
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(text).not.toContain("[redacted:jwt]");
+  });
+
+  it("leaves dotted identifiers that merely contain eyJ alone", () => {
+    for (const input of ["keyJsonSchema.properties.name", "surveyJson.data.items.length"]) {
+      expect(redactSecrets(input).text).toBe(input);
+    }
+  });
+
   describe("generic credential assignments", () => {
     it("keeps the key name and redacts the value", () => {
       const { text, counts } = redactSecrets("export DATABASE_PASSWORD=hunter2hunter2hunter2");
@@ -121,6 +153,56 @@ describe("redactSecrets", () => {
       expect(redactSecrets(input).text).toBe(input);
     });
 
+    it("redacts a refresh token shorter than the generic 16-character floor", () => {
+      const forms = [
+        [
+          '{\n  "refresh_token": "abc123def456"\n}',
+          '{\n  "refresh_token": "[redacted:credential]"\n}',
+        ],
+        ['{"refresh_token":"abc123def456"}', '{"refresh_token":"[redacted:credential]"}'],
+        [
+          '{\\"refresh_token\\": \\"abc123def456\\"}',
+          '{\\"refresh_token\\": \\"[redacted:credential]\\"}',
+        ],
+        ["refresh_token=abc123def456", "refresh_token=[redacted:credential]"],
+        ["refreshToken: abc123def456", "refreshToken: [redacted:credential]"],
+        ["REFRESH-TOKEN=abc123def456", "REFRESH-TOKEN=[redacted:credential]"],
+      ];
+
+      for (const [input, expected] of forms) {
+        expect(redactSecrets(input)).toEqual({
+          text: expected,
+          count: 1,
+          counts: { credential: 1 },
+        });
+      }
+    });
+
+    it("gives access and id tokens the same 8-character floor as refresh tokens", () => {
+      const forms = [
+        ['{"access_token":"opaque12345"}', '{"access_token":"[redacted:credential]"}'],
+        ["id_token=abc123def456", "id_token=[redacted:credential]"],
+        [
+          '\\n  \\"accessToken\\": \\"opaque12345\\"',
+          '\\n  \\"accessToken\\": \\"[redacted:credential]\\"',
+        ],
+      ];
+
+      for (const [input, expected] of forms) {
+        expect(redactSecrets(input)).toEqual({
+          text: expected,
+          count: 1,
+          counts: { credential: 1 },
+        });
+      }
+    });
+
+    it("leaves empty and null refresh tokens alone", () => {
+      for (const input of ['{"refresh_token": null}', '{"refresh_token": ""}']) {
+        expect(redactSecrets(input).text).toBe(input);
+      }
+    });
+
     it("catches non-English credential words", () => {
       const { text, counts } = redactSecrets("пароль: abcd1234efgh5678ijkl");
 
@@ -149,6 +231,19 @@ describe("redactSecrets", () => {
 
       expect(counts[kind]).toBe(1);
       expect(text).toContain(`[redacted:${kind}]`);
+    });
+
+    // Dosu keys are `sk_user_` + token_urlsafe, so '-' and '_' appear mid-key.
+    it.each([
+      ["hyphen", "sk_user_aB3xY7pQ9zK2-mN8vR4tWcD5fGh6JkL1mN0pQ2rS4tU6"],
+      ["underscore", "sk_user_aB3xY7pQ9zK2_mN8vR4tWcD5fGh6JkL1mN0pQ2rS4tU6"],
+    ])("redacts a whole sk_user_ key containing a %s", (_name, key) => {
+      const prose = redactSecrets(`use ${key} for auth`);
+      expect(prose.text).toBe("use [redacted:dosu-key] for auth");
+      expect(prose.counts).toEqual({ "dosu-key": 1 });
+
+      const json = redactSecrets(`{"header": "${key}"}`);
+      expect(json.text).toBe('{"header": "[redacted:dosu-key]"}');
     });
   });
 

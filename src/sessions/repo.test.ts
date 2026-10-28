@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   currentBranchOfDir,
   displayRepo,
+  githubSlugOfRepo,
   headReflogOfDir,
   normalizeRepoRemote,
   originRepoOfDir,
@@ -33,6 +34,53 @@ describe("normalizeRepoRemote", () => {
     "not a url",
   ])("rejects %j", (remote) => {
     expect(normalizeRepoRemote(remote)).toBeNull();
+  });
+});
+
+describe("githubSlugOfRepo", () => {
+  /** What the shipper sees: an origin remote, normalized, then narrowed to a GitHub slug. */
+  const slugOfRemote = (remote: string) => githubSlugOfRepo(normalizeRepoRemote(remote));
+
+  it.each([
+    ["git@github.com:dosu-ai/dosu-cli.git", "dosu-ai/dosu-cli"],
+    ["git@github.com:dosu-ai/dosu-cli", "dosu-ai/dosu-cli"],
+    ["https://github.com/dosu-ai/dosu-cli.git", "dosu-ai/dosu-cli"],
+    ["https://github.com/dosu-ai/dosu-cli", "dosu-ai/dosu-cli"],
+    ["https://github.com/dosu-ai/dosu-cli/\n", "dosu-ai/dosu-cli"],
+    ["ssh://git@github.com/dosu-ai/dosu-cli.git", "dosu-ai/dosu-cli"],
+    ["ssh://git@github.com/dosu-ai/dosu-cli", "dosu-ai/dosu-cli"],
+    ["ssh://git@github.com:22/dosu-ai/dosu-cli.git", "dosu-ai/dosu-cli"],
+    ["https://GitHub.com/Dosu-AI/Dosu.CLI_2.git", "dosu-ai/dosu.cli_2"],
+  ])("%j → %s", (remote, slug) => {
+    expect(slugOfRemote(remote)).toBe(slug);
+  });
+
+  it.each([
+    "https://x-access-token:ghp_abcdefghijklmnopqrstuvwxyz0123456789@github.com/acme/app.git",
+    "https://alice:s3cret@github.com/acme/app",
+    "https://ghp_abcdefghijklmnopqrstuvwxyz0123456789@github.com/acme/app.git",
+    "ssh://alice:s3cret@github.com/acme/app.git",
+  ])("keeps nothing of the credentials in %j", (remote) => {
+    expect(slugOfRemote(remote)).toBe("acme/app");
+  });
+
+  it.each([
+    "git@gitlab.com:acme/app.git",
+    "https://gitlab.com/acme/app.git",
+    "https://github.example.com/acme/app.git",
+    "https://github.com.evil.test/acme/app.git",
+    "git@bitbucket.org:acme/app.git",
+    "https://github.com/acme",
+    "https://github.com/acme/app/tree/main",
+    "/srv/git/app.git",
+    "file:///srv/git/app.git",
+    "",
+  ])("rejects %j", (remote) => {
+    expect(slugOfRemote(remote)).toBeNull();
+  });
+
+  it("is null without a repo", () => {
+    expect(githubSlugOfRepo(null)).toBeNull();
   });
 });
 

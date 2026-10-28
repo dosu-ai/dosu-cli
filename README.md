@@ -133,32 +133,27 @@ Run `dosu <command> --help` for subcommands and flags.
 
 ### Agent skills
 
-The `dosu` skill — which teaches coding agents how to operate Dosu through this CLI — lives in [`skills/dosu`](skills/dosu) and is embedded in the CLI at build time, so the copy an agent reads always matches the installed CLI version. `dosu setup` (and `dosu skill install`) writes it to `~/.agents/skills/dosu`, the universal location read by Cursor, Codex, Gemini CLI, Zed, Cline, Copilot, OpenCode, and Antigravity, and symlinks Claude Code's `~/.claude/skills/dosu` and Windsurf's `~/.codeium/windsurf/skills/dosu` at that copy. After a CLI upgrade, the first command re-applies the skill automatically; `dosu skill update` does the same on demand. The former standalone [`dosu-ai/dosu-skill`](https://github.com/dosu-ai/dosu-skill) repository is deprecated in favour of this bundle.
+The `dosu` skill — which teaches coding agents how to operate Dosu through this CLI — lives in [`skills/dosu`](skills/dosu) and is embedded in the CLI at build time, so the copy an agent reads always matches the installed CLI version. `dosu setup` (and `dosu skill install`) writes it to `~/.agents/skills/dosu`, the universal location read by Cursor, Codex, Gemini CLI, Copilot, and OpenCode, and symlinks Claude Code's `~/.claude/skills/dosu` at that copy. After a CLI upgrade, the first command re-applies the skill automatically; `dosu skill update` does the same on demand. The former standalone [`dosu-ai/dosu-skill`](https://github.com/dosu-ai/dosu-skill) repository is deprecated in favour of this bundle.
 
 To change a skill, edit `skills/<name>/…` and run `bun run embed:skills` to regenerate `src/generated/skills.ts` (a test fails if the two drift).
 
 ### Supported AI tools
 
-`dosu mcp add <id>` and the setup wizard support:
+`dosu mcp add <id>` and the setup wizard support the coding agents whose sessions Dosu can learn from — each one keeps a session log on disk that [`@letta-ai/trajectory`](https://github.com/letta-ai/trajectory) normalizes:
 
 | ID | Tool |
 |---|---|
 | `claude` | Claude Code |
-| `claude-desktop` | Claude Desktop |
 | `cursor` | Cursor |
-| `vscode` | VS Code |
 | `codex` | Codex CLI |
 | `gemini` | Gemini CLI |
-| `windsurf` | Windsurf |
-| `zed` | Zed |
-| `cline` | Cline |
-| `cline-cli` | Cline CLI |
 | `copilot` | GitHub Copilot CLI |
 | `opencode` | OpenCode |
-| `antigravity` | Antigravity |
-| `mcporter` | MCPorter |
-| `factory` | Factory |
+| `factory` | Factory (droid) |
+| `pi` | Pi (installs the Dosu pi extension; global only) |
 | `manual` | Manual Configuration (prints config to paste yourself) |
+
+Tools with no such log (Claude Desktop, VS Code, Windsurf, Zed, Cline, Antigravity, MCPorter, ...) can still reach Dosu's MCP server: `dosu mcp add manual` prints the entry to paste into their config. The CLI no longer writes it for them, since nothing it does for them beyond that entry could learn from their sessions.
 
 ### Non-interactive / agent setup
 

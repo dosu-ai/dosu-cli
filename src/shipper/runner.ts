@@ -1,18 +1,21 @@
 /** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
  * opt-out, normalize the raw log to redacted trajectory-v1 records, judge whether they are worth
- * learning from, and POST them to the Dosu memory ingest API. Fire-and-forget: the accepted task is never polled; the task id and the
+ * learning from, and POST them to the Dosu memory ingest API, with the session's token usage when
+ * its journal records any. Fire-and-forget: the accepted task is never polled; the task id and the
  * shareable session_url are returned for the sync ledger and the report to surface. */
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { getBackendURL } from "../config/constants";
 import type { ProjectKey } from "../sessions/project";
 import { createProjectDirResolver } from "../sessions/project-dir";
+import { githubSlugOfRepo } from "../sessions/repo";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipHold, ShipSessionResult, SyncDeps } from "../sync/sync";
 import { planShipment, prefixSha256, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
 import { forkCopy, sessionStartOf } from "./session-start";
+import { readSessionUsage, type SessionUsage } from "./usage";
 import { isTrivialTrajectory } from "./worthiness";
 
 /** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
@@ -39,9 +42,12 @@ export interface ShipStepOptions {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   isIncognito?: (session: AgentSession) => boolean;
   normalize?: (session: AgentSession) => Promise<NormalizedRecord[] | null>;
+  readUsage?: (session: AgentSession) => SessionUsage | null;
   resolveProject?: (session: AgentSession) => ProjectKey | null;
   /** `at`: when the session's own records began (ISO), the time to ask the reflog about. */
   resolveBranch?: (session: AgentSession, at?: string) => string | null;
+  /** The normalized origin repo (`host/owner/name`) of the session's working directory. */
+  resolveRepo?: (session: AgentSession) => string | null;
 }
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
@@ -53,12 +59,13 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
   const fetchImpl = options.fetchImpl ?? fetch;
   const isIncognito = options.isIncognito ?? isIncognitoSession;
   const normalize = options.normalize ?? normalizeSessionRecords;
+  const readUsage = options.readUsage ?? readSessionUsage;
 
   /** One session's result, or null when shipping was turned off before it was sent. */
   async function shipOne(
     session: AgentSession,
     shipped: ShippedPrefix | undefined,
-    resolve: Required<Pick<ShipStepOptions, "resolveProject" | "resolveBranch">>,
+    resolve: Required<Pick<ShipStepOptions, "resolveProject" | "resolveBranch" | "resolveRepo">>,
     hold: ShipHold,
   ): Promise<ShipSessionResult | null> {
     const held = hold(session);
@@ -92,19 +99,26 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     const start = sessionStartOf(records, copied);
     const branch = start.recorded ?? resolve.resolveBranch(session, start.firstPromptAt);
     const parentSessionId = session.parentId ?? session.forkOf?.id;
+    // The GitHub repository the session worked in, as `owner/name`, from its working directory's
+    // origin remote; never the directory or the remote itself. Left out off GitHub.
+    const repo = githubSlugOfRepo(resolve.resolveRepo(session));
+    // Token usage rides next to the records (the normalizer drops it); omitted when the harness
+    // logs none, which reads the same as a CLI that predates usage. It covers the whole journal,
+    // a resumed session's tail included: request ids are stable, so the server dedupes the overlap.
+    const usage = readUsage(session);
     const body = JSON.stringify({
       records: plan.records,
       metadata: {
         deployment_id: options.deploymentId,
         project,
-        // Servers that predate `project` require `repo`; same key.
-        repo: project,
+        ...(repo ? { repo } : {}),
         agent: trajectorySourceOf(session.harness) ?? session.harness,
         session_id: session.id,
         ...(branch ? { branch } : {}),
         ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
         ...(plan.continuation ? { continuation: plan.continuation } : {}),
       },
+      ...(usage ? { usage } : {}),
     });
     // Normalizing a long session takes a while: the switch is read once more right before sending.
     const late = hold(session);
@@ -150,12 +164,15 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
 
   return async (sessions, shippedOf = () => undefined, hold = () => null, settled = () => {}) => {
     const resolver =
-      options.resolveProject && options.resolveBranch ? undefined : createProjectDirResolver();
+      options.resolveProject && options.resolveBranch && options.resolveRepo
+        ? undefined
+        : createProjectDirResolver();
     const resolve = {
       resolveProject:
         options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null),
       resolveBranch:
         options.resolveBranch ?? ((session, at) => resolver?.resolveBranch(session, at) ?? null),
+      resolveRepo: options.resolveRepo ?? ((session) => resolver?.resolveRepo(session) ?? null),
     };
     const results: ShipSessionResult[] = [];
     for (const session of sessions) {

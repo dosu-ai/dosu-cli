@@ -201,7 +201,7 @@ describe("knowledge sync of pi sessions", () => {
       agent: "pi",
       session_id: "01a0fdc5-a112",
       project: "github.com/acme/widget",
-      repo: "github.com/acme/widget",
+      repo: "acme/widget",
     });
     expect(shipped.metadata.parent_session_id).toBeUndefined();
     expect(shipped.records.map((r) => r.role)).toEqual([

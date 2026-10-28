@@ -1,5 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
+import { layoutMargin, padLines } from "../tui/layout";
+import { log, type PromptIO } from "../tui/prompts";
 import {
   brand,
   brandBadge,
@@ -35,6 +37,38 @@ describe("wrapLog", () => {
     // 27 visible chars in a 30-wide (26 usable) terminal: wraps once, at the space.
     expect(wrapLog(styled, 30)).toBe(`${info("dosu knowledge sync")}\nanytime`);
     expect(wrapLog(styled, 40)).toBe(styled);
+  });
+
+  it("wraps to the centered content column, not the full terminal width", () => {
+    const text = "word ".repeat(60).trim();
+    for (const line of wrapLog(text, 200).split("\n")) expect(line.length).toBeLessThanOrEqual(60);
+  });
+
+  it("keeps a logged paragraph inside the centered column of a wide terminal", () => {
+    const columns = 120;
+    let written = "";
+    const output = {
+      columns,
+      write: (chunk: string) => {
+        written += chunk;
+        return true;
+      },
+    } as unknown as NonNullable<PromptIO["output"]>;
+    log.success(
+      wrapLog(
+        "\uD83D\uDCDA Shipping 223 sessions in the background. Watch progress on the Activity screen; Dosu memory learns from each session after it arrives, and agents connected to this MCP can use what it learns.",
+        columns,
+      ),
+      { output },
+    );
+    const margin = " ".repeat(layoutMargin(columns));
+    const lines = stripVTControlCharacters(padLines(written, margin, { atLineStart: true })).split(
+      "\n",
+    );
+    lines.pop(); // trailing newline
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(columns);
+    for (const line of lines.slice(1)) expect(line).toMatch(new RegExp(`^${margin}  \\S`));
   });
 
   it("never wraps narrower than 20 columns and defaults to stdout width", () => {

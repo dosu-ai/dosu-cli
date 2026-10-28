@@ -7,6 +7,7 @@ import {
   readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -164,20 +165,27 @@ describe("installBundledSkills", () => {
     expect(doc.mode & 0o111).toBe(0);
   });
 
-  it("symlinks Claude Code and Windsurf directories at the universal copy", () => {
-    const result = installBundledSkills(["claude-code", "windsurf", "cursor"]);
+  it("symlinks the Claude Code directory at the universal copy", () => {
+    const result = installBundledSkills(["claude-code", "cursor"]);
 
-    for (const dir of [claude(), windsurf()]) {
-      for (const name of ["dosu", "read-knowledge-impact"]) {
-        const link = join(dir, name);
-        expect(isSymlink(link)).toBe(true);
-        // Relative, like the legacy `skills` CLI wrote, so a moved $HOME keeps working.
-        expect(readlinkSync(link)).toBe(relative(dir, join(universal(), name)));
-        expect(readFileSync(join(link, "SKILL.md"), "utf-8")).toBeTruthy();
-      }
+    const dir = claude();
+    for (const name of ["dosu", "read-knowledge-impact"]) {
+      const link = join(dir, name);
+      expect(isSymlink(link)).toBe(true);
+      // Relative, like the legacy `skills` CLI wrote, so a moved $HOME keeps working.
+      expect(readlinkSync(link)).toBe(relative(dir, join(universal(), name)));
+      expect(readFileSync(join(link, "SKILL.md"), "utf-8")).toBeTruthy();
     }
     expect(result.paths).toContain(join(claude(), "dosu"));
-    expect(result.paths).toContain(join(windsurf(), "read-knowledge-impact"));
+    expect(result.paths).toContain(join(claude(), "read-knowledge-impact"));
+  });
+
+  it("no longer links Windsurf, an agent the CLI stopped configuring", () => {
+    const result = installBundledSkills(["claude-code", "windsurf"]);
+
+    expect(existsSync(windsurf())).toBe(false);
+    expect(result.paths).not.toContain(join(windsurf(), "dosu"));
+    expect(readSkillInstallState()?.agents).toEqual(["claude-code"]);
   });
 
   it("honors CLAUDE_CONFIG_DIR for the Claude Code link", () => {
@@ -304,7 +312,7 @@ describe("installBundledSkills", () => {
 
 describe("installSkill", () => {
   it("maps MCP provider IDs onto skill agents", async () => {
-    const result = await installSkill(["claude", "vscode"]);
+    const result = await installSkill(["claude", "copilot"]);
 
     expect(result.success).toBe(true);
     expect(isSymlink(join(claude(), "dosu"))).toBe(true);
@@ -315,8 +323,14 @@ describe("installSkill", () => {
     await installSkill();
 
     expect(isSymlink(join(claude(), "dosu"))).toBe(true);
-    expect(isSymlink(join(windsurf(), "dosu"))).toBe(true);
-    expect(readSkillInstallState()?.agents).toHaveLength(10);
+    expect(readSkillInstallState()?.agents).toEqual([
+      "claude-code",
+      "cursor",
+      "gemini-cli",
+      "codex",
+      "github-copilot",
+      "opencode",
+    ]);
   });
 
   it("does not broaden an unsupported provider into an all-agent install", async () => {
@@ -329,7 +343,13 @@ describe("installSkill", () => {
 
 describe("removeSkills", () => {
   it("removes universal copies, agent links, and the install state", () => {
-    installBundledSkills(["claude-code", "windsurf"]);
+    installBundledSkills(["claude-code"]);
+    // A Windsurf link an earlier version made, before the CLI stopped configuring Windsurf.
+    mkdirSync(windsurf(), { recursive: true });
+    symlinkSync(
+      join(universal(), "read-knowledge-impact"),
+      join(windsurf(), "read-knowledge-impact"),
+    );
 
     const removed = removeSkills();
 
@@ -343,6 +363,7 @@ describe("removeSkills", () => {
     );
     expect(existsSync(join(universal(), "dosu"))).toBe(false);
     expect(existsSync(join(claude(), "dosu"))).toBe(false);
+    expect(existsSync(join(windsurf(), "read-knowledge-impact"))).toBe(false);
     expect(readSkillInstallState()).toBeNull();
   });
 
@@ -429,9 +450,16 @@ describe("skill command", () => {
 
 describe("provider helpers", () => {
   it("maps provider aliases and de-duplicates shared skill agents", () => {
-    expect(
-      skillAgentIDsForProviders(["vscode", "copilot", "cline", "cline-cli", "manual"]),
-    ).toEqual(["github-copilot", "cline"]);
+    expect(skillAgentIDsForProviders(["copilot", "codex", "copilot", "manual"])).toEqual([
+      "github-copilot",
+      "codex",
+    ]);
+  });
+
+  it("ignores providers the CLI stopped configuring", () => {
+    expect(skillAgentIDsForProviders(["vscode", "windsurf", "zed", "cline", "cline-cli"])).toEqual(
+      [],
+    );
   });
 
   it("reports the Claude symlink target and respects CLAUDE_CONFIG_DIR", () => {
@@ -450,11 +478,8 @@ describe("provider helpers", () => {
     });
   });
 
-  it("reports the Windsurf symlink target", () => {
-    expect(skillInstallTargetForProvider("windsurf")).toEqual({
-      path: join(windsurf(), "dosu"),
-      symlink: true,
-    });
+  it("reports no target for Windsurf, which the CLI no longer configures", () => {
+    expect(skillInstallTargetForProvider("windsurf")).toBeNull();
   });
 
   it("returns null for a provider without skill support", () => {
