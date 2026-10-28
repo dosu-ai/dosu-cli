@@ -63,24 +63,6 @@ export function printTable(
   }
 }
 
-/** Print a labeled section with key-value pairs. */
-export function printInfo(
-  entries: Array<[string, string | undefined]>,
-  opts: { json?: boolean; rawData?: unknown } = {},
-): void {
-  if (opts.json && opts.rawData !== undefined) {
-    printJSON(opts.rawData);
-    return;
-  }
-
-  const maxLabel = Math.max(...entries.map(([label]) => label.length));
-  for (const [label, value] of entries) {
-    if (value !== undefined) {
-      console.log(`${pc.bold(label.padEnd(maxLabel))}  ${value}`);
-    }
-  }
-}
-
 /** Truncate a string to a max length, adding ellipsis if needed. */
 export function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
@@ -97,15 +79,4 @@ export function formatAge(iso: string, now: Date = new Date()): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
   return `${Math.floor(hours / 24)}d ago`;
-}
-
-/** Format a date string into a short readable format. */
-export function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "-";
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
 }

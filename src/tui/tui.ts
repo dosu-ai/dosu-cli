@@ -27,11 +27,9 @@ import { buildUpdateHint, getAvailableUpdate } from "../version/update-check";
 import { getVersionString, INSTALL_CHANNEL, isNpxInvocation } from "../version/version";
 import { runActivityView } from "./activity-view";
 import { enterAltScreen } from "./alt-screen";
-import { runAnalyticsView } from "./analytics-view";
 import { type BannerContext, renderBanner } from "./banner";
 import { frameTopMargin, installCenteredLayout } from "./layout";
 import { type MenuOption, menuSelect } from "./menu";
-import { runPagesView } from "./pages-view";
 import * as p from "./prompts";
 
 /** Session state the banner and menu key off. `expired` means the tokens on disk are past
@@ -248,8 +246,6 @@ async function runMainMenu(): Promise<void> {
         label: syncing ? `activity \uD83D\uDCDA ${brand("shipping sessions...")}` : "activity",
         value: "sync",
       },
-      { label: "analytics", value: "analytics" },
-      { label: "pages", value: "pages" },
       { label: "settings", value: "settings" },
       { label: "exit", value: "exit" },
     ];
@@ -280,14 +276,6 @@ async function runMainMenu(): Promise<void> {
     switch (action) {
       case "sync":
         await runActivityView();
-        home();
-        break;
-      case "analytics":
-        await runAnalyticsView();
-        home();
-        break;
-      case "pages":
-        await runPagesView();
         home();
         break;
       case "settings":

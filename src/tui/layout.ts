@@ -129,29 +129,13 @@ export function installCenteredLayout(stream: NodeJS.WriteStream = process.stdou
   };
 }
 
-/** Padding inside each equal-width tab cell (cells mode). */
-const TAB_CELL_PAD = 2;
-
-/** Shared tab strip: labels over a rule whose heavier segment marks the active tab. Spread mode
- * stretches labels across `width`; cells mode centers each label in equal-width cells. */
+/** Shared tab strip: labels spread across `width` over a rule whose heavier segment marks the
+ * active tab. */
 export function tabStrip<Id extends string>(
   labels: ReadonlyArray<readonly [Id, string]>,
   active: Id,
   width: number,
-  { spread = true }: { spread?: boolean } = {},
 ): [string, string] {
-  if (!spread) {
-    const cellW = Math.max(...labels.map(([, label]) => label.length)) + 2 * TAB_CELL_PAD;
-    let row = "";
-    let rule = "";
-    for (const [id, label] of labels) {
-      const left = Math.floor((cellW - label.length) / 2);
-      const cell = " ".repeat(left) + label + " ".repeat(cellW - label.length - left);
-      row += id === active ? brand(pc.bold(cell)) : pc.dim(cell);
-      rule += id === active ? brand("\u2501".repeat(cellW)) : pc.dim("\u2500".repeat(cellW));
-    }
-    return [row, rule];
-  }
   // Narrow frames fall back to a minimum gap and let the row run long.
   const GAP_MIN = 3;
   const totalLen = labels.reduce((sum, [, label]) => sum + label.length, 0);

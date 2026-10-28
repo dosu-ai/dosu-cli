@@ -556,8 +556,8 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
   }
 }
 
-/** Run the CLI. A command that fails throws (a CommandError for handled states, anything else
- * for crashes); the error unwinds to here, which is the one place that prints it and exits 1. */
+/** Run the CLI. A command that fails throws; the error unwinds to here, which is the one place
+ * that prints it and exits 1. */
 export async function execute(): Promise<void> {
   const program = createProgram();
   try {

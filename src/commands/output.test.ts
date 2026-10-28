@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatDate, printInfo, printResult, printTable, truncate } from "./output";
+import { printResult, printTable, truncate } from "./output";
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -22,34 +22,6 @@ describe("truncate", () => {
 
   it("returns empty string for empty input", () => {
     expect(truncate("", 10)).toBe("");
-  });
-});
-
-describe("formatDate", () => {
-  it('returns "-" for null', () => {
-    expect(formatDate(null)).toBe("-");
-  });
-
-  it('returns "-" for undefined', () => {
-    expect(formatDate(undefined)).toBe("-");
-  });
-
-  it('returns "-" for empty string', () => {
-    expect(formatDate("")).toBe("-");
-  });
-
-  it("formats ISO date correctly", () => {
-    const result = formatDate("2024-03-15T10:30:00Z");
-    // Should contain both the month and year
-    expect(result).toContain("Mar");
-    expect(result).toContain("2024");
-  });
-
-  it("handles invalid date string", () => {
-    // new Date("not-a-date") produces "Invalid Date"
-    const result = formatDate("not-a-date");
-    // toLocaleDateString on an invalid date returns "Invalid Date"
-    expect(typeof result).toBe("string");
   });
 });
 
@@ -119,36 +91,5 @@ describe("printTable", () => {
     expect(() => printTable(["ID", "Name"], rows)).not.toThrow();
     // Should still print header + separator + row
     expect(spy).toHaveBeenCalledTimes(3);
-  });
-});
-
-describe("printInfo", () => {
-  it("outputs raw JSON when json+rawData provided", () => {
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const rawData = { id: 1, status: "active" };
-    printInfo(
-      [
-        ["ID", "1"],
-        ["Status", "active"],
-      ],
-      { json: true, rawData },
-    );
-    expect(spy).toHaveBeenCalledOnce();
-    expect(spy.mock.calls[0][0]).toBe(JSON.stringify(rawData, null, 2));
-  });
-
-  it("skips entries where value is undefined", () => {
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    printInfo([
-      ["ID", "1"],
-      ["Missing", undefined],
-      ["Status", "ok"],
-    ]);
-    // Only 2 calls — the entry with undefined value is skipped
-    expect(spy).toHaveBeenCalledTimes(2);
-    const allOutput = spy.mock.calls.map((c) => c[0] as string).join("\n");
-    expect(allOutput).toContain("ID");
-    expect(allOutput).toContain("Status");
-    expect(allOutput).not.toContain("Missing");
   });
 });

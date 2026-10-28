@@ -39,16 +39,6 @@ vi.mock("./activity-view", () => ({
   runActivityView: vi.fn(),
 }));
 
-// So does the standalone analytics screen.
-vi.mock("./analytics-view", () => ({
-  runAnalyticsView: vi.fn(),
-}));
-
-// And the Pages screen, which also fetches from the backend.
-vi.mock("./pages-view", () => ({
-  runPagesView: vi.fn(),
-}));
-
 // The banner reads the update cache from disk; tests must not see the
 // developer machine's real cache file.
 vi.mock("../version/update-check", () => ({
@@ -127,10 +117,8 @@ import { runSetup, runSwitchTarget } from "../setup/flow";
 import { lockPath } from "../sync/lock";
 import { emptySyncState, loadSyncState, saveSyncState } from "../sync/state";
 import { runActivityView } from "./activity-view";
-import { runAnalyticsView } from "./analytics-view";
 import { frameTopMargin } from "./layout";
 import { menuSelect } from "./menu";
-import { runPagesView } from "./pages-view";
 import * as p from "./prompts";
 import { handleLogout, runTUI } from "./tui";
 
@@ -141,8 +129,6 @@ const mockStartOAuthFlow = vi.mocked(startOAuthFlow);
 const mockRunSetup = vi.mocked(runSetup);
 const mockRunSwitchTarget = vi.mocked(runSwitchTarget);
 const mockRunActivityView = vi.mocked(runActivityView);
-const mockRunAnalyticsView = vi.mocked(runAnalyticsView);
-const mockRunPagesView = vi.mocked(runPagesView);
 const mockAllSetupProviders = vi.mocked(allSetupProviders);
 const mockScanSessions = vi.mocked(scanAgentSessions);
 const mockMultiselect = vi.mocked(p.multiselect);
@@ -475,13 +461,7 @@ describe("runTUI", () => {
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
     const signedIn = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(signedIn.map((o) => o.value)).toEqual([
-      "sync",
-      "analytics",
-      "pages",
-      "settings",
-      "exit",
-    ]);
+    expect(signedIn.map((o) => o.value)).toEqual(["sync", "settings", "exit"]);
     expect(signedIn.every((o) => o.hint === undefined)).toBe(true);
 
     // Signed out: nothing works without an account, so the menu is just the
@@ -568,13 +548,7 @@ describe("runTUI", () => {
       expect(stripAnsi(stdoutWrites.join(""))).toContain("signed in");
       expect(stripAnsi(stdoutWrites.join(""))).not.toContain("session expired");
       const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-      expect(options.map((o) => o.value)).toEqual([
-        "sync",
-        "analytics",
-        "pages",
-        "settings",
-        "exit",
-      ]);
+      expect(options.map((o) => o.value)).toEqual(["sync", "settings", "exit"]);
     });
 
     it("does not declare the session expired on a network or server hiccup", async () => {
@@ -693,7 +667,7 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).not.toHaveBeenCalled();
     const options = mockMenuSelect.mock.calls[0]?.[1] ?? [];
-    expect(options.map((o) => o.value)).toEqual(["sync", "analytics", "pages", "settings", "exit"]);
+    expect(options.map((o) => o.value)).toEqual(["sync", "settings", "exit"]);
   });
 
   it("shows where sessions ship on the banner once set up", async () => {
@@ -836,28 +810,6 @@ describe("runTUI", () => {
     await runTUI();
 
     expect(mockRunActivityView).toHaveBeenCalledOnce();
-  });
-
-  it("analytics action opens the standalone analytics screen", async () => {
-    writeRealConfig(makeCfg({}));
-    mockRunAnalyticsView.mockResolvedValue();
-    mockMenuSelect.mockResolvedValueOnce("analytics").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(mockRunAnalyticsView).toHaveBeenCalledOnce();
-    expect(mockRunActivityView).not.toHaveBeenCalled();
-  });
-
-  it("pages action opens the Library pages screen", async () => {
-    writeRealConfig(makeCfg({}));
-    mockRunPagesView.mockResolvedValue();
-    mockMenuSelect.mockResolvedValueOnce("pages").mockResolvedValueOnce("exit");
-
-    await runTUI();
-
-    expect(mockRunPagesView).toHaveBeenCalledOnce();
-    expect(mockRunActivityView).not.toHaveBeenCalled();
   });
 
   it("session storage setting reruns setup's storage step and reloads the config", async () => {

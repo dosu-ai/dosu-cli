@@ -399,7 +399,7 @@ export function confirmBox(
 }
 
 /** The ledger has settled something: the c key (clear) has an effect. */
-export function canClear(status: SyncStatus): boolean {
+function canClear(status: SyncStatus): boolean {
   return Object.keys(status.state.sessions).length > 0 || (status.state.total_shipped ?? 0) > 0;
 }
 

@@ -93,7 +93,7 @@ describe("startAutoUpdate", () => {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: { ...ENV, DOSU_TELEMETRY_DISABLED: "1" },
+        env: ENV,
       }),
     );
     expect(child.unref).toHaveBeenCalledOnce();

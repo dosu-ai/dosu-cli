@@ -33,41 +33,24 @@ bun run check                   # Biome lint + format check (used in CI)
 
 Running `dosu` with no args launches the interactive TUI (`src/tui/tui.ts`). Two broad families of subcommands are registered in `src/cli/cli.ts`:
 
-- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|refresh|list`, `logs`, `telemetry`.
-- **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `threads`, `review`, `sources`, `integrations`, `topics`, `members`, `org`, `deployments`, `analytics`, `skill`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
+- **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|refresh|list`, `logs`, `upgrade`.
+- **Sessions and memory** — `sync`, `knowledge`, `memory`, `project`, `sources`, and the per-session `get`, `export`, `changes`, `redact`. Each lives in `src/commands/<name>.ts`; the Dosu-backed ones talk to the backend via `src/client/`, the rest to the configured session store (`src/store/`).
 
 Key modules:
 
-- **`src/auth/`** — Browser-based OAuth flow. Starts a local HTTP server on a random port, opens the browser to the Dosu web app, receives the token via redirect callback. `ticket.ts` backs the agent ticket flow (`login --request`/`--check`).
+- **`src/auth/`** — Browser-based OAuth flow. Starts a local HTTP server on a random port, opens the browser to the Dosu web app, receives the token via redirect callback. `ticket.ts` + `device.ts` back the `login --no-browser` flow for machines without one.
 - **`src/client/`** — Authenticated HTTP client for the Dosu backend API. Handles token refresh (Supabase `/auth/v1/token`) and auto-retry on 401/403.
 - **`src/config/`** — CLI's own config (`~/.config/dosu-cli/config.json`). Stores access/refresh tokens, deployment ID, API key. Supports OSS vs Cloud `mode`. `constants.ts` has env-aware URL getters (dev vs prod, overridable via env vars).
 - **`src/mcp/`** — Provider system for AI tool integrations. Each provider in `providers/` knows how to detect, install, and remove the Dosu MCP entry from that tool's config file. `base.ts` provides `createJSONProvider()` — a factory that covers most tools with just config path + top-level key. `config-helpers.ts` handles JSON/JSONC read/write. `detect.ts` handles path expansion and platform-aware detection. Every provider's entry runs the local stdio proxy, `<absolute dosu> mcp serve --client <agent>` (`proxy-entry.ts`) with the install doing the writing (the compiled binary, or node plus the npm package's script), falling back to its remote entry only when that is a package runner's throwaway copy (npx, bunx, pnpm/Yarn dlx); the proxy (`proxy.ts`, transport in `relay.ts`) relays JSON-RPC to the deployment's streamable-HTTP endpoint with the API key and `x-dosu-project`/`x-dosu-repo`/`x-dosu-branch`/`x-dosu-client`, and `dosu memory search|evidence` (`src/commands/memory.ts`) call its tools through the same relay.
-- **`src/commands/`** — The Dosu platform command layer (the list above). Thin Commander wrappers over `src/client/` calls; `output.ts` standardizes human vs JSON output.
-- **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → detect installed tools → configure). Uses `@clack/prompts`.
-- **`src/agent/`** — Non-interactive setup for coding agents (`setup --agent --tool <id>`) and the ticket-based login commands (`login --request`/`--check`). Emits machine-readable JSON via `output.ts` for agent consumption.
+- **`src/commands/`** — The command layer (the list above). Thin Commander wrappers; `output.ts` standardizes human vs JSON output.
+- **`src/setup/`** — Interactive setup wizard (authenticate → select org → select deployment → mint API key → choose where sessions are stored → detect installed tools → configure). Uses `@clack/prompts`.
 - **`src/sync/`** + **`src/shipper/`** — How the CLI learns from sessions: `knowledge sync` (session-end hooks, the Activity screen, setup's backfill) scans the last 30 days of finished sessions and ships them to the Dosu memory ingest API (`POST /v1/memory/ingest/async`), which learns from them server-side. The shipper normalizes raw logs to Letta trajectory-v1 via `@letta-ai/trajectory`, redacts every outgoing string with `redactSecrets`, and decides each session's fate: incognito (`/dosu-incognito`, in Codex the `$dosu-incognito` skill; installed with each agent's hooks), unsupported, trivial (judged by size on the redacted records, `src/shipper/worthiness.ts`), rejected (400/413/422), or shipped; only transport/auth/5xx errors are failures that back off. Sessions of an agent the user put in incognito (`dosu knowledge incognito on`, `incognito_agents` in the state file) never reach the shipper: the pipeline settles them `incognito` with `by_agent: true`, an answer that is never pending again. A resumed session ships only its new tail (`src/shipper/continuation.ts`). Every upload and prompt-time context request carries a `project` key from `src/sessions/project.ts` (directory link, `DOSU_PROJECT`, origin, root commit, path), and the session's branch: the transcript's recorded one, else the branch pinned per session in `src/sessions/project-dir.ts` (its first prompt's, else the reflog's for its first prompt or, for Cursor, its first captured turn). Progress lives in `~/.config/dosu-cli/knowledge-sync.json`, schema 3: a per-session ledger (`src/sync/state.ts`) keyed `harness/id`, where a session is pending until an entry answers for its current mtime, plus backoff and settings (schemas 1 and 2 migrate on load). Session-end hooks pass the ended session as `--ended <harness>:<id>=<transcript>` so it ships past the 5-minute quiet period; each agent's end event is one reader in `END_EVENT_READERS` (`src/sessions/capture.ts`). `--flush`, a throwaway machine's last step before teardown, ships every pending session past it and drains the backlog. Shipping is on by default; only the opt-out is stored (`ship_transcripts: false`, `dosu knowledge transcripts disable`). There is no local learner: nothing in the CLI calls an LLM or `write_knowledge`.
-- **`src/telemetry/`** — Default-on analytics and error diagnostics with one persisted global switch, safe payload builders, and fail-open transport. User controls live under `dosu telemetry status|enable|disable|reset`.
 - **`src/tui/`** — Main menu TUI when running `dosu` with no subcommand.
-- **`skills/`** — The `dosu` agent skill (formerly the separate `dosu-ai/dosu-skill` repo), which teaches coding agents to configure and operate Dosu through this CLI. Only skills a customer needs to use the CLI belong here; internal analysis skills stay out of the bundle. `scripts/embed-skills.ts` generates `src/generated/skills.ts` from it so the single-file bundle carries the content; `src/commands/skill.ts` writes it to `~/.agents/skills/<name>` and symlinks Claude Code / Windsurf directories at it. **Run `bun run embed:skills` after editing anything under `skills/`** — `scripts/embed-skills.test.ts` fails when the generated file drifts.
-- **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus the background update check (`update-check.ts`). When that check sees a newer release, `auto-update.ts` (default on) spawns a detached `dosu upgrade --background`, which runs only the package-manager install. The install is guarded by `auto-update.lock` and recorded in `auto-update.json`, and the next command's first-run checks below handle the rest; the child runs with telemetry disabled so it never counts as an `upgrade` command. `skill-update-check.ts` re-applies the bundled agent skills on the first command after any version change (for the agents a previous version installed them for). `mcp-refresh-check.ts` compares every configured MCP entry against the shape the current provider writes (`isCurrent`), rewriting only stale entries. It re-applies enabled agents' hooks on every version change, even when the MCP entries are current, and records the version in `mcp-refresh.json`. Disabled hooks stay disabled. There is no release-number list to maintain. `dosu setup` and `dosu mcp refresh` also record the marker after applying hooks. `dosu upgrade` re-invokes the new binary as `dosu upgrade --finish <old version>`: it refreshes enabled hooks and skills, and runs setup on a TTY (or refreshes stale MCP entries otherwise) when entries need updating.
+- **`src/version/`** — Version string from the build-time `DOSU_VERSION` env var, plus the background update check (`update-check.ts`). When that check sees a newer release, `auto-update.ts` (default on) spawns a detached `dosu upgrade --background`, which runs only the package-manager install. The install is guarded by `auto-update.lock` and recorded in `auto-update.json`, and the next command's first-run checks below handle the rest; `mcp-refresh-check.ts` compares every configured MCP entry against the shape the current provider writes (`isCurrent`), rewriting only stale entries. It re-applies enabled agents' hooks on every version change, even when the MCP entries are current, and records the version in `mcp-refresh.json`. Disabled hooks stay disabled. There is no release-number list to maintain. `dosu setup` and `dosu mcp refresh` also record the marker after applying hooks. `dosu upgrade` re-invokes the new binary as `dosu upgrade --finish <old version>`: it refreshes enabled hooks, and runs setup on a TTY (or refreshes stale MCP entries otherwise) when entries need updating.
 
 ## CLI Contract Discipline
 
 All tRPC calls MUST be typed through the generated contract (`CliApiClient` / `TypedClient` from `src/generated/dosu-api-types.d.ts`). Never hand-write client shapes — no `TypedClient & {...}` intersections and no local `{ query(input: ...) }` / `{ mutate(input: ...) }` interfaces. Hand shapes compile against procedures the backend may not serve, turning a missing route into a production 404 instead of a type error (how `dosu review` broke in v0.29.0). If a procedure is missing from the contract, register it in `cliRouter` (dosu repo, `frontend/packages/api/src/cli-root.ts`), regenerate, and re-vendor the contract. Enforced by `src/client/contract-discipline.test.ts`.
-
-## Telemetry Contract
-
-Telemetry is enabled by default and has one global enable/disable switch. Signed-out command events
-use a random installation ID. Signed-in command and setup-funnel events use the stable Dosu user ID;
-when a selected organization UUID is available, analytics events associate it through
-`$groups.organization`. Sentry errors may additionally include that user's email. Never alias prior
-installation history to an account.
-Setup analytics may include only the documented coarse fields. Never collect prompts, raw command
-lines, free-form argument or option values, user source code, file contents, local paths, environment
-variable names or values, credentials, raw error messages, or `debug.log`. Keep payloads allowlisted, transports
-bounded and fail-open, honor `DO_NOT_TRACK` and `DOSU_TELEMETRY_DISABLED`, and keep stdout/JSON
-contracts unchanged. See
-[docs/telemetry.md](docs/telemetry.md) for the field and privacy contract.
 
 ## Testing
 
@@ -154,7 +137,6 @@ git push -u origin alpha
 These are read by `scripts/build-all.ts:buildDefines()` and inlined as string literals via `bun build --define` at compile time. The published npm bundle contains the build-time values verbatim — they cannot be changed at runtime.
 
 - `DOSU_WEB_APP_URL`, `DOSU_BACKEND_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` — sourced from `.env.production` for prod builds, `.env.development` for `bun run dev:local`
-- `DOSU_POSTHOG_PROJECT_TOKEN`, `DOSU_CLI_SENTRY_DSN` — telemetry ingestion destinations. These must be public client-side project credentials, never PostHog personal API keys, Sentry auth tokens, or admin/management secrets.
 - `DOSU_VERSION` — injected at build time for version info
 - `DOSU_INSTALL_CHANNEL` — `npm` (default), `binary`, `homebrew`, or `selfhost`. A `selfhost` build is made for a self-hosted Dosu backend (set `DOSU_BACKEND_URL` and `DOSU_WEB_APP_URL` to it) and ships with that deployment, so it never checks for, offers, or installs public releases, which point at Dosu Cloud.
 
@@ -166,8 +148,6 @@ These are read **on every CLI invocation** and take precedence over the baked-in
 - `DOSU_BACKEND_URL_OVERRIDE`
 - `SUPABASE_URL_OVERRIDE`
 - `SUPABASE_ANON_KEY_OVERRIDE`
-- `DOSU_POSTHOG_PROJECT_TOKEN_OVERRIDE`
-- `DOSU_CLI_SENTRY_DSN_OVERRIDE`
 
 Example:
 
@@ -182,8 +162,6 @@ npx @dosu/cli@alpha setup
 ### Other runtime env
 
 - `DOSU_DEV=true` — isolates the CLI's config dir to `~/.config/dosu-cli-dev/` so dev runs don't clobber prod credentials. Does **not** switch URLs (URLs are build-time-baked; use `*_OVERRIDE` for that).
-- `DO_NOT_TRACK=1` or `DOSU_TELEMETRY_DISABLED=1` — master disable for all telemetry.
-- `DOSU_TELEMETRY_DEBUG=1` — print the exact safe payload to stderr and send nothing.
 - `DOSU_DISABLE_AUTOUPDATE=1` — turn off background self-updates for this environment (the persisted switch is `dosu upgrade --auto off`).
 
 <!-- dosu:mcp:start v2 -->

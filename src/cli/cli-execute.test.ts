@@ -1,7 +1,5 @@
 import { Command } from "commander";
-import pc from "picocolors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandError } from "./command-error";
 
 const mocks = vi.hoisted(() => ({
   thrown: undefined as unknown,
@@ -66,21 +64,6 @@ async function run(...args: string[]): Promise<void> {
 }
 
 describe("execute failure boundary", () => {
-  it("prints a CommandError with its details, then exits 1", async () => {
-    const error = new CommandError("NOT_LOGGED_IN", "Not logged in.", ["  a", "  b"]);
-    mocks.thrown = error;
-
-    await run("project", "link");
-
-    expect(events).toEqual([
-      `stderr:${pc.red("Not logged in.")}`,
-      `stderr:${pc.dim("  a")}`,
-      `stderr:${pc.dim("  b")}`,
-      "exit:1",
-    ]);
-    expect(mocks.loggerError).toHaveBeenCalledWith("cli", "CommandError: Not logged in.");
-  });
-
   it("prints a thrown tRPC error with its request ID and keeps it in the debug log", async () => {
     mocks.thrown = Object.assign(new Error("Internal server error"), {
       name: "TRPCClientError",
