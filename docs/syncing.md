@@ -253,7 +253,8 @@ tail.
 ## Project key
 
 Every upload, and every prompt-time memory request, carries a `project` key naming the codebase the
-session worked in (`repo` repeats it for servers that predate `project`). Memory is scoped by it
+session worked in (a prompt-time request repeats it as `repo` for servers that predate `project`;
+an upload's `metadata.repo` is the GitHub repository instead, see [Repo scope](#repo-scope)). Memory is scoped by it
 when the deployment has no linked repository. For a working directory, the first rule that applies
 wins:
 
@@ -338,6 +339,13 @@ repo, or in a repo without an `origin`, has no repo. The lookup is cached per se
 working directory, so its `stop` hook (and its `sessionEnd`) records it to
 `session-captures/cursor/<id>.json` before the detached sync starts, with the time and branch of
 the session's first turn.
+
+An upload names the session's repo as `metadata.repo` when it is on GitHub, as `owner/name`
+(`dosu-ai/dosu-cli`): the origin's host must be `github.com` and its path exactly an owner and a
+name. Any credentials in the remote (`https://<token>@github.com/...`) are dropped while it is
+parsed; neither the remote nor the working directory's path is sent. A session in a repo on
+another host, without an `origin`, or whose directory is gone and was never looked up ships without
+`repo`. One `git remote get-url origin` answers every session in a directory during a run.
 
 `dosu` → settings → sync scope picks which repos to ship (`repo_filter` in the state file). With a
 repo scope, only sessions in the picked repos are shipped. Picking every repo clears the filter, so
