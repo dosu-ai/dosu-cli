@@ -194,6 +194,8 @@ To repoint a published build at a different backend without rebuilding, set any 
 ```bash
 bun install        # install dependencies
 bun run dev        # run the CLI from source
+bun run dev:local  # same, against the local Dosu stack (.env.development, backend on :7001)
+bun run dev:sessiondb  # local stack with the sessiondb backend (dosu-sessiondb/backend on :7101)
 bun run test       # run tests (vitest)
 bun run check      # lint + format check (Biome)
 bun run typecheck  # tsc --noEmit

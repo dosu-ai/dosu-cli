@@ -19,6 +19,7 @@
   "scripts": {
     "dev": "DOSU_DEV=true bun --env-file=.env.production run src/index.ts",
     "dev:local": "DOSU_DEV=true bun --env-file=.env.development run src/index.ts",
+    "dev:sessiondb": "DOSU_BACKEND_URL_OVERRIDE=http://localhost:7101 bun run dev:local",
     "reset:dev": "bun run scripts/reset-dev.ts",
     "build": "bun --env-file=.env.production run scripts/build-compile.ts",
     "build:dev": "bun --env-file=.env.development run scripts/build-compile.ts",
