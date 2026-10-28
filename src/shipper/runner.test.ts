@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +44,7 @@ interface StepOverrides {
   readUsage?: (s: AgentSession) => SessionUsage | null;
   resolveProject?: (s: AgentSession) => ProjectKey | null;
   resolveBranch?: (s: AgentSession, at?: string) => string | null;
+  resolveRepo?: (s: AgentSession) => string | null;
 }
 
 function makeStep(overrides: StepOverrides = {}) {
@@ -59,6 +61,7 @@ function makeStep(overrides: StepOverrides = {}) {
     resolveProject:
       overrides.resolveProject ?? (() => ({ project: "github.com/acme/app", rule: "origin" })),
     resolveBranch: overrides.resolveBranch ?? (() => null),
+    resolveRepo: overrides.resolveRepo ?? (() => "github.com/acme/app"),
   });
   return { step, fetchImpl: fetchImpl as ReturnType<typeof vi.fn> };
 }
@@ -123,7 +126,8 @@ describe("createShipStep", () => {
       expect(body.records[0]).toMatchObject({ role: "meta", source: "claude-code" });
       // The project comes from the transcript's own cwd: not a checkout, so its path.
       expect(body.metadata.project).toBe(`path:${realpathSync(dir)}`);
-      expect(body.metadata.repo).toBe(body.metadata.project);
+      // Not a checkout, so no GitHub repository to name.
+      expect(body.metadata).not.toHaveProperty("repo");
       // Usage read from the same journal by the default reader.
       expect(body.usage.requests).toEqual([
         expect.objectContaining({ id: "req_1", model: "claude-x", input: 12, output: 34 }),
@@ -162,8 +166,8 @@ describe("createShipStep", () => {
       metadata: {
         deployment_id: "dep1",
         project: "github.com/acme/app",
-        // Older servers require `repo`; it carries the same key.
-        repo: "github.com/acme/app",
+        // The GitHub repository of the session's origin remote, as owner/name.
+        repo: "acme/app",
         // The trajectory source, not the CLI's harness id.
         agent: "claude-code",
         session_id: "s1",
@@ -225,12 +229,13 @@ describe("createShipStep", () => {
   });
 
   it("sends 'unknown' when neither the working directory nor DOSU_PROJECT is known", async () => {
-    const { step, fetchImpl } = makeStep({ resolveProject: () => null });
+    const { step, fetchImpl } = makeStep({ resolveProject: () => null, resolveRepo: () => null });
 
     await step([session("s1")]);
 
     const { metadata } = JSON.parse(fetchImpl.mock.calls[0][1].body);
-    expect(metadata).toMatchObject({ project: "unknown", repo: "unknown" });
+    expect(metadata.project).toBe("unknown");
+    expect(metadata).not.toHaveProperty("repo");
   });
 
   it("never ships an incognito session", async () => {
@@ -721,5 +726,118 @@ describe("createShipStep branch", () => {
     await step([session("s1")]);
 
     expect("branch" in metadata(fetchImpl)).toBe(false);
+  });
+});
+
+describe("createShipStep repo", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "dosu-ship-repo-")));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A Claude Code transcript (outside the checkout) whose records ran in `cwd`. */
+  function transcriptIn(cwd: string, id: string): string {
+    const path = join(dir, `${id}.jsonl`);
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "u1",
+          timestamp: "2026-09-01T00:00:00.000Z",
+          cwd,
+          sessionId: id,
+          message: { role: "user", content: "where does the shipper send the repo?" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "a1",
+          timestamp: "2026-09-01T00:00:05.000Z",
+          sessionId: id,
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "claude-x",
+            content: [{ type: "text", text: `In the metadata. ${"Details. ".repeat(250)}` }],
+          },
+        }),
+      ].join("\n"),
+    );
+    return path;
+  }
+
+  /** A fresh checkout under the temp dir, with `origin` set to `remote` when given. */
+  function checkout(remote?: string): string {
+    const repo = join(dir, "checkout");
+    execFileSync("git", ["init", "-q", repo], { stdio: "ignore" });
+    if (remote) {
+      execFileSync("git", ["-C", repo, "remote", "add", "origin", remote], { stdio: "ignore" });
+    }
+    return repo;
+  }
+
+  /** Ship one session through the default resolver (real transcript, real git); HTTP is faked. */
+  async function shipFrom(cwd: string) {
+    const fetchImpl = vi.fn().mockResolvedValue(accepted());
+    const step = createShipStep({
+      apiKey: "sk_user_test",
+      deploymentId: "dep1",
+      backendUrl: "https://api.dosu.test",
+      fetchImpl,
+      isIncognito: () => false,
+    });
+    const id = `s-${Math.random().toString(36).slice(2)}`;
+    const [result] = await step([session(id, { path: transcriptIn(cwd, id) })]);
+    expect(result.outcome).toBe("shipped");
+    const raw: string = fetchImpl.mock.calls[0][1].body;
+    return { raw, metadata: JSON.parse(raw).metadata };
+  }
+
+  it("names the GitHub repository of the session's working directory as owner/name", async () => {
+    const token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const remote = `https://x-access-token:${token}@github.com/Acme/Widget.git`;
+    const cwd = checkout(remote);
+
+    const { raw, metadata } = await shipFrom(cwd);
+
+    expect(metadata.repo).toBe("acme/widget");
+    expect(metadata.project).toBe("github.com/acme/widget");
+    // Only the slug leaves the machine: not the remote, its credentials, or the checkout's path.
+    const sentMetadata = JSON.stringify(metadata);
+    expect(sentMetadata).not.toContain(cwd);
+    expect(raw).not.toContain(token);
+    expect(raw).not.toContain(remote);
+  });
+
+  it("leaves repo out for a checkout whose origin is not on GitHub", async () => {
+    const { metadata } = await shipFrom(checkout("git@gitlab.com:acme/widget.git"));
+
+    expect(metadata).not.toHaveProperty("repo");
+    expect(metadata.project).toBe("gitlab.com/acme/widget");
+  });
+
+  it("leaves repo out for a checkout with no origin", async () => {
+    const { metadata } = await shipFrom(checkout());
+
+    expect(metadata).not.toHaveProperty("repo");
+  });
+
+  it("leaves repo out when the working directory no longer exists", async () => {
+    const { metadata } = await shipFrom(join(dir, "deleted-checkout"));
+
+    expect(metadata).not.toHaveProperty("repo");
+  });
+
+  it("leaves repo out when the resolved repo is not on GitHub", async () => {
+    const { step, fetchImpl } = makeStep({ resolveRepo: () => "gitlab.com/acme/app" });
+
+    await step([session("s1")]);
+
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).metadata).not.toHaveProperty("repo");
   });
 });

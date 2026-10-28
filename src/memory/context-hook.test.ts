@@ -192,7 +192,10 @@ describe("contextHookOutput", () => {
         { id: "sess-77", harness: "claude", path: transcript, updated: "2026-10-02T00:00:00Z" },
       ]);
 
-      expect(sentBody(ingest).metadata).toMatchObject({ project: "poc-gamma", repo: "poc-gamma" });
+      const metadata = sentBody(ingest).metadata as Record<string, unknown>;
+      expect(metadata.project).toBe("poc-gamma");
+      // Not a GitHub checkout: the key is the project's alone, never repeated as the repo.
+      expect(metadata).not.toHaveProperty("repo");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
