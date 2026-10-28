@@ -1,3 +1,10 @@
+# [0.67.0-beta.9](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.8...v0.67.0-beta.9) (2026-10-28)
+
+
+### Features
+
+* **shipper:** send the session's GitHub repository as metadata.repo ([#296](https://github.com/dosu-ai/dosu-cli/issues/296)) ([b9d5ff6](https://github.com/dosu-ai/dosu-cli/commit/b9d5ff6d475248514fb9ea99c8cac5340b323983))
+
 # [0.67.0-beta.8](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.7...v0.67.0-beta.8) (2026-10-26)
 
 
