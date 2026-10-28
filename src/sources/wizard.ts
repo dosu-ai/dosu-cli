@@ -170,6 +170,48 @@ async function askKeyPair(
   return { access_key_id, secret_access_key };
 }
 
+/** The keys this machine uploads with: the ambient environment or an entered pair. */
+async function askWriteKeys(
+  ask: Asker,
+  provider: BucketProvider,
+): Promise<"env" | BucketCredentials> {
+  const ambient = provider === "r2" ? envCredentials("R2") : envCredentials("AWS");
+  const profile = provider !== "r2" ? process.env.AWS_PROFILE : undefined;
+  const useEnv = {
+    value: "env" as const,
+    label: "Use my environment",
+    hint:
+      ambient || profile
+        ? ambient
+          ? `${provider === "r2" ? "R2" : "AWS"}_ACCESS_KEY_ID is set`
+          : `AWS_PROFILE=${profile}`
+        : `${provider === "r2" ? "R2_*" : "AWS_* variables or an AWS profile"} at upload time`,
+  };
+  const enter = {
+    value: "enter" as const,
+    label: "Enter an access key pair",
+    hint: "saved to the CLI config (0600)",
+  };
+  const choice = await ask.select(
+    {
+      message: "Keys this machine uploads with",
+      options: ambient || profile ? [useEnv, enter] : [enter, useEnv],
+    },
+    undefined,
+  );
+  return choice === "env" ? "env" : askKeyPair(ask, "Upload keys", undefined);
+}
+
+/** Earlier answers offered as defaults when the flow starts over after a failed check. */
+interface Seed {
+  bucket?: string;
+  prefix?: string;
+  owner?: string;
+  region?: string;
+  accountId?: string;
+  endpoint?: string;
+}
+
 /** Run the flow. Returns null when the user cancelled; throws `CliUsageError` for an answer
  * that cannot work. The target is saved to config before Dosu is contacted, so a connect
  * failure leaves something `dosu sources connect` can finish later. */
@@ -179,7 +221,7 @@ export async function runBucketWizard(
   io: p.PromptIO = {},
 ): Promise<BucketWizardResult | null> {
   try {
-    return await wizard(cfg, input, io);
+    return await wizard(cfg, input, io, {});
   } catch (err) {
     if (err instanceof WizardCancelled) return null;
     throw err;
@@ -190,6 +232,7 @@ async function wizard(
   cfg: Config,
   input: BucketWizardInput,
   io: p.PromptIO,
+  seed: Seed,
 ): Promise<BucketWizardResult> {
   const ask = asker(input.yes ?? false, io);
   logger.info("sources", "bucket wizard started");
@@ -204,6 +247,7 @@ async function wizard(
       {
         message: "Bucket name",
         placeholder: "my-agent-sessions",
+        initialValue: seed.bucket,
         validate: required("The bucket"),
       },
       input.bucket,
@@ -213,7 +257,7 @@ async function wizard(
     await ask.text(
       {
         message: "Prefix inside the bucket",
-        initialValue: input.prefix ?? "dosu",
+        initialValue: input.prefix ?? seed.prefix ?? "dosu",
         validate: (value) => (/^[^\s]*$/.test(value) ? undefined : "No spaces in a prefix"),
       },
       input.prefix,
@@ -229,7 +273,11 @@ async function wizard(
         {
           message: "AWS region",
           initialValue:
-            input.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1",
+            input.region ??
+            seed.region ??
+            process.env.AWS_REGION ??
+            process.env.AWS_DEFAULT_REGION ??
+            "us-east-1",
           validate: required("The region"),
         },
         input.region,
@@ -241,7 +289,7 @@ async function wizard(
         {
           message: "Cloudflare account id",
           placeholder: "32 hex characters, from the R2 dashboard",
-          initialValue: input.accountId ?? process.env.R2_ACCOUNT_ID,
+          initialValue: input.accountId ?? seed.accountId ?? process.env.R2_ACCOUNT_ID,
           validate: (value) =>
             /^[0-9a-f]{32}$/i.test(value.trim()) ? undefined : "An account id is 32 hex characters",
         },
@@ -255,7 +303,10 @@ async function wizard(
           message: "S3 endpoint URL",
           placeholder: "https://s3.example.com or http://localhost:9000",
           initialValue:
-            input.endpoint ?? process.env.AWS_ENDPOINT_URL_S3 ?? process.env.AWS_ENDPOINT_URL,
+            input.endpoint ??
+            seed.endpoint ??
+            process.env.AWS_ENDPOINT_URL_S3 ??
+            process.env.AWS_ENDPOINT_URL,
           validate: (value) =>
             /^https?:\/\/\S+$/.test(value.trim()) ? undefined : "An http(s):// URL",
         },
@@ -269,7 +320,7 @@ async function wizard(
     await ask.text(
       {
         message: "Owner id (your sessions land under owners/<id>/)",
-        initialValue: input.owner ?? defaultOwner(cfg),
+        initialValue: input.owner ?? seed.owner ?? defaultOwner(cfg),
         validate: (value) =>
           OWNER_RE.test(value.trim()) ? undefined : "Letters, digits, '.', '_' and '-' only",
       },
@@ -289,76 +340,70 @@ async function wizard(
   }
 
   // --- the keys this machine writes with --------------------------------------
-  const ambient = provider === "r2" ? envCredentials("R2") : envCredentials("AWS");
-  const profile = provider !== "r2" ? process.env.AWS_PROFILE : undefined;
-  let write: "env" | BucketCredentials;
-  if (input.write) {
-    write = input.write;
-  } else {
-    const choice = await ask.select(
-      {
-        message: "Keys this machine uploads with",
-        options: [
-          ...(ambient || profile
-            ? [
-                {
-                  value: "env" as const,
-                  label: "Use my environment",
-                  hint: ambient
-                    ? `${provider === "r2" ? "R2" : "AWS"}_ACCESS_KEY_ID is set`
-                    : `AWS_PROFILE=${profile}`,
-                },
-              ]
-            : []),
-          {
-            value: "enter" as const,
-            label: "Enter an access key pair",
-            hint: "saved to the CLI config (0600)",
-          },
-          ...(ambient || profile
-            ? []
-            : [
-                {
-                  value: "env" as const,
-                  label: "Use my environment",
-                  hint: `${provider === "r2" ? "R2_*" : "AWS_* variables or an AWS profile"} at upload time`,
-                },
-              ]),
-        ],
-      },
-      undefined,
-    );
-    write = choice === "env" ? "env" : await askKeyPair(ask, "Upload keys", undefined);
-  }
+  let write = input.write ?? (await askWriteKeys(ask, provider));
 
-  const target: BucketTarget = {
-    name,
-    url,
-    owner,
-    ...(region ? { region } : {}),
-    ...(accountId ? { account_id: accountId } : {}),
-    ...(endpoint ? { endpoint } : {}),
-    credentials: write,
-  };
-
-  // --- can this machine write there? ------------------------------------------
+  // --- can this machine write there? A failure is something to fix, not the end: re-enter
+  // the keys, try again, or start over with the other answers kept. ------------------------
   const s = p.spinner(io);
-  s.start(`Checking ${url} (owner ${owner})...`);
-  try {
-    const store = openStore(target);
-    const marker = await ensureLayout(store, `dosu-cli/${VERSION}`);
-    await probe(store, owner);
-    s.stop(
-      `${url} is writable${marker.created_by === `dosu-cli/${VERSION}` ? "" : ` (layout by ${marker.created_by})`}`,
-    );
-  } catch (err) {
-    s.stop(`Could not write to ${url}`, 1);
-    const message = err instanceof Error ? err.message : String(err);
-    throw new CliUsageError(
-      `${message}\nCheck the bucket name, ${
+  let target: BucketTarget;
+  for (;;) {
+    target = {
+      name,
+      url,
+      owner,
+      ...(region ? { region } : {}),
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(endpoint ? { endpoint } : {}),
+      credentials: write,
+    };
+    s.start(`Checking ${url} (owner ${owner})...`);
+    try {
+      const store = openStore(target);
+      const marker = await ensureLayout(store, `dosu-cli/${VERSION}`);
+      await probe(store, owner);
+      s.stop(
+        `${url} is writable${marker.created_by === `dosu-cli/${VERSION}` ? "" : ` (layout by ${marker.created_by})`}`,
+      );
+      break;
+    } catch (err) {
+      s.stop(`Could not write to ${url}`, 1);
+      const message = err instanceof Error ? err.message : String(err);
+      const hint = `Check the bucket name, ${
         provider === "s3" ? "region" : provider === "r2" ? "account id" : "endpoint"
-      } and keys (the policy needs PutObject and GetObject under ${prefix ? `${prefix}/` : "the bucket root"}), then run 'dosu sources setup' again.`,
-    );
+      } and keys (the policy needs PutObject and GetObject under ${prefix ? `${prefix}/` : "the bucket root"}).`;
+      if (input.yes) {
+        throw new CliUsageError(`${message}\n${hint} Then run 'dosu sources setup' again.`);
+      }
+      p.log.error(wrapLog(`${message}\n${hint}`), io);
+      const next = await ask.select(
+        {
+          message: "What now?",
+          options: [
+            { value: "keys" as const, label: "Re-enter the keys" },
+            { value: "retry" as const, label: "Try again", hint: "same details" },
+            {
+              value: "restart" as const,
+              label: "Start over",
+              hint: "change the bucket, prefix, account or owner; answers are kept as defaults",
+            },
+            { value: "cancel" as const, label: "Cancel" },
+          ],
+        },
+        undefined,
+      );
+      if (next === "cancel") throw new WizardCancelled();
+      if (next === "restart") {
+        return wizard(cfg, { ...input, write }, io, {
+          bucket,
+          prefix,
+          owner,
+          region,
+          accountId,
+          endpoint,
+        });
+      }
+      if (next === "keys") write = await askWriteKeys(ask, provider);
+    }
   }
 
   // --- save the target; ship there by default ---------------------------------
@@ -446,38 +491,65 @@ async function wizard(
       choice === "same" ? requireStatic(write) : await askKeyPair(ask, "Read-only keys", undefined);
   }
 
-  const body: Omit<ConnectSourceRequest, "deployment_id"> = {
-    kind: provider === "r2" ? "r2" : "s3",
-    bucket,
-    prefix,
-    owner,
-    ...(region ? { region } : {}),
-    ...(accountId ? { account_id: accountId } : {}),
-    ...(endpoint ? { endpoint } : {}),
-    ...read,
-    name,
-  };
-  s.start("Asking Dosu to read the bucket...");
+  // A failed connect is retried from here: again, with other keys for Dosu, or skipped (the
+  // target is saved either way, so `dosu sources connect` can finish it later).
   let source: SourceStatus;
-  try {
-    source = await api.connect(body);
-  } catch (err) {
-    const message =
-      err instanceof SourcesApiError
-        ? err.status === 400 || err.status === 422
-          ? `Dosu could not read ${url} as owner ${owner} with those keys: ${err.message}`
-          : `Dosu did not accept the source: ${err.message}`
-        : err instanceof Error
-          ? err.message
-          : String(err);
-    s.stop("Dosu could not connect the bucket", 1);
-    p.log.warn(
-      wrapLog(
-        `${message}\nThe target is saved; ${info(`dosu sources connect --target ${name}`)} tries again.`,
-      ),
-      io,
-    );
-    return { target, connectError: message };
+  for (;;) {
+    const body: Omit<ConnectSourceRequest, "deployment_id"> = {
+      kind: provider === "r2" ? "r2" : "s3",
+      bucket,
+      prefix,
+      owner,
+      ...(region ? { region } : {}),
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(endpoint ? { endpoint } : {}),
+      ...read,
+      name,
+    };
+    s.start("Asking Dosu to read the bucket...");
+    try {
+      source = await api.connect(body);
+      break;
+    } catch (err) {
+      const badKeys = err instanceof SourcesApiError && (err.status === 400 || err.status === 422);
+      const message =
+        err instanceof SourcesApiError
+          ? badKeys
+            ? `Dosu could not read ${url} as owner ${owner} with those keys: ${err.message}`
+            : `Dosu did not accept the source: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      s.stop("Dosu could not connect the bucket", 1);
+      const later = `The target is saved; ${info(`dosu sources connect --target ${name}`)} tries again.`;
+      if (input.yes) {
+        p.log.warn(wrapLog(`${message}\n${later}`), io);
+        return { target, connectError: message };
+      }
+      p.log.error(wrapLog(message), io);
+      const retry = { value: "retry" as const, label: "Try again" };
+      const keys = { value: "keys" as const, label: "Give Dosu different keys" };
+      const next = await p.select(
+        {
+          message: "What now?",
+          options: [
+            ...(badKeys ? [keys, retry] : [retry, keys]),
+            {
+              value: "skip" as const,
+              label: "Skip for now",
+              hint: `dosu sources connect --target ${name} finishes this later`,
+            },
+          ],
+        },
+        io,
+      );
+      // Cancelling here is skipping: the target is already saved, so this is not "nothing".
+      if (p.isCancel(next) || next === "skip") {
+        p.log.warn(wrapLog(later), io);
+        return { target, connectError: message };
+      }
+      if (next === "keys") read = await askKeyPair(ask, "Read-only keys", undefined);
+    }
   }
   s.stop(`Dosu reads ${source.url} (source "${source.name}")`);
   const configured = configuredTargets(cfg).find((t) => t.name === name);

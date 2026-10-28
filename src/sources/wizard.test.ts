@@ -288,7 +288,7 @@ describe("prompting", () => {
 });
 
 describe("the write probe", () => {
-  it("stops with the store's error and a hint, saving nothing", async () => {
+  it("with --yes stops with the store's error and a hint, saving nothing", async () => {
     probe.probe.mockRejectedValue(new Error("AccessDenied: PutObject"));
     await expect(runBucketWizard(loadConfig(), { ...FLAGS, yes: true })).rejects.toThrow(
       /AccessDenied: PutObject[\s\S]*region and keys/,
@@ -296,10 +296,154 @@ describe("the write probe", () => {
     expect(loadConfig().targets ?? []).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("interactively offers to re-enter the keys, and probes again with them", async () => {
+    probe.probe
+      .mockRejectedValueOnce(new Error("SignatureDoesNotMatch"))
+      .mockResolvedValueOnce(undefined);
+    script({
+      "What now?": "keys",
+      "Keys this machine uploads with": "enter",
+      "Upload keys: access key id": "AKIAFIXED",
+      "Upload keys: secret access key": "fixedsecret",
+      "Ship finished sessions there instead of to Dosu?": true,
+      "Let Dosu read the bucket and learn from the sessions in it?": false,
+    });
+
+    const result = await runBucketWizard(loadConfig(), FLAGS);
+
+    expect(vi.mocked(p.log.error).mock.calls.join(" ")).toContain("SignatureDoesNotMatch");
+    expect(probe.probe).toHaveBeenCalledTimes(2);
+    expect(result?.target.credentials).toEqual({
+      access_key_id: "AKIAFIXED",
+      secret_access_key: "fixedsecret",
+    });
+  });
+
+  it("interactively tries again with the same details", async () => {
+    probe.probe.mockRejectedValueOnce(new Error("timeout")).mockResolvedValueOnce(undefined);
+    script({
+      "What now?": "retry",
+      "Ship finished sessions there instead of to Dosu?": true,
+      "Let Dosu read the bucket and learn from the sessions in it?": false,
+    });
+
+    const result = await runBucketWizard(loadConfig(), FLAGS);
+
+    expect(probe.probe).toHaveBeenCalledTimes(2);
+    expect(result?.target.credentials).toEqual(FLAGS.write);
+    expect(asked()).not.toContain("Keys this machine uploads with");
+  });
+
+  it("starts over with the earlier answers as defaults and the keys kept", async () => {
+    probe.probe.mockRejectedValueOnce(new Error("NoSuchBucket")).mockResolvedValueOnce(undefined);
+    let bucketPrompts = 0;
+    script({
+      "What now?": "restart",
+      "Where do you keep your sessions?": "s3",
+      "Bucket name": "acme-sessions-fixed",
+      "Prefix inside the bucket": "dosu",
+      "AWS region": "us-east-1",
+      "Owner id (your sessions land under owners/<id>/)": "james",
+      "Ship finished sessions there instead of to Dosu?": true,
+      "Let Dosu read the bucket and learn from the sessions in it?": false,
+    });
+    vi.mocked(p.text).mockImplementation(async (opts) => {
+      if (opts.message === "Bucket name") {
+        bucketPrompts++;
+        // First pass: nothing to seed. Second pass: the earlier answer is the default.
+        expect(opts.initialValue).toBe(bucketPrompts === 1 ? undefined : "acme-sessions-typo");
+        return bucketPrompts === 1 ? "acme-sessions-typo" : "acme-sessions-fixed";
+      }
+      const answers: Record<string, string> = {
+        "Prefix inside the bucket": "dosu",
+        "AWS region": "us-east-1",
+        "Owner id (your sessions land under owners/<id>/)": "james",
+      };
+      return answers[opts.message] ?? "";
+    });
+
+    const result = await runBucketWizard(loadConfig(), {
+      write: FLAGS.write,
+      prefix: "dosu",
+      owner: "james",
+      region: "us-east-1",
+    });
+
+    expect(bucketPrompts).toBe(2);
+    expect(result?.target.url).toBe("s3://acme-sessions-fixed/dosu");
+    expect(result?.target.credentials).toEqual(FLAGS.write);
+    expect(asked().filter((m) => m === "Keys this machine uploads with")).toHaveLength(0);
+  });
+
+  it("cancelling at the failure saves nothing", async () => {
+    probe.probe.mockRejectedValue(new Error("AccessDenied"));
+    script({ "What now?": "cancel" });
+    expect(await runBucketWizard(loadConfig(), FLAGS)).toBeNull();
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
 });
 
 describe("connecting", () => {
-  it("keeps the saved target and reports why when Dosu cannot read the bucket", async () => {
+  it("interactively offers other keys for Dosu first when Dosu could not read with them", async () => {
+    fetchImpl
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: "could not list owners/james/changes/" }), {
+          status: 422,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(connected()), { status: 200 }));
+    script({
+      "Ship finished sessions there instead of to Dosu?": true,
+      "Let Dosu read the bucket and learn from the sessions in it?": true,
+      "Keys Dosu reads the bucket with": "same",
+      "What now?": "keys",
+      "Read-only keys: access key id": "AKIAREAD2",
+      "Read-only keys: secret access key": "read2secret",
+    });
+
+    const result = await runBucketWizard(loadConfig(), FLAGS);
+
+    expect(result?.source?.id).toBe(connected().id);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(
+      (fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string,
+    ) as Record<string, string>;
+    expect(second.access_key_id).toBe("AKIAREAD2");
+    const whatNow = vi.mocked(p.select).mock.calls.find(([o]) => o.message === "What now?")?.[0];
+    expect(whatNow?.options[0]?.value).toBe("keys");
+    expect(loadConfig().targets?.[0]?.source_id).toBe(connected().id);
+  });
+
+  it("interactively tries again first for any other failure, and skipping keeps the target", async () => {
+    fetchImpl
+      .mockResolvedValueOnce(new Response("", { status: 404 }))
+      .mockResolvedValueOnce(new Response("", { status: 404 }));
+    const answers: Record<string, unknown[]> = { "What now?": ["retry", "skip"] };
+    script({
+      "Ship finished sessions there instead of to Dosu?": true,
+      "Let Dosu read the bucket and learn from the sessions in it?": true,
+      "Keys Dosu reads the bucket with": "same",
+    });
+    vi.mocked(p.select).mockImplementation((async (opts: { message: string }) => {
+      if (opts.message === "What now?") return answers["What now?"]?.shift();
+      return "same";
+    }) as typeof p.select);
+
+    const result = await runBucketWizard(loadConfig(), FLAGS);
+
+    expect(result?.source).toBeUndefined();
+    expect(result?.connectError).toMatch(/did not accept the source/);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const whatNow = vi.mocked(p.select).mock.calls.find(([o]) => o.message === "What now?")?.[0];
+    expect(whatNow?.options[0]?.value).toBe("retry");
+    expect(loadConfig().targets?.[0]).toMatchObject({ name: "s3" });
+    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain(
+      "dosu sources connect --target s3",
+    );
+  });
+
+  it("with --yes keeps the saved target and reports why when Dosu cannot read the bucket", async () => {
     fetchImpl.mockResolvedValue(
       new Response(JSON.stringify({ detail: "could not list owners/james/changes/" }), {
         status: 422,
