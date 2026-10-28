@@ -19,7 +19,7 @@ import {
   unsettledSessions,
   withoutSubagents,
 } from "./state";
-import { SCAN_WINDOW_DAYS, withOutsideSessions } from "./sync";
+import { lookbackStart, withOutsideSessions } from "./sync";
 
 export interface SessionBacklog {
   /** Pending sessions past the quiet period, oldest first. */
@@ -34,8 +34,6 @@ export interface SessionBacklog {
   subagents?: number;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 /** Every session in the sync's own scan window, plus the transcripts outside the scanned roots
  * that the sync remembers and would ship too; back to `from` instead when that is longer ago. */
 function scanWindowSessions(
@@ -44,7 +42,7 @@ function scanWindowSessions(
   from?: Date,
   onUnreadable?: (harness: SessionHarness, path: string) => void,
 ): AgentSession[] {
-  const window = now.getTime() - SCAN_WINDOW_DAYS * DAY_MS;
+  const window = lookbackStart(now).getTime();
   const since = new Date(Math.min(window, from?.getTime() ?? window));
   return withOutsideSessions(
     scanAgentSessions({ since, onUnreadable }),
@@ -71,12 +69,15 @@ export function sessionsToSeal(
   return sessions;
 }
 
-/** The pending backlog within the sync's own scan window, oldest first; a failed scan reads as
- * empty. */
-export function listSessionBacklog(now: Date = new Date()): SessionBacklog {
+/** The pending backlog within the sync's own scan window, or the one `sync --age <ageDays>` would
+ * use, oldest first; a failed scan reads as empty. */
+export function listSessionBacklog(now: Date = new Date(), ageDays?: number): SessionBacklog {
   try {
     const state = loadSyncState();
-    const scanned = scanWindowSessions(state, now);
+    const since = lookbackStart(now, ageDays);
+    const scanned = scanWindowSessions(state, now, since).filter(
+      (s) => Date.parse(s.updated) >= since.getTime(),
+    );
     const resolver = createProjectDirResolver();
     const filter = studyRepoFilter(state, () => scanned, resolver);
     // The same ledger rules the sync applies, so the queue lists exactly what it would ship.
