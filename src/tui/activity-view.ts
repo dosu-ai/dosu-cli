@@ -248,6 +248,13 @@ function statusLine(status: SyncStatus): string {
       "\u00B7 a previous run exited without cleaning up",
     )}`;
   }
+  if (status.lastFailure) {
+    // The run the user just started may have died on its first upload: say so, and why, where
+    // "sync requested" was the last thing they saw.
+    return `${pc.yellow("\u25CB")} ${pc.bold("Last run failed")} ${pc.dim(
+      `\u00B7 ${status.lastFailure.message}`,
+    )}`;
+  }
   return `${pc.dim("\u25CB")} ${pc.bold("Idle")} ${pc.dim(
     "\u00B7 hooks ship new sessions automatically",
   )}`;
@@ -406,6 +413,8 @@ export function buildActivityFrame(
     : "Nothing shipped yet";
   // Queue and open-session counts live in the tab bar, not a header line.
   const queueDetail: string[] = [];
+  // What to do about the failure, when the error says (a rejected key needs a new login).
+  const hint = !status.running && status.lastFailure?.hint ? status.lastFailure.hint : null;
   if (status.backoffUntil) {
     // Manual runs skip the backoff, so point at the key instead of leaving a dead wait.
     queueDetail.push(`retrying after ${localTime(status.backoffUntil)} \u00B7 s syncs now`);
@@ -467,6 +476,7 @@ export function buildActivityFrame(
     "",
     statusLine(status),
     pc.dim(shippedSummary),
+    ...(hint ? wrapLine(hint, width).map((line) => pc.yellow(line)) : []),
     ...(queueDetail.length > 0
       ? wrapLine(queueDetail.join(" \u00B7 "), width).map((line) => pc.dim(line))
       : []),

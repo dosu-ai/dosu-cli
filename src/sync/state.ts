@@ -133,6 +133,10 @@ export interface SyncState {
   sessions: Record<string, LedgerEntry>;
   last_attempt_at?: string;
   consecutive_failures: number;
+  /** What stopped the last run that failed (`ingest failed: HTTP 401`, a transport error), kept
+   * while `consecutive_failures` counts it, so the status and the Activity screen can say why
+   * nothing shipped; cleared by the next run that fails nothing. */
+  last_failure?: string;
   /** All-time shipped-session count — survives ledger pruning. Subagents' transcripts ship with
    * their session and do not count. */
   total_shipped?: number;
@@ -268,6 +272,7 @@ function parseCommon(raw: Record<string, unknown>): Omit<SyncState, "schema_vers
   return {
     ...optionalString("last_attempt_at", raw.last_attempt_at),
     consecutive_failures: nonNegative(raw.consecutive_failures) ?? 0,
+    ...optionalString("last_failure", raw.last_failure),
     ...(Array.isArray(raw.repo_filter) ? { repo_filter: stringsOf(raw.repo_filter) } : {}),
     ...(Array.isArray(raw.project_filter) ? { project_filter: stringsOf(raw.project_filter) } : {}),
     ...(raw.paused === true ? { paused: true } : {}),
@@ -382,6 +387,7 @@ function migrate(raw: Record<string, unknown>, progress: Record<string, unknown>
   const {
     last_attempt_at: _attempt,
     consecutive_failures: _failures,
+    last_failure: _failure,
     ...settings
   } = parseCommon(raw);
   return {
@@ -460,6 +466,7 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
     const {
       last_attempt_at: _attempt,
       consecutive_failures: _failures,
+      last_failure: _failure,
       ...settings
     } = parseCommon(raw);
     return {
