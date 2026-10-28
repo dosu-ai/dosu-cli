@@ -1,11 +1,10 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
 import type { AgentSession } from "../sessions/scan";
-import { normalizeSessionRecords, redactRecords } from "./normalize";
+import { normalizeSessionRecords } from "./normalize";
 
 let dir: string;
 
@@ -273,7 +272,8 @@ describe("normalizeSessionRecords", () => {
     const path = join(dir, "ok.jsonl");
     writeFileSync(path, "{}\n");
     vi.resetModules();
-    vi.doMock("@letta-ai/trajectory", () => ({
+    vi.doMock("@dosu/sessionstorage", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("@dosu/sessionstorage")>()),
       normalizeTranscript: () => {
         throw new Error("parser bug");
       },
@@ -282,7 +282,7 @@ describe("normalizeSessionRecords", () => {
       const fresh = await import("./normalize");
       expect(await fresh.normalizeSessionRecords(session({ path }))).toBeNull();
     } finally {
-      vi.doUnmock("@letta-ai/trajectory");
+      vi.doUnmock("@dosu/sessionstorage");
       vi.resetModules();
     }
   });
@@ -488,65 +488,5 @@ describe("normalizeSessionRecords for opencode", () => {
     expect(await normalizeSessionRecords({ ...opencode, id: "ses_missing" })).toBeNull();
     expect(await normalizeSessionRecords({ ...opencode, id: "ses_x' OR '1'='1" })).toBeNull();
     expect(await normalizeSessionRecords({ ...opencode, path: join(dir, "nope.db") })).toBeNull();
-  });
-});
-
-describe("redactRecords", () => {
-  it("redacts tool args and content but never structural keys", () => {
-    const records = [
-      { role: "meta", source: "claude-code", cwd: "/repo/app" },
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          {
-            id: "toolu_01AbCdEfGhJkLmNpQr",
-            name: "Bash",
-            args: `{"command":"export API_KEY=sk-abcdefghijklmnopqrstuvwxyz123456"}`,
-          },
-        ],
-        timestamp: "2026-09-01T00:00:06.000Z",
-      },
-    ] as unknown as NormalizedRecord[];
-
-    const redacted = redactRecords(records);
-    const shipped = JSON.stringify(redacted);
-
-    expect(shipped).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
-    expect(shipped).toContain("[redacted:");
-    expect(shipped).toContain("toolu_01AbCdEfGhJkLmNpQr");
-    expect(shipped).toContain('"name":"Bash"');
-    // The input records are not mutated.
-    expect(JSON.stringify(records)).toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
-  });
-
-  it("redacts a printed CLI config's session tokens, nested and as JSON inside a string", () => {
-    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.fake-signature";
-    const refresh = "abc123def456";
-    const config = JSON.stringify(
-      { active_account: { session: { access_token: jwt, refresh_token: refresh } } },
-      null,
-      2,
-    );
-    const records = [
-      {
-        role: "tool",
-        tool_call_id: "toolu_01AbCdEfGhJkLmNpQr",
-        // The config as printed, and wrapped as a JSON string by a tool that returns JSON;
-        // `jq -r` puts the bare token at the start of an escaped line.
-        content: [{ type: "text", text: config }],
-        meta: {
-          stdout: JSON.stringify({ output: config }),
-          tail: JSON.stringify(`$ jq -r .active_account.session.access_token\n${jwt}\n`),
-        },
-      },
-    ] as unknown as NormalizedRecord[];
-
-    const shipped = JSON.stringify(redactRecords(records));
-
-    expect(shipped).not.toContain("eyJ");
-    expect(shipped).not.toContain(refresh);
-    expect(shipped).toContain("[redacted:jwt]");
-    expect(shipped).toContain("toolu_01AbCdEfGhJkLmNpQr");
   });
 });

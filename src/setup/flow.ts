@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { OAuthCallbackError } from "../auth/errors";
 import { Client, type Deployment, type Org, SessionExpiredError } from "../client/client";
-import { installSkill, skillInstallTargetForProvider } from "../commands/skill";
 import {
   bindAccountIdentity,
   type Config,
@@ -28,7 +27,6 @@ import type { AgentSession } from "../sessions/scan";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
-  filterSessionsByRepo,
   isAgentIncognito,
   isShippingEnabled,
   loadSyncState,
@@ -37,16 +35,10 @@ import {
   withoutSubagents,
 } from "../sync/state";
 import { runKnowledgeSync } from "../sync/sync";
-import { recordCommandFacets } from "../telemetry/telemetry";
-import { runActivityView } from "../tui/activity-view";
 import { installCenteredLayout } from "../tui/layout";
 import * as p from "../tui/prompts";
 import { writeMcpRefreshCache } from "../version/mcp-refresh-check";
 import { VERSION } from "../version/version";
-import { inGitWorkTree, stepUpdateAgentsMd } from "./agents-md-step";
-import { trackCliOnboardingEvent, trackCliOnboardingPreAuthEvent } from "./analytics";
-import { stepConfigureAgentRules } from "./rules-step";
-import { canPickScope, scopeCandidates, stepPickSyncScope } from "./scope-step";
 import {
   brand,
   brandBadge,
@@ -113,21 +105,6 @@ interface CliOnboardingProfile {
   // the CLI deliberately no longer reads it.
 }
 
-const OAUTH_ANALYTICS_REASONS = new Set([
-  "access_denied",
-  "bad_oauth_state",
-  "invalid_request",
-  "invalid_scope",
-  "server_error",
-  "temporarily_unavailable",
-  "unauthorized_client",
-  "unsupported_response_type",
-]);
-
-function trackInBackground(tracking: Promise<void>): void {
-  void tracking.catch(() => {});
-}
-
 export async function runSetup(opts: SetupOptions = {}): Promise<void> {
   // Center the wizard in wide terminals; a no-op inside the TUI (which
   // already installed the layout) and in non-TTY contexts.
@@ -148,12 +125,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     }`,
   );
   p.intro(`${brandBadge("dosu")} setup`);
-  trackInBackground(
-    trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_launch_attempted", {
-      has_deployment_option: Boolean(opts.deploymentID),
-      mode_option: opts.mode,
-    }),
-  );
 
   let cfg = loadConfig();
 
@@ -170,7 +141,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   const authed = await stepAuthenticate(cfg, onboardingRunID);
   if (!authed) return;
   cfg = authed.cfg;
-  trackInBackground(trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_auth_completed"));
 
   let apiClient = new Client(cfg);
   let cloudSetupContext: CloudSetupContext | null = null;
@@ -180,25 +150,11 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     s.start("Loading your workspace...");
     cloudSetupContext = await resolveCloudSetupContext(cfg);
     if (!cloudSetupContext) {
-      trackInBackground(
-        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-          reason: "cloud_setup_context_failed",
-        }),
-      );
       s.stop("Workspace load failed");
       return;
     }
     s.stop("Workspace loaded");
   }
-  trackInBackground(
-    trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_started", {
-      flow_kind: cloudSetupContext
-        ? cloudSetupContext.finishedOnboarding
-          ? "setup"
-          : "onboarding"
-        : "oss",
-    }),
-  );
 
   // The CLI-side flag only triggers one browser handshake; the browser decides whether the
   // wizard is actually needed. `--deployment` stays an explicit escape hatch.
@@ -211,11 +167,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   if (needsHandshake) {
     const handshook = await stepSetupHandshake(cfg, onboardingRunID);
     if (!handshook) {
-      trackInBackground(
-        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-          reason: "web_onboarding_incomplete",
-        }),
-      );
       return;
     }
     // The browser may hand back a different account; re-resolve with the returned session and
@@ -225,11 +176,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     if (refreshed === null) {
       // Context load failed (it already printed the real error) — this is a
       // transient/API problem, not an onboarding state.
-      trackInBackground(
-        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-          reason: "cloud_setup_context_failed",
-        }),
-      );
       return;
     }
     if (!refreshed.finishedOnboarding) {
@@ -239,11 +185,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
         wrapLog(
           "Your account still needs onboarding. Finish it in the browser at the Dosu app, then re-run `dosu setup`.",
         ),
-      );
-      trackInBackground(
-        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-          reason: "onboarding_incomplete_after_handshake",
-        }),
       );
       // The one deliberately non-zero setup exit: scripts chaining
       // `dosu setup && …` must not proceed on a half-onboarded account.
@@ -258,11 +199,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   if (!cfg.active_account?.target?.deployment_id || opts.deploymentID) {
     const ok = await resolveDeployment(apiClient, cfg, opts);
     if (!ok) {
-      trackInBackground(
-        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-          reason: "deployment_resolution_failed",
-        }),
-      );
       return;
     }
   }
@@ -277,25 +213,15 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   // before minting a new one, so it's safe to call on every run.
   const apiKey = await stepMintAPIKey(apiClient, cfg);
   if (!apiKey) {
-    trackInBackground(
-      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_failed", {
-        reason: "api_key_failed",
-      }),
-    );
     return;
   }
   updateTarget(cfg, { api_key: apiKey });
   saveConfig(cfg);
 
-  // Agent selection is the only install choice. Every successfully configured
-  // agent receives the full supported bundle: MCP, rules, and skill.
+  // Agent selection is the only install choice: each configured agent gets the MCP entry and
+  // its session hooks.
   const configured = await stepConfigureMcpTools(cfg);
   if (configured === null) {
-    trackInBackground(
-      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_cancelled", {
-        reason: "mcp_selection_cancelled",
-      }),
-    );
     return;
   }
 
@@ -307,51 +233,6 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
     (result) => (result.action === "install" || result.action === "skip") && !result.error,
   );
   const mcpCompleted = configuredProviders.length > 0;
-  if (mcpCompleted) {
-    trackInBackground(
-      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_mcp_configured", {
-        provider_count: configuredProviders.length,
-        providers: configuredProviders.map((result) => result.provider.id()),
-      }),
-    );
-  }
-
-  // Skill installation follows the same agent selection as MCP and rules; unsupported clients
-  // are left alone.
-  let skillCompleted = false;
-  const skillProviders = configuredProviders
-    .map((result) => result.provider)
-    .filter((provider) => skillInstallTargetForProvider(provider.id()) !== null);
-  if (skillProviders.length > 0) {
-    skillCompleted = await runInstallSkill(skillProviders);
-    if (skillCompleted) {
-      trackInBackground(
-        trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_skill_installed"),
-      );
-    }
-  }
-
-  // Project instructions are part of the bundle when setup runs inside a git
-  // work tree and at least one agent was configured.
-  let agentsMdCompleted = false;
-  if (mcpCompleted && inGitWorkTree()) {
-    agentsMdCompleted = await stepUpdateAgentsMd();
-  }
-
-  if (mcpCompleted || skillCompleted || agentsMdCompleted) {
-    // Hooks are what make the new CLI learn continuously, so activation needs to know whether
-    // any were enabled alongside the MCP installs — not just that MCP was configured.
-    const hookCount = configuredProviders.filter((result) => result.hook).length;
-    trackInBackground(
-      trackCliOnboardingEvent(cfg, onboardingRunID, "cli_onboarding_completed", {
-        completed_mcp: mcpCompleted,
-        completed_skill: skillCompleted,
-        completed_agents_md: agentsMdCompleted,
-        completed_hooks: hookCount > 0,
-        hook_count: hookCount,
-      }),
-    );
-  }
 
   // Backfill offer: ship the last 30 days now, or pass them over and start from here.
   if (mcpCompleted && cfg.mode !== MODE_OSS) {
@@ -394,44 +275,20 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   logger.info("setup", "Step: offer initial knowledge sync");
   const s = p.spinner();
   s.start("Checking for agent sessions from the last 30 days...");
-  // Every repo's backlog, so the scope picker can offer repos the stored scope leaves out.
-  const outcome = await runKnowledgeSync({ everyRepo: true });
-  // Read after the run, which converts a legacy folder scope to repos.
-  const storedScope = loadSyncState().repo_filter ?? null;
-  const everyBacklog =
-    outcome.status === "backlog" ? unsettledSessions(outcome.sessions, state) : [];
+  const outcome = await runKnowledgeSync({});
+  const backlog = outcome.status === "backlog" ? unsettledSessions(outcome.sessions, state) : [];
   // Subagents' transcripts go (or are skipped) with their sessions; the offer counts sessions,
   // and none of an agent in incognito, which never ship (declining settles them as its switch
   // would, too).
   const lineage = sessionLineage(outcome.sessions);
   const offered = (sessions: readonly AgentSession[]) =>
     withoutSubagents(sessions).filter((session) => !isAgentIncognito(state, session, lineage));
-  // Sync tagged each session with its repo; narrowing re-applies a scope as sync would.
-  const inScope = (scope: readonly string[] | null) =>
-    filterSessionsByRepo(everyBacklog, scope, (session) => session.repo ?? null);
-  const candidates = scopeCandidates(offered(everyBacklog), storedScope);
-  const pickScope = canPickScope(candidates);
-  let backlog = pickScope ? everyBacklog : inScope(storedScope);
-  let n = offered(backlog).length;
+  const n = offered(backlog).length;
   if (n === 0) {
     s.stop("No recent agent sessions. Dosu memory learns from new ones as you work.");
-    recordCommandFacets({ backfill_offer: "not-offered" });
     return;
   }
   s.stop(`Found ${n} agent session${n === 1 ? "" : "s"} from the last 30 days on this machine.`);
-  if (pickScope) {
-    // Before the backfill: only the picked repos' sessions are offered, and later syncs keep to
-    // them too.
-    backlog = inScope(await stepPickSyncScope(candidates, storedScope));
-    n = offered(backlog).length;
-    if (n === 0) {
-      p.log.info(
-        wrapLog("No sessions from those repos are waiting. Dosu memory learns from new ones."),
-      );
-      recordCommandFacets({ backfill_offer: "not-offered" });
-      return;
-    }
-  }
   const them = n === 1 ? "it" : "them";
   // What happens to the sessions, why it's worth it, and how to keep something out.
   const incognito = installedIncognitoCommands();
@@ -453,34 +310,24 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
     initialValue: true,
   });
   if (p.isCancel(shipNow) || !shipNow) {
-    recordCommandFacets({ backfill_offer: p.isCancel(shipNow) ? "cancelled" : "declined" });
     // Exactly the sessions offered, each settled as the user's call; anything that finishes or
     // changes from here on still ships.
     skipBacklog(backlog, VERSION);
     p.log.info(
       wrapLog(
-        `Only sessions from now on will ship. To send these later, clear the shipping history on the Activity screen and run ${info("dosu knowledge sync --bootstrap")}.`,
+        `Only sessions from now on will ship. To send these later, run ${info("dosu knowledge sync --bootstrap")}.`,
       ),
     );
     return;
   }
 
   if (spawnDetachedSelf(["knowledge", "sync", "--quiet", "--bootstrap"])) {
-    recordCommandFacets({ backfill_offer: "accepted" });
     p.log.success(
       wrapLog(
-        `\uD83D\uDCDA Shipping ${n} session${n === 1 ? "" : "s"} in the background. Watch progress on the Activity screen; Dosu memory learns from each session after it arrives, and agents connected to this MCP can use what it learns.`,
+        `\uD83D\uDCDA Shipping ${n} session${n === 1 ? "" : "s"} in the background. Follow along with ${info("dosu knowledge sync --status")}; Dosu memory learns from each session after it arrives, and agents connected to this MCP can use what it learns.`,
       ),
     );
-    const watch = await p.confirm({
-      message: "What next?",
-      active: "Watch it work",
-      inactive: "Go to home",
-      initialValue: true,
-    });
-    if (!p.isCancel(watch) && watch) await runActivityView();
   } else {
-    recordCommandFacets({ backfill_offer: "spawn-failed" });
     p.log.warn(`Could not start the background sync. Run ${info("dosu knowledge sync")} manually.`);
   }
 }
@@ -525,46 +372,7 @@ async function stepConfigureMcpTools(cfg: Config): Promise<ConfigResult[] | null
   if (!selection) return null;
   const results = stepConfigureTools(cfg, selection);
   stepShowSummary(results);
-  await stepConfigureAgentRules(selection, results);
   return results;
-}
-
-/** Install the skill for the providers selected during MCP setup. Returns `true` on success. */
-export async function runInstallSkill(providers: readonly SetupProvider[]): Promise<boolean> {
-  logger.info("setup", "Step: install skill");
-  const spinner = p.spinner();
-  const agentLabel = providers.length === 1 ? "agent" : "agents";
-  spinner.start(`Installing skill for ${providers.length} ${agentLabel}`);
-  try {
-    const result = await installSkill(providers.map((provider) => provider.id()));
-    if (result.success) {
-      logger.info("setup", `Skill installed${result.version ? ` v${result.version}` : ""}`);
-      const items = providers.flatMap((provider) => {
-        const target = skillInstallTargetForProvider(provider.id());
-        if (!target) return [];
-        return [
-          {
-            label: provider.name(),
-            path: target.path,
-            status: target.symlink ? "symlink" : undefined,
-          },
-        ];
-      });
-      spinner.stop("Skill installed");
-      p.log.success(formatSetupSummary(`Skill ready for ${items.length} agent(s):`, items));
-      return true;
-    }
-    spinner.stop("Skill install failed");
-    p.log.error("Failed to install skill. Run `dosu skill install` to retry.");
-    return false;
-  } catch (err: unknown) {
-    /* v8 ignore next -- err is always Error in practice */
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("setup", `Skill install failed: ${msg}`);
-    spinner.stop("Skill install failed");
-    p.log.error(`Skill install failed: ${msg}`);
-    return false;
-  }
 }
 
 interface AuthenticatedSetup {
@@ -609,9 +417,6 @@ async function stepAuthenticate(
   }
 
   if (onboardingRunID) {
-    trackInBackground(
-      trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_started"),
-    );
   }
   return await openBrowserForSetup(cfg, onboardingRunID);
 }
@@ -668,31 +473,14 @@ async function openBrowserForSetup(
     if (err instanceof OAuthCallbackError) {
       p.log.error(err.userMessage);
       if (onboardingRunID) {
-        trackInBackground(
-          trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
-            reason: cliAuthFailureReason(err),
-          }),
-        );
       }
       return null;
     }
     p.log.error(`Authentication failed: ${err instanceof Error ? err.message : String(err)}`);
     if (onboardingRunID) {
-      trackInBackground(
-        trackCliOnboardingPreAuthEvent(onboardingRunID, "cli_onboarding_auth_failed", {
-          reason: cliAuthFailureReason(err),
-        }),
-      );
     }
     return null;
   }
-}
-
-/** Stable, low-cardinality analytics reason. Raw OAuth/error text may contain local data. */
-export function cliAuthFailureReason(err: unknown): string {
-  if (!(err instanceof OAuthCallbackError)) return "unexpected_auth_error";
-  const code = err.errorCode;
-  return code && OAUTH_ANALYTICS_REASONS.has(code) ? code : "oauth_callback_error";
 }
 
 /** The handshake may contain the whole onboarding wizard (even an org-admin approval), so it

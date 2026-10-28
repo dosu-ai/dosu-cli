@@ -38,7 +38,7 @@ let logFilePath: string | null = null;
  * across everything after it. */
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, "g");
 
-export function stripAnsiCodes(text: string): string {
+function stripAnsiCodes(text: string): string {
   return text.replace(ANSI_PATTERN, "");
 }
 

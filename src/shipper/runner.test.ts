@@ -1,14 +1,12 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NormalizedRecord } from "@letta-ai/trajectory";
+import { MIN_SESSION_CHARS, type NormalizedRecord, prefixSha256 } from "@dosu/sessionstorage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectKey } from "../sessions/project";
 import type { AgentSession } from "../sessions/scan";
-import { prefixSha256 } from "./continuation";
 import { createShipStep } from "./runner";
 import type { SessionUsage } from "./usage";
-import { MIN_SESSION_CHARS } from "./worthiness";
 
 const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({

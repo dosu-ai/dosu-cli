@@ -1,22 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockQuery = vi.fn();
-const mockMutate = vi.fn();
-
-function createMockProxy(path: string[] = []): unknown {
-  return new Proxy(() => {}, {
-    get(_, prop: string) {
-      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
-      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
-      return createMockProxy([...path, prop]);
-    },
-  });
-}
-
-vi.mock("../client/trpc", () => ({
-  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
-}));
-
 const mockLoadConfig = vi.fn();
 vi.mock("../config/config", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config")>()),
@@ -52,11 +35,6 @@ vi.mock("../sync/state", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../sync/state")>()),
   loadSyncState: (...args: unknown[]) => mockLoadSyncState(...args),
   setShipTranscripts: (...args: unknown[]) => mockSetShipTranscripts(...args),
-}));
-
-const mockEmitReport = vi.fn();
-vi.mock("../report/generate", () => ({
-  emitKnowledgeReport: (...args: unknown[]) => mockEmitReport(...args),
 }));
 
 interface FakeAgent {
@@ -111,7 +89,6 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
 import { HookConfigError } from "../hooks/formats";
-import { consumeCommandFacets } from "../telemetry/telemetry";
 import { knowledgeCommand } from "./knowledge";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -130,7 +107,7 @@ const validFlatConfig: FlatTestConfig = {
 };
 const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
   makeTestConfig({ ...validFlatConfig, ...overrides });
-const validConfig = makeValidConfig();
+const _validConfig = makeValidConfig();
 
 function allOutput(): string {
   return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
@@ -143,7 +120,6 @@ async function run(...args: string[]) {
 }
 
 beforeEach(() => {
-  mockQuery.mockReset();
   mockLoadConfig.mockReset();
   mockRunSync.mockReset();
   mockSpawnDetached.mockReset();
@@ -151,8 +127,6 @@ beforeEach(() => {
   mockListBacklog.mockReset();
   mockLoadSyncState.mockReset();
   mockLoadSyncState.mockReturnValue({ schema_version: 3, sessions: {}, consecutive_failures: 0 });
-  mockEmitReport.mockReset();
-  mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
   mockSetShipTranscripts.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
@@ -167,7 +141,6 @@ beforeEach(() => {
   stdinSpy = vi
     .spyOn(process, "stdin", "get")
     .mockReturnValue({ isTTY: true } as unknown as typeof process.stdin);
-  consumeCommandFacets(); // start each test with an empty analytics facet store
 });
 
 afterEach(() => {
@@ -176,156 +149,6 @@ afterEach(() => {
   exitSpy.mockRestore();
   stdinSpy.mockRestore();
   process.exitCode = undefined;
-});
-
-describe("knowledge search", () => {
-  it("orchestrates dataSource.list then search.getMentions with extracted IDs", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery
-      .mockResolvedValueOnce([
-        { id: "ds1", name: "GH" },
-        { id: "ds2", name: "Slack" },
-      ])
-      .mockResolvedValueOnce({ documents: [{ title: "Doc A", similarity: 0.95 }] });
-
-    await run("search", "test query");
-
-    expect(mockQuery).toHaveBeenCalledTimes(2);
-    const [proc1, input1] = mockQuery.mock.calls[0];
-    expect(proc1).toBe("dataSource.list");
-    expect(input1).toEqual({ org_id: "org1", excluded_provider_slugs: [] });
-
-    const [proc2, input2] = mockQuery.mock.calls[1];
-    expect(proc2).toBe("search.getMentions");
-    expect(input2.dataSourceIds).toEqual(["ds1", "ds2"]);
-    expect(input2.query).toBe("test query");
-  });
-
-  it("outputs valid JSON with --json flag", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery
-      .mockResolvedValueOnce([{ id: "ds1" }])
-      .mockResolvedValueOnce({ documents: [{ title: "Result", similarity: 0.8 }] });
-
-    await run("search", "--json", "query");
-
-    const output = JSON.parse(allOutput());
-    expect(output.documents).toHaveLength(1);
-    expect(output.documents[0]).toMatchObject({ title: "Result", similarity: 0.8 });
-  });
-
-  it("prints message when no data sources connected", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
-
-    await run("search", "query");
-
-    expect(allOutput()).toContain("No data sources connected");
-  });
-
-  it("prints message when search returns empty", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({ documents: [] });
-
-    await run("search", "query");
-
-    expect(allOutput()).toContain("No results found");
-  });
-
-  it("respects --limit and shows remaining count", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    const results = Array.from({ length: 5 }, (_, i) => ({
-      title: `Doc ${i}`,
-      similarity: 0.9 - i * 0.1,
-    }));
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({ documents: results });
-
-    await run("search", "--limit", "3", "query");
-
-    const output = allOutput();
-    expect(output).toContain("2 more results not shown");
-  });
-
-  it("rejects an invalid limit before calling tRPC", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    await expect(run("search", "--limit", "0", "query")).rejects.toThrow();
-    expect(mockQuery).not.toHaveBeenCalled();
-  });
-
-  it("falls back to placeholders for untitled or untyped results", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }, { id: null }]).mockResolvedValueOnce({
-      documents: [
-        { title: null, entity_type: null },
-        { title: "Typed", entity_type: "issue" },
-      ],
-    });
-
-    await run("search", "query");
-
-    // Null data source IDs are dropped before the search call.
-    expect(mockQuery.mock.calls[1][1].dataSourceIds).toEqual(["ds1"]);
-    const output = allOutput();
-    expect(output).toContain("(untitled)");
-    expect(output).toContain("issue");
-    expect(output).not.toContain("more results not shown");
-  });
-
-  it("treats a missing documents field as no results", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1" }]).mockResolvedValueOnce({});
-
-    await run("search", "query");
-
-    expect(allOutput()).toContain("No results found");
-  });
-});
-
-describe("knowledge list", () => {
-  it("calls knowledgeStore.getBySpaceId with space_id", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1", space_id: "sp1" });
-
-    await run("list");
-
-    expect(mockQuery).toHaveBeenCalledWith("knowledgeStore.getBySpaceId", { space_id: "sp1" });
-  });
-
-  it("outputs valid JSON with --json flag", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({ id: "ks1", space_id: "sp1" });
-
-    await run("list", "--json");
-
-    expect(JSON.parse(allOutput())).toMatchObject({ id: "ks1", space_id: "sp1" });
-  });
-
-  it("prints message when store is null", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce(null);
-
-    await run("list");
-
-    expect(allOutput()).toContain("No knowledge store found");
-  });
-});
-
-describe("requireConfig", () => {
-  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("search", "q")).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
-    expect(exitSpy).not.toHaveBeenCalled();
-  });
-
-  it("exits when org_id is missing", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
-    await expect(run("search", "q")).rejects.toThrow("exit");
-  });
-
-  it("exits when space_id is missing", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
-    await expect(run("search", "q")).rejects.toThrow("exit");
-  });
 });
 
 describe("knowledge sessions", () => {
@@ -772,117 +595,6 @@ describe("knowledge sync", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("--json --report keeps the outcome on stdout when the report fails", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue(new Error("no notes to render"));
-
-    await run("sync", "--json", "--report");
-
-    expect(JSON.parse(allOutput())).toEqual({
-      status: "nothing-new",
-      readySessions: 0,
-      inFlightSessions: 0,
-      report_error: "no notes to render",
-    });
-    // Studying succeeded; a report failure alone does not fail the command.
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it("--json --report stringifies non-Error report failures", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue("disk full");
-
-    await run("sync", "--json", "--report");
-
-    expect(JSON.parse(allOutput())).toMatchObject({ report_error: "disk full" });
-  });
-
-  it("--report prints the failure and sets the exit code after a foreground sync", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue(new Error("browser missing"));
-
-    await run("sync", "--report");
-
-    expect(allOutput()).toContain("No new finished sessions");
-    expect(allOutput()).not.toContain("Wrote ");
-    expect(errorSpy.mock.calls.join(" ")).toContain("browser missing");
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("--report stringifies non-Error failures", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue("disk full");
-
-    await run("sync", "--report");
-
-    expect(errorSpy.mock.calls.join(" ")).toContain("disk full");
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("knowledge report --json prints the path and never opens a browser", async () => {
-    await run("report", "--json", "--out", "/tmp/custom-report.html");
-
-    expect(mockEmitReport).toHaveBeenCalledWith({ out: "/tmp/custom-report.html", open: false });
-    expect(JSON.parse(allOutput())).toEqual({ report: "/tmp/dosu-knowledge-report.html" });
-  });
-
-  it("knowledge report opens the browser by default", async () => {
-    await run("report");
-
-    expect(mockEmitReport).toHaveBeenCalledWith({ out: undefined, open: true });
-  });
-
-  it("--report writes and opens the harvest HTML after a foreground sync", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
-    mockRunSync.mockResolvedValue({
-      status: "shipped",
-      readySessions: 2,
-      inFlightSessions: 0,
-      sessions: [],
-      settledSessions: 2,
-      counts: { shipped: 2, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 0 },
-    });
-
-    await run("sync", "--report", "--out", "/tmp/custom-report.html");
-
-    expect(mockEmitReport).toHaveBeenCalledWith({
-      out: "/tmp/custom-report.html",
-      open: true,
-    });
-    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
-  });
-
-  it("knowledge report writes the HTML without running sync", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
-    await run("report", "--no-open");
-    expect(mockRunSync).not.toHaveBeenCalled();
-    expect(mockEmitReport).toHaveBeenCalledWith({
-      out: undefined,
-      open: false,
-    });
-    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
-  });
-
-  it("--quiet --report stays silent and does not write HTML", async () => {
-    mockRunSync.mockResolvedValue({ status: "shipped", readySessions: 0, inFlightSessions: 0 });
-    await run("sync", "--quiet", "--report");
-    expect(mockEmitReport).not.toHaveBeenCalled();
-    expect(logSpy).not.toHaveBeenCalled();
-  });
-
-  it("--json --report includes the HTML path and does not open a browser", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    await run("sync", "--json", "--report", "--out", "/tmp/custom-report.html");
-    expect(mockEmitReport).toHaveBeenCalledWith({
-      out: "/tmp/custom-report.html",
-      open: false,
-    });
-    expect(JSON.parse(allOutput())).toMatchObject({
-      status: "nothing-new",
-      report: "/tmp/dosu-knowledge-report.html",
-    });
-  });
-
   it("--detach re-spawns and never runs the pipeline inline", async () => {
     await run("sync", "--quiet", "--detach");
 
@@ -970,21 +682,8 @@ describe("knowledge sync", () => {
     expect(mockRunSync).not.toHaveBeenCalled();
   });
 
-  it("--detach forwards --report and --out to the re-spawned run", async () => {
-    await run("sync", "--detach", "--report", "--out", "/tmp/custom-report.html");
-
-    expect(mockSpawnDetached).toHaveBeenCalledWith([
-      "knowledge",
-      "sync",
-      "--report",
-      "--out",
-      "/tmp/custom-report.html",
-    ]);
-    expect(mockEmitReport).not.toHaveBeenCalled();
-  });
-
   /** A run that shipped `settled` of `ready` sessions (5 by default). */
-  function shippedOutcome(ready: number, settled = Math.min(ready, 5)) {
+  function _shippedOutcome(ready: number, settled = Math.min(ready, 5)) {
     return {
       status: "shipped",
       readySessions: ready,
@@ -1001,149 +700,6 @@ describe("knowledge sync", () => {
       },
     };
   }
-
-  describe("analytics facets", () => {
-    it("tags a hook-triggered ship run with its status and bucketable count", async () => {
-      mockRunSync.mockResolvedValue(shippedOutcome(8));
-
-      await run("sync", "--quiet");
-
-      expect(consumeCommandFacets()).toEqual({
-        sync_trigger: "hook",
-        sync_status: "shipped",
-        sessions_shipped: 5,
-      });
-    });
-
-    it("tags a manual run that only reported the backlog", async () => {
-      mockRunSync.mockResolvedValue({
-        status: "backlog",
-        readySessions: 3,
-        inFlightSessions: 1,
-        sessions: [],
-      });
-
-      await run("sync");
-
-      expect(consumeCommandFacets()).toEqual({
-        sync_trigger: "manual",
-        sync_status: "backlog",
-        sessions_shipped: 0,
-      });
-    });
-
-    it("tags a bootstrap run with what it shipped", async () => {
-      mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
-
-      await run("sync", "--bootstrap");
-
-      expect(consumeCommandFacets()).toEqual({
-        sync_trigger: "bootstrap",
-        sync_status: "shipped",
-        sessions_shipped: 8,
-      });
-    });
-
-    it("tags a flush as its own trigger, even when run with --quiet", async () => {
-      mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
-
-      await run("sync", "--flush", "--quiet");
-
-      expect(consumeCommandFacets()).toEqual({
-        sync_trigger: "flush",
-        sync_status: "shipped",
-        sessions_shipped: 8,
-      });
-    });
-
-    it("tags the --detach parent so it is never counted as a pipeline run", async () => {
-      mockSpawnDetached.mockReturnValue(true);
-
-      await run("sync", "--quiet", "--detach");
-
-      expect(consumeCommandFacets()).toEqual({ sync_trigger: "hook", sync_status: "detached" });
-    });
-
-    it("reports a failed detached spawn", async () => {
-      mockSpawnDetached.mockReturnValue(false);
-
-      await run("sync", "--detach", "--bootstrap");
-
-      expect(consumeCommandFacets()).toEqual({
-        sync_trigger: "bootstrap",
-        sync_status: "detach-failed",
-      });
-    });
-
-    it("tags --status as a read-only invocation", async () => {
-      mockGetSyncStatus.mockReturnValue({
-        running: false,
-        state: { schema_version: 3, sessions: {}, consecutive_failures: 0 },
-        outcomes: {},
-        attention: [],
-        recentActivity: [],
-      });
-
-      await run("sync", "--status");
-
-      expect(consumeCommandFacets()).toEqual({
-        sync_trigger: "manual",
-        sync_status: "status-only",
-      });
-    });
-  });
-
-  it("--retry-rejected retries only what was refused before the command started", async () => {
-    mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
-    const before = Date.now();
-
-    await run("sync", "--bootstrap", "--retry-rejected");
-
-    expect(mockRunSync).toHaveBeenCalledTimes(1);
-    const bound = mockRunSync.mock.calls[0][0].retryRejectedBefore as Date;
-    expect(bound.getTime()).toBeGreaterThanOrEqual(before);
-  });
-
-  it("without --retry-rejected, refused sessions stay settled", async () => {
-    mockRunSync.mockResolvedValue(shippedOutcome(1));
-
-    await run("sync");
-
-    expect(mockRunSync.mock.calls[0][0].retryRejectedBefore).toBeUndefined();
-  });
-
-  it.each(["--bootstrap", "--flush"])("%s ships the whole backlog in one run", async (flag) => {
-    mockRunSync.mockResolvedValue(shippedOutcome(25, 25));
-
-    await run("sync", flag);
-
-    expect(mockRunSync).toHaveBeenCalledTimes(1);
-    expect(mockRunSync.mock.calls[0][0].flush).toBe(flag === "--flush" ? true : undefined);
-    expect(allOutput()).toContain("Shipped 25 sessions");
-  });
-
-  it("--bootstrap --quiet ships silently", async () => {
-    mockRunSync.mockResolvedValue(shippedOutcome(8, 8));
-
-    await run("sync", "--quiet", "--bootstrap");
-
-    expect(mockRunSync).toHaveBeenCalledTimes(1);
-    expect(logSpy).not.toHaveBeenCalled();
-  });
-
-  it("--bootstrap without a ship step stays single-shot", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
-    mockRunSync.mockResolvedValue({
-      status: "backlog",
-      readySessions: 4,
-      inFlightSessions: 0,
-      sessions: [],
-    });
-
-    await run("sync", "--bootstrap");
-
-    expect(mockRunSync).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("knowledge sync --status", () => {

@@ -20,11 +20,9 @@
     "dev": "DOSU_DEV=true bun --env-file=.env.production run src/index.ts",
     "dev:local": "DOSU_DEV=true bun --env-file=.env.development run src/index.ts",
     "reset:dev": "bun run scripts/reset-dev.ts",
-    "embed:skills": "bun run scripts/embed-skills.ts",
     "build": "bun --env-file=.env.production run scripts/build-compile.ts",
     "build:dev": "bun --env-file=.env.development run scripts/build-compile.ts",
     "build:npm": "DOSU_INSTALL_CHANNEL=npm bun --env-file=.env.production run scripts/build-npm.ts",
-    "upload:sourcemaps": "sentry-cli sourcemaps upload --org dosu-ai --project dosu-cli --validate --wait --strict --url-prefix app:///bin bin/dosu.js bin/dosu.js.map",
     "build:all": "bun --env-file=.env.production run scripts/build-all.ts",
     "test": "bunx vitest run",
     "test:watch": "bunx vitest",
@@ -38,14 +36,14 @@
   "engines": {
     "node": ">=22"
   },
+  "dependencies": {
+    "@dosu/sessionstorage": "file:../sessiondb"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
-    "@clack/prompts": "^1.6.0",
-    "@letta-ai/trajectory": "^0.3.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
-    "@sentry/cli": "3.6.2",
     "@trpc/client": "11.18.0",
     "@trpc/server": "11.18.0",
     "@types/bun": "1.4.2",

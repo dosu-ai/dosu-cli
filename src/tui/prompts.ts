@@ -138,23 +138,20 @@ export function spinner(io: PromptIO = {}): Spinner {
 
 // --- Interactive prompts ---
 
-export type FrameAction<T> =
+type FrameAction<T> =
   | { type: "render" }
   | { type: "done"; value: T; echo?: string }
   | { type: "cancel" }
   | { type: "none" };
 
-export interface FrameController<T> {
+interface FrameController<T> {
   render(): string[];
   handle(key: string): FrameAction<T>;
 }
 
 /** Draw/redraw a frame, route keys, and collapse or erase on finish; exported so bespoke
  * prompts can share the kit's frame machinery. */
-export function runInteractive<T>(
-  controller: FrameController<T>,
-  io: PromptIO = {},
-): Promise<T | symbol> {
+function runInteractive<T>(controller: FrameController<T>, io: PromptIO = {}): Promise<T | symbol> {
   const { input, output } = resolveIO(io);
   if (!input.isTTY) return Promise.resolve(CANCEL);
 
@@ -219,7 +216,7 @@ export function runInteractive<T>(
 }
 
 /** The collapsed "✔ message · answer" line prompts leave behind. */
-export function answeredEcho(message: string, answer: string): string {
+function answeredEcho(message: string, answer: string): string {
   return `${brand(CHECK)} ${pc.bold(message)} ${pc.dim(`${DOT} ${answer}`)}`;
 }
 

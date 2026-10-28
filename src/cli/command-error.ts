@@ -6,7 +6,7 @@
  * expected account or input state, so telemetry reports it to analytics but not to Sentry.
  * Adding a code is a telemetry schema change: document it in docs/telemetry.md. */
 
-export const COMMAND_ERROR_CODES = [
+const COMMAND_ERROR_CODES = [
   // Account and saved-context prerequisites
   "NOT_LOGGED_IN",
   "NO_ORG_SELECTED",

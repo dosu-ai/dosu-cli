@@ -3,7 +3,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUNDLE_DEBUG_ID_PLACEHOLDER } from "../src/telemetry/debug-id";
 import { buildDefines } from "./build-all";
 
 const SCRIPT_DIR =
@@ -13,7 +12,6 @@ const OUTFILE = join(REPOSITORY_ROOT, "bin", "dosu.js");
 const SOURCE_MAP_FILE = `${OUTFILE}.map`;
 const NODE_SHEBANG = "#!/usr/bin/env node";
 
-export { BUNDLE_DEBUG_ID_PLACEHOLDER } from "../src/telemetry/debug-id";
 export { buildDefines } from "./build-all";
 
 export function normalizeNodeBundle(content: string): string {
@@ -91,14 +89,8 @@ export function finalizeSourceMapBundle(
   if (bundleDebugId !== sourceMapDebugId) {
     throw new Error("Bundle and source map debug IDs do not match");
   }
-  if (!bundle.includes(BUNDLE_DEBUG_ID_PLACEHOLDER)) {
-    throw new Error("Npm bundle is missing the Sentry debug ID placeholder");
-  }
-
   sourceMap.debugId = bundleDebugId;
-  const finalizedBundle = bundle
-    .replaceAll(BUNDLE_DEBUG_ID_PLACEHOLDER, bundleDebugId)
-    .replace(bundleMatches[0][0], `//# debugId=${bundleDebugId}`);
+  const finalizedBundle = bundle.replace(bundleMatches[0][0], `//# debugId=${bundleDebugId}`);
 
   return {
     bundle: finalizedBundle,

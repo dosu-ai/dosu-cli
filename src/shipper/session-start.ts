@@ -5,11 +5,10 @@
  * `git_branch`), and when its own first prompt was, past any history a fork copied: the moment
  * to ask the reflog about when it recorded none. */
 
-import type { NormalizedRecord } from "@letta-ai/trajectory";
+import { copiedPrefix, type NormalizedRecord, type ShippedPrefix } from "@dosu/sessionstorage";
 import { recordedBranch } from "../sessions/branch";
 import type { SessionStart } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
-import { copiedPrefix, type ShippedPrefix } from "./continuation";
 import { normalizeSessionRecords } from "./normalize";
 
 type Normalize = (session: AgentSession) => Promise<NormalizedRecord[] | null>;

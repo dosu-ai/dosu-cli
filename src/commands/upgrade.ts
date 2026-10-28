@@ -16,7 +16,6 @@ import {
   setAutoUpdateEnabled,
 } from "../version/auto-update";
 import { canRefreshMcp, writeMcpRefreshCache } from "../version/mcp-refresh-check";
-import { checkForSkillUpdates } from "../version/skill-update-check";
 import {
   INSTALL_CHANNEL,
   isNpxInvocation,
@@ -371,7 +370,7 @@ export async function completeUpgrade(
 
 /** `dosu upgrade --finish <from>`, run by the freshly installed binary. Re-runs setup (or, with
  * no TTY, the MCP refresh) only when a configured agent's entry is not the shape this version
- * writes. Enabled hooks and bundled skills are re-applied either way. `from` is the version the upgrade
+ * writes. Enabled hooks are re-applied either way. `from` is the version the upgrade
  * started from; the entries themselves decide whether anything changes. */
 export async function finishUpgrade(
   _from: string,
@@ -383,11 +382,8 @@ export async function finishUpgrade(
   // entries are current. Disabled hooks remain disabled.
   refreshEnabledHooks();
   if (stale.length === 0) {
-    checkForSkillUpdates();
     writeMcpRefreshCache({ version: VERSION });
-    console.log(
-      pc.green(`✓ Dosu ${VERSION} is ready. Enabled hooks and bundled skills are up to date.`),
-    );
+    console.log(pc.green(`✓ Dosu ${VERSION} is ready. Enabled hooks are up to date.`));
     return 0;
   }
 
@@ -398,7 +394,6 @@ export async function finishUpgrade(
     return 0;
   }
 
-  checkForSkillUpdates();
   if (!cfg || !canRefreshMcp(cfg)) {
     console.error(SETUP_FALLBACK);
     return 0;
@@ -449,7 +444,7 @@ export function upgradeCommand(): Command {
         status = setAutoUpdate(opts.auto);
       } else if (opts.background) {
         // Detached child of the update check: install only. The next command runs the new
-        // version, whose first-run checks refresh skills and MCP entries.
+        // version, whose first-run checks refresh MCP entries.
         status = runBackgroundUpgrade(() => runUpgrade());
       } else if (opts.finish !== undefined) {
         status = await finishUpgrade(opts.finish);

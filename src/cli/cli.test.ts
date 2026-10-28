@@ -27,8 +27,6 @@ vi.mock("../debug/logger", () => ({
 }));
 
 vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
-vi.mock("../version/skill-update-check", () => ({ checkForSkillUpdates: vi.fn() }));
-vi.mock("../version/pending-tasks-check", () => ({ checkForReadyTasks: vi.fn() }));
 vi.mock("../version/incognito-backfill-check", () => ({ checkForIncognitoBackfill: vi.fn() }));
 vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
@@ -36,8 +34,6 @@ vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
   writeMcpRefreshCache: vi.fn(),
 }));
 
-import { saveConfig } from "../config/config";
-import type { CommandTelemetry } from "../telemetry/telemetry";
 import { createProgram, shouldRunBackgroundChecks, shouldRunMcpRefreshCheck } from "./cli";
 
 describe("CLI", () => {
@@ -56,13 +52,20 @@ describe("CLI", () => {
     expect(program.name()).toBe("dosu");
   });
 
-  it("describes platform work as well as MCP setup in the root help", () => {
-    // Agents read `dosu --help` to decide whether this CLI can do platform work
-    // (e.g. list the review queue), so the root description must not read as MCP-only.
+  it("describes session capture in the root help", () => {
     const description = createProgram().description();
-    expect(description).toContain("MCP");
-    expect(description).toMatch(/Libraries/);
-    expect(description).toMatch(/reviews/);
+    expect(description).toMatch(/sessions/);
+    expect(description).toMatch(/bucket/);
+  });
+
+  it("does not expose the deleted product commands", () => {
+    const names = new Set(createProgram().commands.map((c) => c.name()));
+    for (const removed of ["ask", "docs", "review", "deployments", "skill", "telemetry", "org"]) {
+      expect(names.has(removed)).toBe(false);
+    }
+    for (const kept of ["knowledge", "memory", "project", "setup", "mcp", "upgrade", "login"]) {
+      expect(names.has(kept)).toBe(true);
+    }
   });
 
   it("has version flag", () => {
@@ -143,22 +146,6 @@ describe("CLI", () => {
     expect(opts).toBeDefined();
   });
 
-  it("setup exposes agent-mode flags", () => {
-    const program = createProgram();
-    const cmd = program.commands.find((c) => c.name() === "setup");
-    expect(cmd?.options.find((o) => o.long === "--agent")).toBeDefined();
-    expect(cmd?.options.find((o) => o.long === "--tool")).toBeDefined();
-    expect(cmd?.options.find((o) => o.long === "--login-ticket")).toBeDefined();
-  });
-
-  it("login exposes ticket-flow flags (--request, --check, --json)", () => {
-    const program = createProgram();
-    const cmd = program.commands.find((c) => c.name() === "login");
-    expect(cmd?.options.find((o) => o.long === "--request")).toBeDefined();
-    expect(cmd?.options.find((o) => o.long === "--check")).toBeDefined();
-    expect(cmd?.options.find((o) => o.long === "--json")).toBeDefined();
-  });
-
   it("mcp add has --global flag", () => {
     const program = createProgram();
     const mcpCmd = program.commands.find((c) => c.name() === "mcp");
@@ -227,92 +214,6 @@ describe("CLI", () => {
       logSpy.mockRestore();
       getLogPath.mockReturnValue("/tmp/test-debug.log");
       rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("has telemetry privacy controls", () => {
-    const program = createProgram();
-    const cmd = program.commands.find((c) => c.name() === "telemetry");
-    expect(cmd).toBeDefined();
-    expect(cmd?.commands.map((subcommand) => subcommand.name())).toEqual([
-      "status",
-      "enable",
-      "disable",
-      "reset",
-    ]);
-  });
-
-  it("records only the canonical command name and completes after an action", async () => {
-    const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-context-"));
-    const originalConfigRoot = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = configRoot;
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
-
-      expect(telemetry.start).toHaveBeenCalledOnce();
-      expect(telemetry.start).toHaveBeenCalledWith("logs", {
-        mode: "cloud",
-        isAuthenticated: false,
-      });
-      expect(telemetry.complete).toHaveBeenCalledWith(0);
-      expect(telemetry.fail).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-      rmSync(configRoot, { recursive: true, force: true });
-      if (originalConfigRoot === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = originalConfigRoot;
-    }
-  });
-
-  it("passes the current JWT identity to telemetry without passing the token", async () => {
-    const configRoot = mkdtempSync(join(tmpdir(), "dosu-cli-telemetry-identity-"));
-    const originalConfigRoot = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = configRoot;
-    const userID = "22222222-2222-4222-8222-222222222222";
-    const orgID = "33333333-3333-4333-8333-333333333333";
-    const payload = Buffer.from(
-      JSON.stringify({ sub: userID, email: "user@example.com", private: "must-not-leak" }),
-    ).toString("base64url");
-    const accessToken = `header.${payload}.signature`;
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      saveConfig({
-        schema_version: 2,
-        active_account: {
-          user_id: userID,
-          session: { access_token: accessToken, refresh_token: "refresh-secret", expires_at: 0 },
-          target: { org_id: orgID },
-        },
-      });
-
-      await createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
-
-      expect(telemetry.start).toHaveBeenCalledWith("logs", {
-        mode: "cloud",
-        isAuthenticated: true,
-        user: { id: userID, email: "user@example.com" },
-        orgId: orgID,
-      });
-      const calls = JSON.stringify(vi.mocked(telemetry.start).mock.calls);
-      expect(calls).not.toContain(accessToken);
-      expect(calls).not.toContain("refresh-secret");
-      expect(calls).not.toContain("must-not-leak");
-    } finally {
-      logSpy.mockRestore();
-      rmSync(configRoot, { recursive: true, force: true });
-      if (originalConfigRoot === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = originalConfigRoot;
     }
   });
 
@@ -554,133 +455,23 @@ describe("CLI", () => {
     15_000,
   );
 
-  it("preserves command output when telemetry start throws", async () => {
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(() => {
-        throw new Error("telemetry start failed");
-      }),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await expect(
-        createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]),
-      ).resolves.toBeDefined();
-      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
-      expect(telemetry.complete).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-    }
+  it("rejects invalid CLI options as usage errors", async () => {
+    await expect(
+      createProgram().parseAsync(["node", "dosu", "setup", "--mode", "private"]),
+    ).rejects.toMatchObject({ name: "CliUsageError", exitCode: 1 });
   });
 
-  it("preserves command output when telemetry completion rejects", async () => {
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn().mockRejectedValue(new Error("telemetry completion failed")),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await expect(
-        createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]),
-      ).resolves.toBeDefined();
-      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
-    } finally {
-      logSpy.mockRestore();
-    }
-  });
-
-  it("bounds a telemetry completion that never settles", async () => {
-    vi.useFakeTimers();
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn(() => new Promise<void>(() => {})),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      const command = createProgram({ telemetry }).parseAsync(["node", "dosu", "logs"]);
-      await vi.advanceTimersByTimeAsync(750);
-      await expect(command).resolves.toBeDefined();
-      expect(logSpy).toHaveBeenCalledWith("/tmp/test-debug.log");
-    } finally {
-      logSpy.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("preserves validation behavior when telemetry failure reporting rejects", async () => {
+  it("sets exit code 1 for an unknown command", async () => {
     const originalExitCode = process.exitCode;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockRejectedValue(new Error("telemetry failure reporting failed")),
-    };
     try {
-      await expect(
-        createProgram({ telemetry }).parseAsync(["node", "dosu", "definitely-unknown"]),
-      ).resolves.toBeDefined();
+      await createProgram().parseAsync(["node", "dosu", "definitely-unknown"]);
+
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("unknown command"));
     } finally {
       process.exitCode = originalExitCode;
       errorSpy.mockRestore();
-    }
-  });
-
-  it("marks invalid CLI options as expected usage errors", async () => {
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-
-    await expect(
-      createProgram({ telemetry }).parseAsync(["node", "dosu", "setup", "--mode", "private"]),
-    ).rejects.toMatchObject({ name: "CliUsageError", exitCode: 1 });
-
-    expect(telemetry.start).toHaveBeenCalledWith("setup", expect.any(Object));
-    expect(telemetry.complete).not.toHaveBeenCalled();
-  });
-
-  it("preserves the unknown-command exit code while marking it as expected", async () => {
-    const originalExitCode = process.exitCode;
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-    try {
-      await createProgram({ telemetry }).parseAsync(["node", "dosu", "definitely-unknown"]);
-
-      expect(process.exitCode).toBe(1);
-      expect(telemetry.fail).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "CliUsageError", exitCode: 1 }),
-      );
-      expect(telemetry.complete).not.toHaveBeenCalled();
-    } finally {
-      process.exitCode = originalExitCode;
-      errorSpy.mockRestore();
-    }
-  });
-
-  it("does not record telemetry-control commands", async () => {
-    const telemetry: CommandTelemetry = {
-      start: vi.fn(),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockResolvedValue(undefined),
-    };
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await createProgram({ telemetry }).parseAsync(["node", "dosu", "telemetry", "status"]);
-      expect(telemetry.start).not.toHaveBeenCalled();
-      expect(telemetry.complete).not.toHaveBeenCalled();
-      expect(telemetry.fail).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
     }
   });
 

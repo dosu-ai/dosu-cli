@@ -3,64 +3,36 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
 import { Client } from "../client/client";
-import { agentsCommand } from "../commands/agents";
-import { analyticsCommand } from "../commands/analytics";
-import { askCommand } from "../commands/ask";
-import { auditCommand } from "../commands/audit";
-import { deploymentsCommand } from "../commands/deployments";
-import { docsCommand } from "../commands/docs";
-import { integrationsCommand } from "../commands/integrations";
 import { knowledgeCommand } from "../commands/knowledge";
-import { librariesCommand } from "../commands/libraries";
-import { membersCommand } from "../commands/members";
 import { memoryCommand } from "../commands/memory";
-import { orgCommand } from "../commands/org";
 import { projectCommand } from "../commands/project";
-import { reviewCommand } from "../commands/review";
-import { skillCommand } from "../commands/skill";
 import { sourcesCommand } from "../commands/sources";
-import { telemetryCommand } from "../commands/telemetry";
-import { threadsCommand } from "../commands/threads";
-import { topicsCommand } from "../commands/topics";
+import { storeCommands } from "../commands/store";
+import { syncCommand } from "../commands/sync";
 import { upgradeCommand } from "../commands/upgrade";
 import {
   type Config,
   clearConfigInPlace,
   getConfigPath,
-  getConfigUserID,
   isAuthenticated,
   isTokenExpired,
   loadConfig,
-  loadConfigNonBlocking,
   MODE_OSS,
   replaceLoginSession,
   saveConfig,
 } from "../config/config";
-import { getAccessTokenEmail, getAccessTokenUserID } from "../config/identity";
 import { createLogFollower } from "../debug/follow";
 import { logger } from "../debug/logger";
 import { refreshEnabledHooks } from "../hooks/agents";
 import { allProviders, getProvider, type Provider } from "../mcp/providers";
 import { configuredProviders, refreshConfiguredProviders } from "../mcp/refresh";
 import { browserFallbackHint } from "../setup/styles";
-import {
-  getOrCreateInstallID,
-  isTelemetryEnabled,
-  loadTelemetrySettings,
-} from "../telemetry/settings";
-import {
-  type CommandTelemetry,
-  type CommandTelemetryContext,
-  createCommandTelemetry,
-} from "../telemetry/telemetry";
 import { checkForIncognitoBackfill } from "../version/incognito-backfill-check";
 import {
   canRefreshMcp,
   checkForMcpRefresh,
   writeMcpRefreshCache,
 } from "../version/mcp-refresh-check";
-import { checkForReadyTasks } from "../version/pending-tasks-check";
-import { checkForSkillUpdates } from "../version/skill-update-check";
 import { checkForUpdates } from "../version/update-check";
 import { getVersionString, VERSION } from "../version/version";
 import { CliUsageError } from "./errors";
@@ -96,74 +68,14 @@ export function shouldRunMcpRefreshCheck(actionCommand: Command): boolean {
   return !(actionCommand.name() === "sync" && parent === "knowledge");
 }
 
-const TELEMETRY_FLUSH_TIMEOUT_MS = 750;
-
-function commandTelemetryName(actionCommand: Command): string {
+function commandName(actionCommand: Command): string {
   const segments: string[] = [];
   let current: Command | null = actionCommand;
   while (current.parent) {
     segments.unshift(current.name());
     current = current.parent;
   }
-  if (segments.length > 0) return segments.join(" ");
-  return actionCommand.args.length > 0 ? "unknown" : "tui";
-}
-
-function shouldTrackCommand(command: string): boolean {
-  return command !== "telemetry" && !command.startsWith("telemetry ");
-}
-
-function commandTelemetryContext(): CommandTelemetryContext {
-  try {
-    // Bounded, non-blocking read so telemetry never stalls a config-free command on a FIFO.
-    const cfg = loadConfigNonBlocking();
-    if (!cfg) return { mode: "cloud", isAuthenticated: false };
-    const authenticated = isAuthenticated(cfg);
-    const accessToken = authenticated ? cfg.active_account.session.access_token : "";
-    const configUserID = getConfigUserID(cfg);
-    const tokenUserID = getAccessTokenUserID(accessToken);
-    const userID = configUserID && configUserID === tokenUserID ? configUserID : undefined;
-    const email = userID ? getAccessTokenEmail(accessToken) : undefined;
-    const orgId = userID ? cfg.active_account?.target?.org_id : undefined;
-    return {
-      mode: cfg.mode === MODE_OSS ? "oss" : "cloud",
-      isAuthenticated: authenticated,
-      ...(userID ? { user: { id: userID, ...(email ? { email } : {}) } } : {}),
-      ...(orgId ? { orgId } : {}),
-    };
-  } catch {
-    return { mode: "cloud", isAuthenticated: false };
-  }
-}
-
-function startTelemetry(
-  telemetry: CommandTelemetry | undefined,
-  command: string,
-  context: CommandTelemetryContext,
-): boolean {
-  if (!telemetry) return false;
-  try {
-    telemetry.start(command, context);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function finishTelemetry(operation: () => Promise<void>): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      Promise.resolve().then(operation),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, TELEMETRY_FLUSH_TIMEOUT_MS);
-      }),
-    ]);
-  } catch {
-    // Telemetry must never change command output, exit codes, or behavior.
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
+  return segments.join(" ");
 }
 
 /** Suggest the closest registered command name for a mistyped one, if any is close enough. */
@@ -196,15 +108,13 @@ function editDistance(a: string, b: string): number {
   return prev[b.length];
 }
 
-export function createProgram(options: { telemetry?: CommandTelemetry } = {}): Command {
+export function createProgram(): Command {
   const program = new Command();
-  let telemetryStarted = false;
-  let telemetryValidationFailure = false;
 
   program
     .name("dosu")
     .description(
-      "Dosu CLI - Set up Dosu MCP for AI tools and work with Dosu Libraries, docs, reviews, and more",
+      "Dosu CLI - capture your coding-agent sessions into Dosu memory or your own bucket",
     )
     .version(getVersionString(), "-v, --version")
     .helpCommand("help [command]", "Show help for a command")
@@ -212,45 +122,21 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .hook("preAction", async (thisCommand, actionCommand) => {
       const opts = thisCommand.optsWithGlobals();
       logger.init({ debug: opts.debug });
-      if (shouldRunBackgroundChecks(commandTelemetryName(actionCommand))) {
-        // Bare `dosu` launches the TUI, whose welcome banner shows the update
-        // itself; the boxed stderr notice would tear across the TUI's redraws.
-        const launchesTUI = actionCommand.parent === null;
+      if (shouldRunBackgroundChecks(commandName(actionCommand))) {
         if (process.env.NODE_ENV !== "test" && !process.env.CI) {
-          await checkForUpdates({ notify: !launchesTUI });
+          await checkForUpdates({ notify: true });
         }
-        // Skills ship inside the binary: after an upgrade, rewrite the ones a previous version
-        // installed so agents never read stale skill content.
-        checkForSkillUpdates({ notify: !launchesTUI });
-        checkForReadyTasks();
         // First run on a new version: rewrite configured agents' MCP entries
         // that are not the shape this version writes, so format changes land
         // without a manual `dosu setup`.
         if (shouldRunMcpRefreshCheck(actionCommand)) {
-          checkForMcpRefresh({ notify: !launchesTUI });
-          checkForIncognitoBackfill({ notify: !launchesTUI });
-        }
-      }
-      const command = commandTelemetryName(actionCommand);
-      if (options.telemetry && shouldTrackCommand(command)) {
-        telemetryStarted = startTelemetry(options.telemetry, command, commandTelemetryContext());
-      }
-    })
-    .hook("postAction", async () => {
-      const exitCode = Number(process.exitCode ?? 0);
-      const telemetry = options.telemetry;
-      if (telemetryStarted && telemetry) {
-        if (telemetryValidationFailure) {
-          await finishTelemetry(() =>
-            telemetry.fail(new CliUsageError("expected CLI usage error")),
-          );
-        } else {
-          await finishTelemetry(() => telemetry.complete(Number.isFinite(exitCode) ? exitCode : 1));
+          checkForMcpRefresh({ notify: true });
+          checkForIncognitoBackfill({ notify: true });
         }
       }
     })
     .allowExcessArguments(true)
-    .action(async () => {
+    .action(() => {
       const command = program.args[0];
       if (command !== undefined) {
         // An unrecognized first token reaches the root action instead of a
@@ -260,71 +146,68 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
         if (suggestion) message += `\n(Did you mean '${suggestion}'?)`;
         message += "\nRun 'dosu --help' to see available commands.";
         console.error(message);
-        telemetryValidationFailure = true;
         process.exitCode = 1;
         return;
       }
-      // Default: launch TUI when no subcommand given
-      const { runTUI } = await import("../tui/tui");
-      await runTUI();
+      program.outputHelp();
     });
 
   // login
   program
     .command("login")
     .description("Authenticate with Dosu via OAuth")
-    .option(
-      "--request",
-      "Mint a login ticket for agent / human-in-the-loop auth (prints URL and exits)",
-    )
-    .option("--check <ticket>", "Exchange a login ticket created with --request for a token")
-    .option("--json", "Emit machine-readable JSON output (use with --request or --check)")
     .option("--no-browser", "Skip browser: print a URL to open on another machine and wait")
-    .action(
-      async (opts: { request?: boolean; check?: string; json?: boolean; browser: boolean }) => {
-        if (opts.request && opts.check !== undefined) {
-          console.error("--request and --check cannot be combined.");
-          process.exitCode = 2;
+    .action(async (opts: { browser: boolean }) => {
+      const cfg = loadConfig();
+      if (isAuthenticated(cfg)) {
+        if (!isTokenExpired(cfg)) {
+          console.log("You are already logged in.");
+          console.log("Run 'dosu logout' first to re-authenticate.");
           return;
         }
-
-        if (opts.request) {
-          const { runLoginRequest } = await import("../agent/login-commands");
-          process.exitCode = await runLoginRequest({ json: opts.json === true });
+        if (await ensureFreshSession(cfg)) {
+          console.log("Session refreshed.");
+          console.log(`Credentials saved to ${getConfigPath()}`);
           return;
         }
+      }
 
-        if (opts.check !== undefined) {
-          const { runLoginCheck } = await import("../agent/login-commands");
-          process.exitCode = await runLoginCheck({
-            ticket: opts.check,
-            json: opts.json === true,
+      const { isHeadless } = await import("../auth/headless");
+      const useDeviceFlow = !opts.browser || isHeadless();
+
+      const { OAuthCallbackError } = await import("../auth/errors");
+
+      let token: { access_token: string; refresh_token: string; expires_in: number };
+
+      if (useDeviceFlow) {
+        const { startDeviceFlow } = await import("../auth/device");
+        try {
+          token = await startDeviceFlow();
+        } catch (err) {
+          console.error(err instanceof Error ? err.message : String(err));
+          process.exitCode = 1;
+          return;
+        }
+      } else {
+        console.log("Opening browser for authentication...");
+        const { startOAuthFlow } = await import("../auth/flow");
+        let result: Awaited<ReturnType<typeof startOAuthFlow>>;
+        try {
+          result = await startOAuthFlow(undefined, undefined, undefined, (url) => {
+            console.log(browserFallbackHint(url));
           });
+        } catch (err) {
+          if (err instanceof OAuthCallbackError) {
+            console.error(err.userMessage);
+          } else {
+            console.error(err instanceof Error ? err.message : String(err));
+          }
+          process.exitCode = 1;
           return;
         }
 
-        const cfg = loadConfig();
-        if (isAuthenticated(cfg)) {
-          if (!isTokenExpired(cfg)) {
-            console.log("You are already logged in.");
-            console.log("Run 'dosu logout' first to re-authenticate.");
-            return;
-          }
-          if (await ensureFreshSession(cfg)) {
-            console.log("Session refreshed.");
-            console.log(`Credentials saved to ${getConfigPath()}`);
-            return;
-          }
-        }
-
-        const { isHeadless } = await import("../auth/headless");
-        const useDeviceFlow = !opts.browser || isHeadless();
-
-        const { OAuthCallbackError } = await import("../auth/errors");
-
-        let token: { access_token: string; refresh_token: string; expires_in: number };
-
-        if (useDeviceFlow) {
+        if (!result.browserOpened) {
+          // Browser unavailable — fall through to device flow
           const { startDeviceFlow } = await import("../auth/device");
           try {
             token = await startDeviceFlow();
@@ -334,49 +217,20 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
             return;
           }
         } else {
-          console.log("Opening browser for authentication...");
-          const { startOAuthFlow } = await import("../auth/flow");
-          let result: Awaited<ReturnType<typeof startOAuthFlow>>;
-          try {
-            result = await startOAuthFlow(undefined, undefined, undefined, (url) => {
-              console.log(browserFallbackHint(url));
-            });
-          } catch (err) {
-            if (err instanceof OAuthCallbackError) {
-              console.error(err.userMessage);
-            } else {
-              console.error(err instanceof Error ? err.message : String(err));
-            }
-            process.exitCode = 1;
-            return;
-          }
-
-          if (!result.browserOpened) {
-            // Browser unavailable — fall through to device flow
-            const { startDeviceFlow } = await import("../auth/device");
-            try {
-              token = await startDeviceFlow();
-            } catch (err) {
-              console.error(err instanceof Error ? err.message : String(err));
-              process.exitCode = 1;
-              return;
-            }
-          } else {
-            token = result.token;
-          }
+          token = result.token;
         }
+      }
 
-        replaceLoginSession(cfg, {
-          access_token: token.access_token,
-          refresh_token: token.refresh_token,
-          expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
-        });
-        saveConfig(cfg);
+      replaceLoginSession(cfg, {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        expires_at: Math.floor(Date.now() / 1000) + token.expires_in,
+      });
+      saveConfig(cfg);
 
-        console.log("Successfully authenticated!");
-        console.log(`Credentials saved to ${getConfigPath()}`);
-      },
-    );
+      console.log("Successfully authenticated!");
+      console.log(`Credentials saved to ${getConfigPath()}`);
+    });
 
   // logout
   program
@@ -586,26 +440,12 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
       console.log("\nUse 'dosu mcp add <agent>' to add Dosu MCP to a tool.");
     });
 
-  // Agent-facing commands
-  program.addCommand(agentsCommand());
-  program.addCommand(analyticsCommand());
-  program.addCommand(askCommand());
-  program.addCommand(auditCommand());
-  program.addCommand(deploymentsCommand());
-  program.addCommand(docsCommand());
-  program.addCommand(integrationsCommand());
   program.addCommand(knowledgeCommand());
-  program.addCommand(librariesCommand());
-  program.addCommand(membersCommand());
   program.addCommand(memoryCommand());
-  program.addCommand(orgCommand());
   program.addCommand(projectCommand());
-  program.addCommand(reviewCommand());
+  program.addCommand(syncCommand()); // `dosu knowledge sync` stays as the hook command.
+  for (const cmd of storeCommands()) program.addCommand(cmd);
   program.addCommand(sourcesCommand());
-  program.addCommand(telemetryCommand());
-  program.addCommand(topicsCommand());
-  program.addCommand(threadsCommand());
-  program.addCommand(skillCommand());
   program.addCommand(upgradeCommand());
 
   // setup
@@ -614,63 +454,20 @@ export function createProgram(options: { telemetry?: CommandTelemetry } = {}): C
     .description("Set up Dosu MCP for your AI tools")
     .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
     .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
-    .option("--agent", "Run non-interactive setup designed for coding agents (requires --tool)")
-    .option(
-      "--tool <id>",
-      "Configure a single AI tool by id (claude, cursor, codex, …). Required with --agent.",
-    )
-    .option(
-      "--login-ticket <ticket>",
-      "Resume an --agent setup by redeeming a ticket from a previous run",
-    )
-    .action(
-      async (opts: {
-        deployment?: string;
-        mode?: string;
-        agent?: boolean;
-        tool?: string;
-        loginTicket?: string;
-      }) => {
-        if (opts.agent) {
-          if (!opts.tool) {
-            const { emitError } = await import("../agent/output");
-            const { listAgentSupportedToolIDs } = await import("../agent/flow");
-            emitError({
-              step: "setup",
-              reason: "missing_tool",
-              agent_next_steps: `Pass --tool <id> when using --agent. Supported ids: ${listAgentSupportedToolIDs().join(", ")}.`,
-            });
-            process.exitCode = 2;
-            return;
-          }
-          const { runAgentSetup } = await import("../agent/flow");
-          process.exitCode = await runAgentSetup({
-            tool: opts.tool,
-            loginTicket: opts.loginTicket,
-            deploymentID: opts.deployment,
-          });
-          return;
+    .action(async (opts: { deployment?: string; mode?: string }) => {
+      const { runSetup } = await import("../setup/flow");
+      let mode: "oss" | "cloud" | undefined;
+      if (opts.mode !== undefined) {
+        const normalized = opts.mode.toLowerCase();
+        if (normalized !== "oss" && normalized !== "cloud") {
+          throw new CliUsageError(
+            `invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`,
+          );
         }
-
-        // Non-agent flags that only make sense with --agent.
-        if (opts.tool || opts.loginTicket) {
-          throw new CliUsageError("--tool and --login-ticket require --agent");
-        }
-
-        const { runSetup } = await import("../setup/flow");
-        let mode: "oss" | "cloud" | undefined;
-        if (opts.mode !== undefined) {
-          const normalized = opts.mode.toLowerCase();
-          if (normalized !== "oss" && normalized !== "cloud") {
-            throw new CliUsageError(
-              `invalid --mode value '${opts.mode}' (expected 'oss' or 'cloud')`,
-            );
-          }
-          mode = normalized;
-        }
-        await runSetup({ deploymentID: opts.deployment, mode });
-      },
-    );
+        mode = normalized;
+      }
+      await runSetup({ deploymentID: opts.deployment, mode });
+    });
 
   // logs
   program
@@ -749,18 +546,14 @@ async function ensureFreshSession(cfg: Config): Promise<boolean> {
 }
 
 /** Run the CLI. A command that fails throws (a CommandError for handled states, anything else
- * for crashes); the error unwinds to here, which is the one place that prints it, records the
- * command's single telemetry failure event, and exits 1. */
+ * for crashes); the error unwinds to here, which is the one place that prints it and exits 1. */
 export async function execute(): Promise<void> {
-  const telemetry = processCommandTelemetry();
-  const program = createProgram({ telemetry });
+  const program = createProgram();
   try {
     await program.parseAsync(process.argv);
   } catch (err: unknown) {
-    // Print before reporting: the telemetry flush can wait up to TELEMETRY_FLUSH_TIMEOUT_MS.
     printFatalError(err);
     logFatalError(err);
-    if (telemetry) await finishTelemetry(() => telemetry.fail(err));
     process.exit(1);
   }
 }
@@ -773,20 +566,5 @@ function logFatalError(err: unknown): void {
     logger.error("cli", diagnostics ? `${message} (${diagnostics})` : message);
   } catch {
     // Logging must never change how the command fails.
-  }
-}
-
-function processCommandTelemetry(): CommandTelemetry | undefined {
-  try {
-    const settings = loadTelemetrySettings();
-    if (!isTelemetryEnabled(settings)) return undefined;
-    return createCommandTelemetry(
-      {},
-      {
-        resolveInstallId: () => settings.install_id ?? getOrCreateInstallID(),
-      },
-    );
-  } catch {
-    return undefined;
   }
 }

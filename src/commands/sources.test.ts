@@ -1,616 +1,368 @@
+/** `dosu sources connect|status|sync|disconnect` against a faked `/v1/memory/sources`: what
+ * each sends, what it prints, and what it keeps in config.json. */
+
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig, saveConfig } from "../config/config";
+import { makeTestConfig } from "../config/config.test-utils";
+import type { BucketTarget } from "../config/schema";
+import type { SourceStatus } from "../sources/api";
+import { parseStdinCredentials, sourcesCommand } from "./sources";
 
-const mockQuery = vi.fn();
-const mockMutate = vi.fn();
+let home: string;
+type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
+let out: string[];
 
-function createMockProxy(path: string[] = []): unknown {
-  return new Proxy(() => {}, {
-    get(_, prop: string) {
-      if (prop === "query") return (input: unknown) => mockQuery(path.join("."), input);
-      if (prop === "mutate") return (input: unknown) => mockMutate(path.join("."), input);
-      return createMockProxy([...path, prop]);
-    },
+const BUCKET: BucketTarget = {
+  name: "team",
+  url: "s3://acme-sessions/agents",
+  owner: "james",
+  region: "us-east-1",
+  credentials: { access_key_id: "AKIAWRITE", secret_access_key: "writesecret" },
+};
+
+function source(extra: Partial<SourceStatus> = {}): SourceStatus {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "team",
+    org: "org1",
+    deployment_id: "dep1",
+    kind: "s3",
+    bucket: "acme-sessions",
+    prefix: "agents",
+    owner: "james",
+    url: "s3://acme-sessions/agents",
+    region: "us-east-1",
+    account_id: null,
+    endpoint: null,
+    lag_seconds: 300,
+    enabled: true,
+    cursor: null,
+    cursor_at: null,
+    last_synced_at: null,
+    last_error: null,
+    error_count: 0,
+    last_sync_processed: 0,
+    last_sync_remaining: 0,
+    created_at: "2026-10-22T00:00:00.000Z",
+    ...extra,
+  };
+}
+
+function configure(targets: BucketTarget[] = [BUCKET], loggedIn = true): void {
+  saveConfig({
+    ...makeTestConfig({
+      access_token: "t",
+      refresh_token: "r",
+      expires_at: 0,
+      ...(loggedIn ? { api_key: "sk_test", deployment_id: "dep1", org_id: "org1" } : {}),
+    }),
+    targets,
   });
 }
 
-vi.mock("../client/trpc", () => ({
-  createTypedClient: vi.fn().mockImplementation(() => createMockProxy()),
-}));
-
-const mockLoadConfig = vi.fn();
-vi.mock("../config/config", () => ({
-  loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
-}));
-
-const githubStep = vi.hoisted(() => ({
-  fetchListForOrg: vi.fn(),
-  waitForRepositoryRefresh: vi.fn(),
-  createDeploymentForRepo: vi.fn(),
-  fetchOrgGithubDeployments: vi.fn(),
-  fetchOrgGithubDataSources: vi.fn(),
-  verifyDataSourcesPersist: vi.fn(),
-  deleteOrphanDeployment: vi.fn(),
-}));
-vi.mock("../setup/github-step", () => githubStep);
-
-const installationServer = vi.hoisted(() => ({
-  startInstallationCallbackServer: vi.fn(),
-}));
-vi.mock("../setup/installation-server", () => installationServer);
-
-vi.mock("open", () => ({ default: vi.fn() }));
-
-vi.mock("../config/constants", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  getWebAppURL: () => "https://app.example.com",
-}));
-
-import { type FlatTestConfig, makeTestConfig } from "../config/config.test-utils";
-import { sourcesCommand } from "./sources";
-
-let logSpy: ReturnType<typeof vi.spyOn>;
-let errorSpy: ReturnType<typeof vi.spyOn>;
-// biome-ignore lint/suspicious/noExplicitAny: process.exit mock type mismatch
-let exitSpy: any;
-
-const validFlatConfig: FlatTestConfig = {
-  access_token: "t",
-  refresh_token: "r",
-  expires_at: 0,
-  api_key: "sk_user_test",
-  org_id: "org1",
-};
-const makeValidConfig = (overrides: Partial<FlatTestConfig> = {}) =>
-  makeTestConfig({ ...validFlatConfig, ...overrides });
-const validConfig = makeValidConfig();
-
-function allOutput(): string {
-  return logSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
 }
 
-async function run(...args: string[]) {
-  const cmd = sourcesCommand();
-  cmd.exitOverride();
-  await cmd.parseAsync(["node", "test", ...args]);
+function calls(): Array<{ method: string; path: string; body?: unknown }> {
+  return fetchImpl.mock.calls.map(([url, init]) => ({
+    method: init?.method ?? "GET",
+    path: url.replace("https://api.dosu.test", ""),
+    ...(init?.body ? { body: JSON.parse(init.body as string) } : {}),
+  }));
 }
 
 beforeEach(() => {
-  mockQuery.mockReset();
-  mockMutate.mockReset();
-  mockLoadConfig.mockReset();
-  for (const fn of Object.values(githubStep)) fn.mockReset();
-  installationServer.startInstallationCallbackServer.mockReset();
-  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-  errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
-    throw new Error("exit");
-  }) as never);
+  home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-sources-")));
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
+  vi.stubEnv("DOSU_DEV", undefined);
+  vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
+  vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", undefined);
+  vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", undefined);
+  fetchImpl = vi.fn<Fetch>(async () => json({ sources: [] }));
+  vi.stubGlobal("fetch", fetchImpl);
+  out = [];
+  vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    out.push(args.join(" "));
+  });
+  configure();
 });
 
 afterEach(() => {
-  logSpy.mockRestore();
-  errorSpy.mockRestore();
-  exitSpy.mockRestore();
+  process.exitCode = undefined;
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  rmSync(home, { recursive: true, force: true });
 });
 
-describe("sources list", () => {
-  it("calls dataSource.list with org_id and outputs JSON", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    const data = [{ id: "ds1", name: "GitHub", provider_slug: "github" }];
-    mockQuery.mockResolvedValueOnce(data);
-
-    await run("list", "--json");
-
-    expect(mockQuery).toHaveBeenCalledWith("dataSource.list", {
-      org_id: "org1",
-      excluded_provider_slugs: [],
-    });
-    const output = JSON.parse(allOutput());
-    expect(output[0].name).toBe("GitHub");
-  });
-
-  it("prints message for empty results", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([]);
-    await run("list");
-    expect(allOutput()).toContain("No data sources connected");
-  });
-
-  it("shows '(unnamed)' when name is missing", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1", provider_slug: "github" }]);
-    await run("list");
-    expect(allOutput()).toContain("(unnamed)");
-  });
-
-  it("shows table with provider and name", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([
-      { id: "ds1", name: "GitHub Repo", provider_slug: "github", created_at: "2024-01-01" },
-    ]);
-    await run("list");
-    const output = allOutput();
-    expect(output).toContain("GitHub Repo");
-    expect(output).toContain("github");
-  });
-
-  it("shows '-' when provider_slug is missing", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce([{ id: "ds1", name: "Unknown Source" }]);
-    await run("list");
-    const output = allOutput();
-    expect(output).toContain("Unknown Source");
-    expect(output).toContain("-");
-  });
-
-  it("treats a null response as an empty list", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce(null);
-    await run("list");
-    expect(allOutput()).toContain("No data sources connected");
-  });
-});
-
-describe("sources info", () => {
-  it("calls dataSource.get with id and outputs JSON", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    const ds = { id: "ds1", name: "GitHub", provider_slug: "github" };
-    mockQuery.mockResolvedValueOnce(ds);
-
-    await run("info", "--json", "ds1");
-
-    expect(mockQuery).toHaveBeenCalledWith("dataSource.get", "ds1");
-    expect(JSON.parse(allOutput())).toMatchObject(ds);
-  });
-
-  it("prints human-readable details", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce({
-      id: "ds1",
-      name: "GitHub",
-      description: "Main repo",
-      provider_slug: "github",
-      created_at: "2024-01-01",
-    });
-
-    await run("info", "ds1");
-
-    const output = allOutput();
-    expect(output).toContain("GitHub");
-    expect(output).toContain("github");
-  });
-
-  it("prints a not-found message when the data source does not exist", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockQuery.mockResolvedValueOnce(undefined);
-    await run("info", "ds-missing");
-    expect(allOutput()).toContain("Data source not found");
-  });
-});
-
-describe("sources sync", () => {
-  it("calls dataSource.syncDataSource mutation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("sync", "ds1");
-
-    expect(mockMutate).toHaveBeenCalledWith("dataSource.syncDataSource", {
-      data_source_id: "ds1",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("sync", "--json", "ds1");
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("sync", "ds1");
-    expect(allOutput()).toContain("Data source sync triggered");
-  });
-});
-
-describe("sources update", () => {
-  it("calls dataSource.update with name and description", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("update", "ds1", "--name", "New Name", "--description", "New desc");
-
-    expect(mockMutate).toHaveBeenCalledWith("dataSource.update", {
-      data_source_id: "ds1",
-      name: "New Name",
-      description: "New desc",
-    });
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({ id: "ds1", name: "New Name" });
-    await run("update", "--json", "ds1", "--name", "New Name");
-    expect(JSON.parse(allOutput())).toMatchObject({ id: "ds1", name: "New Name" });
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("update", "ds1", "--name", "New Name");
-    expect(allOutput()).toContain("Data source updated");
-  });
-
-  it("rejects an update with no changes before calling tRPC", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    await expect(run("update", "ds1")).rejects.toThrow();
-    expect(mockMutate).not.toHaveBeenCalled();
-  });
-});
-
-describe("sources delete", () => {
-  it("calls dataSource.deleteDataSource mutation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-
-    await run("delete", "ds1");
-
-    expect(mockMutate).toHaveBeenCalledWith("dataSource.deleteDataSource", "ds1");
-  });
-
-  it("outputs JSON with --json", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("delete", "--json", "ds1");
-    const output = JSON.parse(allOutput());
-    expect(output.success).toBe(true);
-    expect(output.id).toBe("ds1");
-  });
-
-  it("prints human-readable confirmation", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    mockMutate.mockResolvedValueOnce({});
-    await run("delete", "ds1");
-    expect(allOutput()).toContain("Data source deleted");
-  });
-});
-
-describe("requireConfig", () => {
-  it("exits when org_id is missing", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ org_id: undefined }));
-    await expect(run("list")).rejects.toThrow("exit");
-  });
-
-  it("fails with NOT_LOGGED_IN when access_token is missing", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ access_token: "" }));
-    await expect(run("list")).rejects.toMatchObject({ code: "NOT_LOGGED_IN" });
-  });
-});
-
-function allErrors(): string {
-  return errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
+async function dosu(...args: string[]): Promise<void> {
+  const cmd = sourcesCommand();
+  cmd.exitOverride();
+  await cmd.parseAsync(["node", "dosu", ...args]);
 }
 
-function jsonLines(): unknown[] {
-  return logSpy.mock.calls.map((c: unknown[]) => JSON.parse(String(c[0])));
-}
-
-function stubInstallServer(installationPromise: Promise<{ installation_id: number }>) {
-  const close = vi.fn();
-  installationServer.startInstallationCallbackServer.mockResolvedValue({
-    server: { port: 45678, close },
-    installationPromise,
-  });
-  return { close };
+function savedSourceId(): string | undefined {
+  return loadConfig().targets?.find((t) => t.name === "team")?.source_id;
 }
 
 describe("sources connect", () => {
-  it("rejects web-only providers with a JSON handoff", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    await expect(run("connect", "slack", "--json")).rejects.toThrow("exit");
-    const output = JSON.parse(allOutput());
-    expect(output.cli_supported).toBe(false);
-    expect(output.connect_via).toBe("web");
-    expect(output.url).toContain("http");
+  it("registers the target with the keys given, and keeps the source id on it", async () => {
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? json(source({ layout_created_by: "dosu-cli/1.0" }), 201)
+        : json({ sources: [] }),
+    );
+
+    await dosu("connect", "--access-key-id", "AKIAREAD", "--secret-access-key", "readsecret");
+
+    expect(calls()).toEqual([
+      { method: "GET", path: "/v1/memory/sources?deployment_id=dep1" },
+      {
+        method: "POST",
+        path: "/v1/memory/sources",
+        body: {
+          deployment_id: "dep1",
+          kind: "s3",
+          bucket: "acme-sessions",
+          prefix: "agents",
+          owner: "james",
+          region: "us-east-1",
+          access_key_id: "AKIAREAD",
+          secret_access_key: "readsecret",
+          name: "team",
+        },
+      },
+    ]);
+    expect(fetchImpl.mock.calls[1]?.[1]?.headers).toMatchObject({ "X-Dosu-API-Key": "sk_test" });
+    expect(savedSourceId()).toBe(source().id);
+    expect(out.join("\n")).toContain('Source "team" connected');
+    expect(out.join("\n")).toContain("keys from flags");
+    expect(out.join("\n")).toContain("layout written by dosu-cli/1.0");
   });
 
-  it("rejects web-only providers with a human handoff message", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    await expect(run("connect", "notion")).rejects.toThrow("exit");
-    expect(allErrors()).toContain("web-only");
-  });
+  it("falls back to the target's own keys, then DOSU_SOURCE_* over them", async () => {
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
 
-  it("emits awaiting_install and installed NDJSON events", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    const { close } = stubInstallServer(Promise.resolve({ installation_id: 42 }));
-    githubStep.waitForRepositoryRefresh.mockResolvedValue({
-      repos: [{ slug: "acme/api", repository_id: 7 }],
-      foundNew: true,
+    await dosu("connect", "--lag", "60", "--name", "acme bucket");
+    expect(calls()[1]?.body).toMatchObject({
+      access_key_id: "AKIAWRITE",
+      secret_access_key: "writesecret",
+      lag_seconds: 60,
+      name: "acme bucket",
     });
+    expect(out.join("\n")).toContain("keys from the target's own keys");
 
-    await run("connect", "github", "--json");
-
-    const events = jsonLines();
-    expect(events[0]).toMatchObject({ event: "awaiting_install", provider: "github" });
-    expect(String((events[0] as { url: string }).url)).toContain("/cli/connect-github");
-    expect(String((events[0] as { url: string }).url)).toContain("45678");
-    expect(events[1]).toMatchObject({
-      event: "installed",
-      installation_id: 42,
-      new_repositories: [{ slug: "acme/api", repository_id: 7 }],
+    fetchImpl.mockClear();
+    configure(); // Forget the id so it connects again.
+    vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
+    vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
+    await dosu("connect");
+    expect(calls()[1]?.body).toMatchObject({
+      access_key_id: "AKIAENV",
+      secret_access_key: "envsecret",
     });
-    expect(close).toHaveBeenCalled();
   });
 
-  it("times out when the install never completes", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    const { close } = stubInstallServer(new Promise(() => {}));
+  it("reads the keys from stdin with --read-credentials-stdin", async () => {
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
+    vi.spyOn(process, "stdin", "get").mockReturnValue(
+      Readable.from(["AKIASTDIN\nstdinsecret\n"]) as unknown as typeof process.stdin,
+    );
 
-    await expect(run("connect", "github", "--json", "--timeout", "1")).rejects.toThrow("exit");
+    await dosu("connect", "--read-credentials-stdin");
 
-    const events = jsonLines();
-    expect(events.at(-1)).toMatchObject({ event: "timeout", timeout_seconds: 1 });
-    expect(close).toHaveBeenCalled();
-  }, 10_000);
-
-  it("prints new repos and a next-step hint in human mode", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([{ slug: "acme/old", repository_id: 1 }]);
-    stubInstallServer(Promise.resolve({ installation_id: 9 }));
-    githubStep.waitForRepositoryRefresh.mockResolvedValue({
-      repos: [
-        { slug: "acme/old", repository_id: 1 },
-        { slug: "acme/new", repository_id: 2 },
-      ],
-      foundNew: true,
+    expect(calls()[1]?.body).toMatchObject({
+      access_key_id: "AKIASTDIN",
+      secret_access_key: "stdinsecret",
     });
-
-    await run("connect", "github", "--no-open");
-
-    const output = allOutput();
-    expect(output).toContain("GitHub App connected");
-    expect(output).toContain("acme/new");
-    expect(output).not.toContain("acme/old\n");
-    expect(output).toContain("dosu sources create github");
   });
 
-  it("notes when no new repositories are visible yet", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    stubInstallServer(Promise.resolve({ installation_id: 9 }));
-    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
-
-    await run("connect", "github", "--no-open");
-
-    expect(allOutput()).toContain("No new repositories visible yet");
+  it("says where the keys can come from when the target has none", async () => {
+    configure([{ ...BUCKET, credentials: "env" }]);
+    await expect(dosu("connect")).rejects.toThrow(/no credentials for Dosu to read the bucket/);
+    expect(fetchImpl.mock.calls.map(([, init]) => init?.method ?? "GET")).toEqual(["GET"]);
   });
 
-  it("opens the browser in human mode unless --no-open is passed", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    stubInstallServer(Promise.resolve({ installation_id: 9 }));
-    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
+  it("reports an already-connected target instead of connecting it twice", async () => {
+    fetchImpl.mockImplementation(async () => json({ sources: [source()] }));
 
-    await run("connect", "github");
+    await dosu("connect");
 
-    const open = (await import("open")).default;
-    expect(open).toHaveBeenCalledWith(expect.stringContaining("/cli/connect-github"));
+    expect(calls().map((c) => c.method)).toEqual(["GET"]);
+    expect(savedSourceId()).toBe(source().id);
+    expect(out.join("\n")).toContain("already connected");
   });
 
-  it("survives a failed browser open — the URL is already printed", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    stubInstallServer(Promise.resolve({ installation_id: 9 }));
-    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
-    const open = (await import("open")).default as ReturnType<typeof vi.fn>;
-    open.mockRejectedValueOnce(new Error("no browser"));
-
-    await run("connect", "github");
-
-    expect(allOutput()).toContain("connect-github");
-    expect(allOutput()).toContain("GitHub App connected");
+  it("turns the backend's refusal into the exact reason", async () => {
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? json({ detail: "AccessDenied listing owners/james/changes/" }, 400)
+        : json({ sources: [] }),
+    );
+    await expect(dosu("connect")).rejects.toThrow(
+      /could not read s3:\/\/acme-sessions\/agents as owner james .*AccessDenied/,
+    );
+    expect(savedSourceId()).toBeUndefined();
   });
 
-  it("prints a human-readable timeout message", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    const { close } = stubInstallServer(new Promise(() => {}));
+  it("refuses a local folder: Dosu cannot reach this machine", async () => {
+    configure([{ name: "local", url: join(home, "store"), owner: "james" }]);
+    await expect(dosu("connect")).rejects.toThrow(/is a local folder/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
-    await expect(run("connect", "github", "--no-open", "--timeout", "1")).rejects.toThrow("exit");
+  it("needs a login: a source is Dosu reading on your behalf", async () => {
+    configure([BUCKET], false);
+    await expect(dosu("connect")).rejects.toThrow(/not logged in to Dosu/);
+  });
 
-    expect(allErrors()).toContain("Timed out after 1s");
-    expect(allErrors()).toContain("re-run 'dosu sources connect github'");
-    expect(close).toHaveBeenCalled();
-  }, 10_000);
-
-  it("falls back to the default timeout when --timeout is not a number", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    stubInstallServer(Promise.resolve({ installation_id: 9 }));
-    githubStep.waitForRepositoryRefresh.mockResolvedValue({ repos: [], foundNew: false });
-
-    await run("connect", "github", "--json", "--timeout", "soon");
-
-    const events = jsonLines();
-    expect(events[0]).toMatchObject({ event: "awaiting_install", timeout_seconds: 600 });
+  it("asks for --target when several are configured", async () => {
+    configure([BUCKET, { ...BUCKET, name: "other", url: "r2://other/x" }]);
+    await expect(dosu("connect")).rejects.toThrow(/several targets are configured \(team, other\)/);
   });
 });
 
-describe("sources create", () => {
-  const repo = { slug: "acme/api", repository_id: 7, name: "api", is_deployed: false };
-
-  function stubHappyPath() {
-    githubStep.fetchListForOrg.mockResolvedValue([repo]);
-    githubStep.fetchOrgGithubDeployments.mockResolvedValue(new Map());
-    githubStep.fetchOrgGithubDataSources.mockResolvedValue(new Map());
-    githubStep.createDeploymentForRepo.mockResolvedValue({
-      deployment_id: "dep1",
-      data_source_id: "ds1",
-    });
-    githubStep.verifyDataSourcesPersist.mockResolvedValue({
-      alive: new Set(["ds1"]),
-      dropped: new Set(),
-    });
-  }
-
-  it("rejects web-only providers", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    await expect(run("create", "slack", "--repo", "x", "--confirm")).rejects.toThrow("exit");
-    expect(allErrors()).toContain("web-only");
-  });
-
-  it("creates and attaches with an explicit library", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    stubHappyPath();
-
-    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm", "--json");
-
-    expect(githubStep.createDeploymentForRepo).toHaveBeenCalledWith(
-      expect.anything(),
-      "org1",
-      "lib1",
-      repo,
-      { deploymentID: undefined, dataSourceID: undefined },
+describe("sources status", () => {
+  it("prints what Dosu has read of the target's source, by the remembered id", async () => {
+    configure([{ ...BUCKET, source_id: source().id }]);
+    const now = Date.now();
+    fetchImpl.mockImplementation(async () =>
+      json(
+        source({
+          cursor: "2026-10-22T00:00:00.000Z-abc",
+          last_synced_at: new Date(now - 3 * 60_000).toISOString(),
+          last_sync_processed: 4,
+          last_sync_remaining: 2,
+          last_error: "ReadTimeout",
+          error_count: 1,
+          recent: [
+            {
+              key: "owners/james/changes/2026-10-22T00:00:00.000Z-abc.json",
+              kind: "published",
+              outcome: "ingested",
+              detail: null,
+              trace_id: "t1",
+              entry_at: "2026-10-22T00:00:00.000Z",
+              processed_at: new Date(now - 60_000).toISOString(),
+            },
+          ],
+        }),
+      ),
     );
-    const receipt = JSON.parse(allOutput());
-    expect(receipt).toMatchObject({
-      provider: "github",
-      repository: "acme/api",
-      repository_id: 7,
-      data_source_id: "ds1",
-      deployment_id: "dep1",
-      library_id: "lib1",
-      attached: true,
-    });
+
+    await dosu("status");
+
+    expect(calls()).toEqual([{ method: "GET", path: `/v1/memory/sources/${source().id}` }]);
+    const text = out.join("\n");
+    expect(text).toContain("Target:     team → s3://acme-sessions/agents, owner james");
+    expect(text).toContain("Last sync:  3m ago · 4 processed");
+    expect(text).toContain("Cursor:     2026-10-22T00:00:00.000Z-abc");
+    expect(text).toContain("Behind:     2 changes · re-reads 300s of lag");
+    expect(text).toContain("Last error: ReadTimeout (1 in a row)");
+    expect(text).toMatch(/published\s+ingested\s+owners\/james\/changes/);
   });
 
-  it("defaults to the active library", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: "space9" }));
-    stubHappyPath();
-
-    await run("create", "github", "--repo", "acme/api", "--confirm", "--json");
-
-    expect(githubStep.createDeploymentForRepo).toHaveBeenCalledWith(
-      expect.anything(),
-      "org1",
-      "space9",
-      repo,
-      expect.anything(),
+  it("finds the source by bucket and owner when config has no id, and remembers it", async () => {
+    fetchImpl.mockImplementation(async (url) =>
+      url.endsWith(`/${source().id}`)
+        ? json(source())
+        : json({ sources: [source({ id: "other", owner: "someone-else" }), source()] }),
     );
+
+    await dosu("status", "--json");
+
+    expect(calls().map((c) => c.path)).toEqual(["/v1/memory/sources?deployment_id=dep1"]);
+    expect(savedSourceId()).toBe(source().id);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ id: source().id });
   });
 
-  it("reuses existing deployment and data source rows", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    stubHappyPath();
-    githubStep.fetchOrgGithubDeployments.mockResolvedValue(new Map([[7, "dep-old"]]));
-    githubStep.fetchOrgGithubDataSources.mockResolvedValue(new Map([[7, "ds-old"]]));
-
-    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm", "--json");
-
-    expect(githubStep.createDeploymentForRepo).toHaveBeenCalledWith(
-      expect.anything(),
-      "org1",
-      "lib1",
-      repo,
-      { deploymentID: "dep-old", dataSourceID: "ds-old" },
+  it("forgets a remembered id the backend no longer knows", async () => {
+    configure([{ ...BUCKET, source_id: "gone" }]);
+    fetchImpl.mockImplementation(async (url) =>
+      url.endsWith("/gone") ? json({ detail: "not found" }, 404) : json({ sources: [] }),
     );
+
+    await expect(dosu("status")).rejects.toThrow(/is not connected to Dosu/);
+    expect(savedSourceId()).toBeUndefined();
   });
 
-  it("exits when no library is specified and none is active", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ space_id: undefined }));
-    await expect(run("create", "github", "--repo", "acme/api", "--confirm")).rejects.toThrow(
-      "exit",
+  it("--all lists every source under the login", async () => {
+    fetchImpl.mockImplementation(async () =>
+      json({ sources: [source(), source({ id: "2", name: "other", url: "r2://o/p" })] }),
     );
-    expect(allErrors()).toContain("--library");
+    await dosu("status", "--all");
+    const text = out.join("\n");
+    expect(text).toContain("team");
+    expect(text).toContain("r2://o/p");
+    expect(text).toContain("never");
   });
+});
 
-  it("exits when the repository is not visible to Dosu", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([]);
-    await expect(
-      run("create", "github", "--repo", "acme/missing", "--library", "lib1", "--confirm"),
-    ).rejects.toThrow("exit");
-    expect(allErrors()).toContain("not visible");
-    expect(allErrors()).toContain("dosu sources connect github");
-  });
+describe("sources sync and disconnect", () => {
+  it("sync queues a read now", async () => {
+    configure([{ ...BUCKET, source_id: source().id }]);
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? json({ id: source().id, status: "queued", workflow_id: "wf-1" }, 202)
+        : json(source()),
+    );
 
-  it("exits for forked repositories", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([
-      { ...repo, is_fork: true, fork_parent_slug: "upstream/api" },
+    await dosu("sync");
+
+    expect(calls().map((c) => [c.method, c.path])).toEqual([
+      ["GET", `/v1/memory/sources/${source().id}`],
+      ["POST", `/v1/memory/sources/${source().id}/sync`],
     ]);
-    await expect(
-      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
-    ).rejects.toThrow("exit");
-    expect(allErrors()).toContain("fork");
-    expect(allErrors()).toContain("upstream/api");
+    expect(out.join("\n")).toContain('Sync queued for "team"');
   });
 
-  it("rejects a fork without naming a parent when the slug is unknown", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([{ ...repo, is_fork: true }]);
-    await expect(
-      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
-    ).rejects.toThrow("exit");
-    expect(allErrors()).toContain("fork");
-    expect(allErrors()).not.toContain("instead");
-  });
-
-  it("requires confirmation in JSON mode", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    githubStep.fetchListForOrg.mockResolvedValue([repo]);
-
-    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--json");
-
-    const output = JSON.parse(allOutput());
-    expect(output.confirmRequired).toBe(true);
-    expect(githubStep.createDeploymentForRepo).not.toHaveBeenCalled();
-  });
-
-  it("exits when the wiring fails", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    stubHappyPath();
-    githubStep.createDeploymentForRepo.mockResolvedValue(null);
-
-    await expect(
-      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
-    ).rejects.toThrow("exit");
-    expect(allErrors()).toContain("Could not create the data source");
-  });
-
-  it("reverts the deployment when the backend drops the data source", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    stubHappyPath();
-    githubStep.verifyDataSourcesPersist.mockResolvedValue({
-      alive: new Set(),
-      dropped: new Set(["ds1"]),
-    });
-
-    await expect(
-      run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm"),
-    ).rejects.toThrow("exit");
-    expect(githubStep.deleteOrphanDeployment).toHaveBeenCalledWith(
-      expect.anything(),
-      "dep1",
-      "acme/api",
+  it("disconnect --yes deletes the source and drops the id from config", async () => {
+    configure([{ ...BUCKET, source_id: source().id }]);
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "DELETE" ? new Response(null, { status: 204 }) : json(source()),
     );
-    expect(allErrors()).toContain("couldn't sync");
+
+    await dosu("disconnect", "--yes");
+
+    expect(calls().map((c) => [c.method, c.path])).toEqual([
+      ["GET", `/v1/memory/sources/${source().id}`],
+      ["DELETE", `/v1/memory/sources/${source().id}`],
+    ]);
+    expect(savedSourceId()).toBeUndefined();
+    expect(out.join("\n")).toContain("disconnected; team is an archive again");
+  });
+});
+
+describe("parseStdinCredentials", () => {
+  it("accepts two lines, three lines, and JSON in either casing", () => {
+    expect(parseStdinCredentials("id\nsecret\n")).toEqual({
+      access_key_id: "id",
+      secret_access_key: "secret",
+    });
+    expect(parseStdinCredentials("id\nsecret\ntoken")).toEqual({
+      access_key_id: "id",
+      secret_access_key: "secret",
+      session_token: "token",
+    });
+    expect(
+      parseStdinCredentials('{"accessKeyId":"id","secretAccessKey":"secret","sessionToken":"t"}'),
+    ).toEqual({ access_key_id: "id", secret_access_key: "secret", session_token: "t" });
   });
 
-  it("prints a human-readable receipt", async () => {
-    mockLoadConfig.mockReturnValue(validConfig);
-    stubHappyPath();
-
-    await run("create", "github", "--repo", "acme/api", "--library", "lib1", "--confirm");
-
-    const output = allOutput();
-    expect(output).toContain("Connected acme/api to library lib1");
-    expect(output).toContain("ds1");
-    expect(output).toContain("dep1");
+  it("rejects what it cannot read", () => {
+    expect(() => parseStdinCredentials("only-one-line")).toThrow(/line 1 .* line 2/);
+    expect(() => parseStdinCredentials("{not json")).toThrow(/not valid JSON/);
+    expect(() => parseStdinCredentials('{"access_key_id":"id"}')).toThrow(/needs access_key_id/);
   });
 });
