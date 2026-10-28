@@ -172,6 +172,17 @@ describe("sources connect", () => {
     });
   });
 
+  it("--endpoint tells Dosu to read through a different endpoint than this machine writes to", async () => {
+    configure([{ ...BUCKET, endpoint: "http://127.0.0.1:9000" }]);
+    fetchImpl.mockImplementation(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
+
+    await dosu("connect", "--endpoint", "http://minio.internal:9000");
+
+    expect(calls()[1]?.body).toMatchObject({ endpoint: "http://minio.internal:9000" });
+  });
+
   it("reads the keys from stdin with --read-credentials-stdin", async () => {
     fetchImpl.mockImplementation(async (_url, init) =>
       init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),

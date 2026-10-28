@@ -222,6 +222,10 @@ function connectCommand(): Command {
     .option("--target <name|url>", "The bucket target to connect (default: the one target)")
     .option("--owner <id>", "Owner id, for an ad-hoc --target URL")
     .option("--name <name>", "How Dosu labels the source (default: the target's name)")
+    .option(
+      "--endpoint <url>",
+      "S3-compatible endpoint Dosu reads through, when it differs from the target's (a VPC endpoint, an internal MinIO)",
+    )
     .option("--access-key-id <id>", "Key Dosu reads the bucket with (read-only is enough)")
     .option("--secret-access-key <secret>", "Secret for --access-key-id")
     .option("--session-token <token>", "Session token, for temporary credentials")
@@ -239,6 +243,7 @@ function connectCommand(): Command {
         target?: string;
         owner?: string;
         name?: string;
+        endpoint?: string;
         accessKeyId?: string;
         secretAccessKey?: string;
         sessionToken?: string;
@@ -277,7 +282,9 @@ function connectCommand(): Command {
           owner: target.owner,
           ...(target.region ? { region: target.region } : {}),
           ...(target.account_id ? { account_id: target.account_id } : {}),
-          ...(target.endpoint ? { endpoint: target.endpoint } : {}),
+          ...((opts.endpoint ?? target.endpoint)
+            ? { endpoint: opts.endpoint ?? target.endpoint }
+            : {}),
           ...credentials,
           name: opts.name ?? target.name,
           ...(lag !== undefined ? { lag_seconds: lag } : {}),
