@@ -1,8 +1,10 @@
-/** Where a session's records go once the ship step has them: the Dosu memory ingest API
- * (`POST /v1/memory/ingest/async` with the login's API key) or a `@dosu/sessionstorage` store
- * (an S3 / R2 bucket or a local folder) written in-process. Both take the same redacted
- * trajectory-v1 records and the same metadata, and answer with the same three outcomes. */
+/** Where a session goes once the ship step has decided it should: the Dosu memory ingest API
+ * (`POST /v1/memory/ingest/async` with the login's API key), a `@dosu/sessionstorage` store (an
+ * S3 / R2 bucket or a local folder) written in-process, or a sessiondb server that writes the
+ * bucket for us. The first two take the redacted trajectory-v1 records; the server takes the
+ * raw transcript and normalizes and redacts it itself. All answer with the same three outcomes. */
 
+import { gzipSync } from "node:zlib";
 import {
   type IngestMetadata,
   IngestRejected,
@@ -20,18 +22,25 @@ type TargetResult =
   | { status: "rejected"; httpStatus?: number; message: string }
   | { status: "failed"; message: string };
 
+interface RawTranscript {
+  text: string;
+  format: "jsonl" | "json";
+}
+
 interface TargetSend {
   records: NormalizedRecord[];
   metadata: IngestMetadata;
   /** The session's token usage, when its journal records any; the Dosu target ships it next to
    * the records, a store keeps only what the layout defines. */
   usage?: SessionUsage;
+  /** The native log, read on demand: only a server target asks for it. */
+  transcript?: () => RawTranscript | null;
 }
 
 export interface Target {
   /** `dosu`, or the bucket target's configured name. */
   name: string;
-  kind: "dosu" | "store";
+  kind: "dosu" | "store" | "server";
   /** For messages: the backend URL or the store URL. */
   url: string;
   send(input: TargetSend): Promise<TargetResult>;
@@ -149,6 +158,82 @@ export function createStoreTarget(options: StoreTargetOptions): Target {
         if (err instanceof IngestRejected) {
           return { status: "rejected", message: `${err.code}: ${err.message}` };
         }
+        return { status: "failed", message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  };
+}
+
+export interface ServerTargetOptions {
+  name: string;
+  /** `https://host`, without a trailing slash. */
+  url: string;
+  token: string;
+  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+}
+
+interface ServerStored {
+  status: "stored" | "duplicate";
+  content_hash: string;
+}
+
+interface ServerError {
+  error?: { code?: string; message?: string };
+}
+
+/** A sessiondb server: `POST /v1/sessions` with the raw transcript, gzipped. The server
+ * normalizes, redacts, plans the continuation and writes the bucket; its 422s are the library's
+ * refusals and settle as rejected, 409 (no bucket linked yet) and everything else retry. */
+export function createServerTarget(options: ServerTargetOptions): Target {
+  const url = options.url.replace(/\/$/, "");
+  const fetchImpl = options.fetchImpl ?? fetch;
+  return {
+    name: options.name,
+    kind: "server",
+    url,
+    async send({ metadata, transcript }) {
+      const raw = transcript?.();
+      if (!raw) return { status: "failed", message: "transcript could not be read" };
+      const body = gzipSync(
+        Buffer.from(
+          JSON.stringify({
+            agent: metadata.agent,
+            session_id: metadata.session_id,
+            transcript: raw.text,
+            format: raw.format,
+            ...(metadata.project ? { project: metadata.project } : {}),
+            ...(metadata.branch ? { branch: metadata.branch } : {}),
+            ...(metadata.parent_session_id
+              ? { parent_session_id: metadata.parent_session_id }
+              : {}),
+            ...(metadata.continuation ? { continuation: metadata.continuation } : {}),
+          }),
+        ),
+      );
+      try {
+        const response = await fetchImpl(`${url}/v1/sessions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Encoding": "gzip",
+            Authorization: `Bearer ${options.token}`,
+          },
+          body: new Uint8Array(body),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        if (response.status === 200 || response.status === 201) {
+          const stored = (await response.json()) as ServerStored;
+          return { status: "shipped", taskId: `${stored.status}:${stored.content_hash}` };
+        }
+        const detail = (await response.json().catch(() => ({}))) as ServerError;
+        const message = detail.error?.message
+          ? `${detail.error.code ?? response.status}: ${detail.error.message}`
+          : `HTTP ${response.status}`;
+        if (response.status === 422 || response.status === 400 || response.status === 413) {
+          return { status: "rejected", httpStatus: response.status, message };
+        }
+        return { status: "failed", message: `server ${url}: ${message}` };
+      } catch (err) {
         return { status: "failed", message: err instanceof Error ? err.message : String(err) };
       }
     },

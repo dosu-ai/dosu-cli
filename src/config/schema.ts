@@ -43,10 +43,14 @@ export interface BucketCredentials {
 export interface BucketTarget {
   /** How the target is named on the command line (`--target team`). */
   name: string;
-  /** `s3://bucket/prefix`, `r2://bucket/prefix` or `file:///path` (a bare path is a folder too). */
+  /** `s3://bucket/prefix`, `r2://bucket/prefix` or `file:///path` (a bare path is a folder too),
+   * written in-process; or `https://host` of a sessiondb server that writes the bucket for us. */
   url: string;
-  /** The layout and dedupe are per owner; required. */
+  /** The layout and dedupe are per owner; required. For a server target, the owner its token
+   * was minted for. */
   owner: string;
+  /** A sessiondb server target's bearer token (`sdb_…`). Only with an `http(s)://` url. */
+  token?: string;
   /** AWS region, for `s3://`. */
   region?: string;
   /** Cloudflare account id, for `r2://`. */

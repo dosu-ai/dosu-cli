@@ -58,7 +58,7 @@ export interface BucketWizardResult {
   connectError?: string;
 }
 
-const PROVIDERS: readonly p.SelectOption<BucketProvider>[] = [
+export const PROVIDERS: readonly p.SelectOption<BucketProvider>[] = [
   { value: "s3", label: "Amazon S3", hint: "an S3 bucket in your AWS account" },
   { value: "r2", label: "Cloudflare R2", hint: "an R2 bucket in your Cloudflare account" },
   {
@@ -70,7 +70,7 @@ const PROVIDERS: readonly p.SelectOption<BucketProvider>[] = [
 
 const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
-function required(label: string): (value: string) => string | undefined {
+export function required(label: string): (value: string) => string | undefined {
   return (value) => (value.trim() ? undefined : `${label} is required`);
 }
 
@@ -116,7 +116,7 @@ function envCredentials(prefix: "AWS" | "R2" | "DOSU_SOURCE"): BucketCredentials
   };
 }
 
-class WizardCancelled extends Error {
+export class WizardCancelled extends Error {
   constructor() {
     super("cancelled");
     this.name = "WizardCancelled";
@@ -128,14 +128,14 @@ function unwrap<T>(value: T | symbol): T {
   return value as T;
 }
 
-interface Asker {
+export interface Asker {
   text(opts: Parameters<typeof p.text>[0], given: string | undefined): Promise<string>;
   select<T>(opts: Parameters<typeof p.select<T>>[0], given: T | undefined): Promise<T>;
   confirm(opts: Parameters<typeof p.confirm>[0], given: boolean | undefined): Promise<boolean>;
 }
 
 /** Prompts that take a given answer first, and under `--yes` refuse to ask at all. */
-function asker(yes: boolean, io: p.PromptIO): Asker {
+export function asker(yes: boolean, io: p.PromptIO): Asker {
   const missing = (what: string): never => {
     throw new CliUsageError(`--yes: ${what} was not given (pass it as a flag or environment)`);
   };
@@ -159,7 +159,7 @@ function asker(yes: boolean, io: p.PromptIO): Asker {
   };
 }
 
-async function askKeyPair(
+export async function askKeyPair(
   ask: Asker,
   what: string,
   given: BucketCredentials | undefined,
@@ -469,6 +469,64 @@ async function wizard(
   );
 
   // --- let Dosu read it ---------------------------------------------------------
+  return await connectBucketToDosu(
+    cfg,
+    api,
+    { name, url, provider, bucket, prefix, owner, region, accountId, endpoint },
+    {
+      write: write !== "env" ? write : undefined,
+      read: input.read,
+      connect: input.connect,
+      yes: input.yes ?? false,
+      dosuUnavailable,
+    },
+    ask,
+    io,
+    s,
+  );
+}
+
+/** A bucket as Dosu is told about it: what the wizard set up, or what a sessiondb server
+ * reports it writes to. */
+export interface ConnectableBucket {
+  name: string;
+  url: string;
+  provider: BucketProvider;
+  bucket: string;
+  prefix: string;
+  owner: string;
+  region?: string;
+  accountId?: string;
+  endpoint?: string;
+}
+
+export interface ConnectOptions {
+  /** This machine's static write keys, offered as "the same keys" for Dosu to read with. */
+  write?: BucketCredentials;
+  read?: BucketWizardInput["read"];
+  connect?: boolean;
+  yes: boolean;
+  /** Why Dosu cannot be asked right now (the preflight's answer), if it cannot. */
+  dosuUnavailable?: string;
+}
+
+/** The second half of setting up a bucket: ask Dosu to read it. Asks which keys Dosu reads
+ * with, registers the source, and retries or skips on failure; the target in config gets the
+ * source id. The target is saved before this runs, so every exit here leaves it usable. */
+export async function connectBucketToDosu(
+  cfg: Config,
+  api: SourcesApi | undefined,
+  target: ConnectableBucket,
+  options: ConnectOptions,
+  ask: Asker,
+  io: p.PromptIO,
+  s: ReturnType<typeof p.spinner>,
+): Promise<BucketWizardResult> {
+  const { name, url, provider, bucket, prefix, owner, region, accountId, endpoint } = target;
+  const saved = configuredTargets(cfg).find((t) => t.name === name) as BucketTarget;
+  const write = options.write;
+  const input = { read: options.read, connect: options.connect, yes: options.yes };
+  const dosuUnavailable = options.dosuUnavailable;
   if (!api) {
     p.log.info(
       wrapLog(
@@ -476,7 +534,7 @@ async function wizard(
       ),
       io,
     );
-    return { target };
+    return { target: saved };
   }
   if (dosuUnavailable) {
     p.log.info(
@@ -485,7 +543,7 @@ async function wizard(
       ),
       io,
     );
-    return { target, connectError: dosuUnavailable };
+    return { target: saved, connectError: dosuUnavailable };
   }
   const connect = await ask.confirm(
     {
@@ -501,7 +559,7 @@ async function wizard(
       wrapLog(`Archive only. ${info(`dosu sources connect --target ${name}`)} connects it later.`),
       io,
     );
-    return { target };
+    return { target: saved };
   }
 
   let read: BucketCredentials;
@@ -510,7 +568,7 @@ async function wizard(
   } else if (input.read === "same" || envCredentials("DOSU_SOURCE")) {
     read = envCredentials("DOSU_SOURCE") ?? requireStatic(write);
   } else {
-    const staticWrite = write !== "env" ? write : undefined;
+    const staticWrite = write;
     const choice = await ask.select(
       {
         message: "Keys Dosu reads the bucket with",
@@ -570,7 +628,7 @@ async function wizard(
       const later = `The target is saved; ${info(`dosu sources connect --target ${name}`)} tries again.`;
       if (input.yes) {
         p.log.warn(wrapLog(`${message}\n${later}`), io);
-        return { target, connectError: message };
+        return { target: saved, connectError: message };
       }
       p.log.error(wrapLog(message), io);
       const retry = { value: "retry" as const, label: "Try again" };
@@ -592,7 +650,7 @@ async function wizard(
       // Cancelling here is skipping: the target is already saved, so this is not "nothing".
       if (p.isCancel(next) || next === "skip") {
         p.log.warn(wrapLog(later), io);
-        return { target, connectError: message };
+        return { target: saved, connectError: message };
       }
       if (next === "keys") read = await askKeyPair(ask, "Read-only keys", undefined);
     }
@@ -607,12 +665,12 @@ async function wizard(
     ),
     io,
   );
-  return { target, source };
+  return { target: saved, source };
 }
 
 /** Why Dosu cannot connect a bucket right now, or undefined when it can: the sources API
  * answered. A 404 is a Dosu without the feature; anything else is reported as it came. */
-async function preflight(api: SourcesApi): Promise<string | undefined> {
+export async function preflight(api: SourcesApi): Promise<string | undefined> {
   try {
     await api.list();
     return undefined;
@@ -627,8 +685,8 @@ async function preflight(api: SourcesApi): Promise<string | undefined> {
   }
 }
 
-function requireStatic(write: "env" | BucketCredentials): BucketCredentials {
-  if (write === "env") {
+function requireStatic(write: BucketCredentials | undefined): BucketCredentials {
+  if (!write) {
     throw new CliUsageError(
       "Dosu cannot use this machine's environment: give it a key pair (--read-access-key-id/--read-secret-access-key, or DOSU_SOURCE_ACCESS_KEY_ID/DOSU_SOURCE_SECRET_ACCESS_KEY)",
     );

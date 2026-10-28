@@ -21,7 +21,13 @@ import { CliUsageError } from "../cli/errors";
 import { type Config, loadConfig, MODE_OSS } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import type { BucketTarget } from "../config/schema";
-import { configuredTargets, openStore, resolveBucketTarget } from "../config/targets";
+import {
+  configuredTargets,
+  isServerTarget,
+  openStore,
+  resolveBucketTarget,
+} from "../config/targets";
+import { serverError } from "../store/remote";
 import { confirm, isCancel } from "../tui/prompts";
 import { printResult, printTable, truncate } from "./output";
 
@@ -272,12 +278,15 @@ async function redactFromStore(
   session: { agent: string; sessionId: string },
 ): Promise<{ summary: string; removed: number }> {
   const target = selectBucketTarget(cfg, selection);
-  const result = await tombstone({
-    store: openStore(target),
-    owner: target.owner,
-    agent: session.agent,
-    session_id: session.sessionId,
-  });
+  // A server target tombstones through its API (the store it opens here is read-only).
+  const result = isServerTarget(target)
+    ? await redactOnServer(target, session)
+    : await tombstone({
+        store: openStore(target),
+        owner: target.owner,
+        agent: session.agent,
+        session_id: session.sessionId,
+      });
   if (!result) {
     throw new CliUsageError(
       `session ${session.agent}:${session.sessionId} is not in ${target.name}`,
@@ -287,6 +296,26 @@ async function redactFromStore(
     summary: `${result.removed} object${result.removed === 1 ? "" : "s"} removed`,
     ...result,
   };
+}
+
+async function redactOnServer(
+  target: BucketTarget,
+  session: { agent: string; sessionId: string },
+): Promise<{ removed: number } | null> {
+  if (!target.token)
+    throw new CliUsageError(`target ${target.name} has no token; run 'dosu setup'`);
+  const url = `${target.url.replace(/\/$/, "")}/v1/sessions/${encodeURIComponent(
+    session.agent,
+  )}/${encodeURIComponent(session.sessionId)}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${target.token}` },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`${target.name}: redact failed: ${await serverError(response)}`);
+  }
+  return (await response.json()) as { removed: number };
 }
 
 interface DosuRedaction {

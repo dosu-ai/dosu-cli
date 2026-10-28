@@ -16,7 +16,7 @@ import {
   saveConfig,
   updateTarget,
 } from "../config/config";
-import { configuredTargets } from "../config/targets";
+import { configuredTargets, isServerTarget } from "../config/targets";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
@@ -26,6 +26,7 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
+import { runServerWizard } from "../sources/server-wizard";
 import { runBucketWizard } from "../sources/wizard";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -271,30 +272,32 @@ function setupOutroMessage(mcpCompleted: boolean): string {
   return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
 }
 
-/** Where finished sessions are kept. Dosu is the default; the alternative is the user's own
- * S3 / R2 bucket, which `dosu sync` writes and Dosu reads (keeping only what it learns). A bucket
- * already set up is shown and kept unless `--storage` asks again. Returns null when the user
- * cancelled the bucket flow mid-way (nothing was saved), so setup stops where they did. */
+/** Where finished sessions are kept. Dosu is the default; the alternatives are the user's own
+ * S3 / R2 bucket, which `dosu sync` writes and Dosu reads (keeping only what it learns), or a
+ * sessiondb server that writes such a bucket for this machine. A target already set up is shown
+ * and kept unless `--storage` asks again. Returns null when the user cancelled the flow mid-way
+ * (nothing was saved), so setup stops where they did. */
 export async function stepChooseSessionStorage(
   cfg: Config,
   opts: Pick<SetupOptions, "storage"> = {},
-): Promise<"dosu" | "bucket" | null> {
-  const buckets = configuredTargets(cfg).filter((t) => /^(s3|r2):\/\//.test(t.url));
+): Promise<"dosu" | "bucket" | "server" | null> {
+  const buckets = configuredTargets(cfg).filter((t) => /^(s3|r2|https?):\/\//.test(t.url));
   const current = buckets.find((t) => t.name === cfg.default_target);
   if (current && !opts.storage) {
+    const server = isServerTarget(current);
     p.log.success(
       wrapLog(
-        `Sessions ship to your bucket ${current.url} (owner ${current.owner})${
+        `Sessions ship ${server ? "through your sessiondb server" : "to your bucket"} ${current.url} (owner ${current.owner})${
           current.source_id ? ", which Dosu reads" : ""
         }. ${info("dosu setup --storage")} changes that.`,
       ),
     );
-    return "bucket";
+    return server ? "server" : "bucket";
   }
   logger.info("setup", "Step: choose session storage");
   p.log.message(
     wrapLog(
-      "Dosu memory learns from finished agent sessions. The transcripts can live with Dosu, or in a bucket you own: then Dosu reads them from there, keeps only what it learns, and loses access the moment you disconnect.",
+      "Dosu memory learns from finished agent sessions. The transcripts can live with Dosu, or in a bucket you own: then Dosu reads them from there, keeps only what it learns, and loses access the moment you disconnect. A sessiondb server is a bucket your team hosts the keys for: this machine only gets a token.",
     ),
   );
   const choice = await p.select({
@@ -306,9 +309,14 @@ export async function stepChooseSessionStorage(
         label: "My own bucket",
         hint: "Amazon S3, Cloudflare R2 or S3-compatible; you hold the keys",
       },
+      {
+        value: "server" as const,
+        label: "A sessiondb server",
+        hint: "your team's server writes the bucket; you paste a token",
+      },
     ],
   });
-  if (p.isCancel(choice) || choice !== "bucket") {
+  if (p.isCancel(choice) || (choice !== "bucket" && choice !== "server")) {
     if (cfg.default_target !== undefined && cfg.default_target !== "dosu") {
       cfg.default_target = "dosu";
       saveConfig(cfg);
@@ -317,16 +325,18 @@ export async function stepChooseSessionStorage(
     return "dosu";
   }
   try {
-    const result = await runBucketWizard(cfg);
+    const result = choice === "server" ? await runServerWizard(cfg) : await runBucketWizard(cfg);
     if (!result) {
       p.log.info(
         wrapLog(
-          `No bucket set up; sessions ship to Dosu. ${info("dosu sources setup")} tries again.`,
+          choice === "server"
+            ? `No server set up; sessions ship to Dosu. ${info("dosu sources setup --server <url>")} tries again.`
+            : `No bucket set up; sessions ship to Dosu. ${info("dosu sources setup")} tries again.`,
         ),
       );
       return null;
     }
-    return "bucket";
+    return choice;
   } catch (err) {
     if (!(err instanceof CliUsageError)) throw err;
     p.log.warn(wrapLog(`${err.message}\nSessions ship to Dosu until then.`));

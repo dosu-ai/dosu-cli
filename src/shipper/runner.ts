@@ -17,7 +17,12 @@ import { createProjectDirResolver } from "../sessions/project-dir";
 import type { AgentSession } from "../sessions/scan";
 import { isIncognitoSession } from "../sync/incognito";
 import type { ShipHold, ShipSessionResult, SyncDeps } from "../sync/sync";
-import { normalizeSessionRecords, trajectorySourceOf } from "./normalize";
+import {
+  normalizeSessionRecords,
+  readTranscript,
+  trajectorySourceOf,
+  transcriptFormat,
+} from "./normalize";
 import { forkCopy, sessionStartOf } from "./session-start";
 import { createDosuTarget, type Target } from "./target";
 import { readSessionUsage, type SessionUsage } from "./usage";
@@ -123,6 +128,10 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
         ...(plan.continuation ? { continuation: plan.continuation } : {}),
       },
       ...(usage ? { usage } : {}),
+      transcript: () => {
+        const text = readTranscript(session);
+        return text === null ? null : { text, format: transcriptFormat(session.harness) };
+      },
     });
     if (sent.status === "shipped") {
       return {

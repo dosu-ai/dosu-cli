@@ -21,8 +21,16 @@ export interface NormalizeOptions {
   opencodeBinary?: boolean;
 }
 
+/** How a harness's native log is shaped, which decides how a raw copy is redacted. */
+export function transcriptFormat(harness: string): "jsonl" | "json" {
+  return harness === "opencode" || harness === "gemini" ? "json" : "jsonl";
+}
+
 /** The raw transcript the adapter reads; null when unreadable. */
-function readTranscript(session: AgentSession, options: NormalizeOptions = {}): string | null {
+export function readTranscript(
+  session: AgentSession,
+  options: NormalizeOptions = {},
+): string | null {
   if (session.harness === "opencode") {
     return opencodeTranscript(session, { binary: options.opencodeBinary });
   }

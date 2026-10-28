@@ -5,8 +5,25 @@
 
 import { type Config, MODE_OSS } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
-import { configuredTargets, openStore, resolveBucketTarget } from "../config/targets";
-import { createDosuTarget, createStoreTarget, type Target } from "./target";
+import type { BucketTarget } from "../config/schema";
+import {
+  configuredTargets,
+  isServerTarget,
+  openStore,
+  resolveBucketTarget,
+} from "../config/targets";
+import { createDosuTarget, createServerTarget, createStoreTarget, type Target } from "./target";
+
+/** A configured bucket, folder or server target as the shipper's `Target`. */
+function bucketTarget(bucket: BucketTarget): Target {
+  if (isServerTarget(bucket)) {
+    if (!bucket.token) {
+      throw new Error(`target ${bucket.name} (${bucket.url}) has no token; run 'dosu setup'`);
+    }
+    return createServerTarget({ name: bucket.name, url: bucket.url, token: bucket.token });
+  }
+  return createStoreTarget({ name: bucket.name, store: openStore(bucket), owner: bucket.owner });
+}
 
 export interface TargetSelection {
   /** `--target`: a name or URL. */
@@ -42,12 +59,11 @@ export function selectTarget(cfg: Config, selection: TargetSelection = {}): Targ
     return dosu;
   }
   if (named !== undefined) {
-    const bucket = resolveBucketTarget(cfg, named, { owner: selection.owner });
-    return createStoreTarget({ name: bucket.name, store: openStore(bucket), owner: bucket.owner });
+    return bucketTarget(resolveBucketTarget(cfg, named, { owner: selection.owner }));
   }
   const dosu = dosuTarget(cfg);
   if (dosu) return dosu;
   const [first] = configuredTargets(cfg);
   if (!first) return undefined;
-  return createStoreTarget({ name: first.name, store: openStore(first), owner: first.owner });
+  return bucketTarget(first);
 }

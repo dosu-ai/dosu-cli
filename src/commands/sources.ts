@@ -4,13 +4,12 @@
  * credentials (`disconnect`). The bucket stays the user's archive throughout; only the
  * connection changes. */
 
-import { parseS3Url } from "@dosu/sessionstorage";
 import { Command } from "commander";
 import pc from "picocolors";
 import { CliUsageError } from "../cli/errors";
 import { type Config, loadConfig, saveConfig } from "../config/config";
 import type { BucketTarget } from "../config/schema";
-import { configuredTargets, resolveBucketTarget } from "../config/targets";
+import { configuredTargets, isServerTarget, resolveBucketTarget } from "../config/targets";
 import {
   type ConnectSourceRequest,
   requireSourcesApi,
@@ -18,7 +17,13 @@ import {
   type SourcesApi,
   SourcesApiError,
 } from "../sources/api";
-import { type BucketProvider, type BucketWizardInput, runBucketWizard } from "../sources/wizard";
+import { bucketOfTarget, runServerWizard } from "../sources/server-wizard";
+import {
+  type BucketProvider,
+  type BucketWizardInput,
+  type BucketWizardResult,
+  runBucketWizard,
+} from "../sources/wizard";
 import { confirm, isCancel } from "../tui/prompts";
 import { formatAge, printResult, printTable, truncate } from "./output";
 
@@ -64,7 +69,8 @@ function selectBucketTarget(cfg: Config, selection: TargetSelection): BucketTarg
     }
     target = targets[0] as BucketTarget;
   }
-  if (!/^(s3|r2):\/\//.test(target.url)) {
+  // A server target's bucket is checked when the server is asked for it (bucketOfTarget).
+  if (!/^(s3|r2):\/\//.test(target.url) && !isServerTarget(target)) {
     throw new CliUsageError(
       `target ${target.name} (${target.url}) is a local folder: Dosu can only read an s3:// or r2:// bucket. Copy it to a bucket first (aws s3 sync / rclone), then connect that.`,
     );
@@ -98,7 +104,14 @@ async function findSource(
     }
   }
   const sources = await api.list();
-  const match = sources.find((s) => s.url === target.url && s.owner === target.owner);
+  // A server target is matched by the bucket behind it, when the server can say.
+  const url = isServerTarget(target)
+    ? await bucketOfTarget(target).then(
+        (b) => b.url,
+        () => target.url,
+      )
+    : target.url;
+  const match = sources.find((s) => s.url === url && s.owner === target.owner);
   if (match) rememberSourceId(target, match.id);
   return match;
 }
@@ -134,6 +147,9 @@ interface SetupOptions {
   default?: boolean;
   yes?: boolean;
   json?: boolean;
+  /** A sessiondb server instead of a bucket written from here. */
+  server?: string;
+  token?: string;
 }
 
 /** `dosu sources setup` flags as wizard answers; a pair given by halves is an error. */
@@ -182,7 +198,7 @@ function setupCommand(): Command {
   return new Command("setup")
     .alias("add")
     .description(
-      "Keep your sessions in your own S3 / R2 bucket: a guided setup that checks the bucket, makes it where 'dosu sync' ships, and lets Dosu read it. Every answer can be a flag; --yes never prompts",
+      "Keep your sessions in your own S3 / R2 bucket, or behind a sessiondb server (--server): a guided setup that checks the bucket, makes it where 'dosu sync' ships, and lets Dosu read it. Every answer can be a flag; --yes never prompts",
     )
     .option("--provider <s3|r2|compatible>", "Where the bucket lives")
     .option("--bucket <name>", "Bucket name")
@@ -201,14 +217,37 @@ function setupCommand(): Command {
     .option("--read-access-key-id <id>", "Key Dosu reads with (read-only is enough)")
     .option("--read-secret-access-key <secret>", "Secret for --read-access-key-id")
     .option("--read-same", "Dosu reads with the upload keys")
+    .option(
+      "--server <url>",
+      "Ship through a sessiondb server instead: it holds the bucket and its keys, this machine only a token",
+    )
+    .option("--token <token>", "The server token (sdb_…) minted for you")
     .option("--no-connect", "Save the target without letting Dosu read it")
     .option("--no-default", "Keep shipping to Dosu; the bucket is reachable with --target")
     .option("-y, --yes", "Never prompt; every answer comes from flags, environment or defaults")
     .option("--json", "Output as JSON")
     .action(async (opts: SetupOptions) => {
       const cfg = loadConfig();
-      const input = wizardInputFromOptions(opts);
-      const result = await runBucketWizard(cfg, { ...input, ...(opts.json ? { yes: true } : {}) });
+      const yes = opts.yes || opts.json ? { yes: true } : {};
+      let result: BucketWizardResult | null;
+      if (opts.server !== undefined || opts.token !== undefined) {
+        if (opts.bucket || opts.provider || opts.accessKeyId || opts.useEnv) {
+          throw new CliUsageError(
+            "--server takes no bucket or upload-key flags: the server holds those",
+          );
+        }
+        result = await runServerWizard(cfg, {
+          ...(opts.server ? { server: opts.server } : {}),
+          ...(opts.token ? { token: opts.token } : {}),
+          ...(opts.name ? { name: opts.name } : {}),
+          ...(opts.connect === false ? { connect: false } : {}),
+          ...(opts.default === false ? { makeDefault: false } : {}),
+          ...yes,
+        });
+      } else {
+        const input = wizardInputFromOptions(opts);
+        result = await runBucketWizard(cfg, { ...input, ...yes });
+      }
       if (!result) {
         console.log("Cancelled; nothing saved.");
         return;
@@ -417,7 +456,9 @@ function connectCommand(): Command {
         }
 
         const { credentials, from } = await readCredentials(target, opts);
-        const { scheme, bucket, prefix } = parseS3Url(target.url);
+        // A server target's bucket is whatever the server writes to; ask it.
+        const store = await bucketOfTarget(target);
+        const { scheme, bucket, prefix } = store;
         const lag = opts.lag === undefined ? undefined : Number.parseInt(opts.lag, 10);
         if (lag !== undefined && (!Number.isFinite(lag) || lag < 0)) {
           throw new CliUsageError(
@@ -429,10 +470,10 @@ function connectCommand(): Command {
           bucket,
           prefix,
           owner: target.owner,
-          ...(target.region ? { region: target.region } : {}),
-          ...(target.account_id ? { account_id: target.account_id } : {}),
-          ...((opts.endpoint ?? target.endpoint)
-            ? { endpoint: opts.endpoint ?? target.endpoint }
+          ...(store.region ? { region: store.region } : {}),
+          ...(store.account_id ? { account_id: store.account_id } : {}),
+          ...((opts.endpoint ?? store.endpoint)
+            ? { endpoint: opts.endpoint ?? store.endpoint }
             : {}),
           ...credentials,
           name: opts.name ?? target.name,
@@ -445,7 +486,7 @@ function connectCommand(): Command {
         } catch (err) {
           if (err instanceof SourcesApiError && (err.status === 400 || err.status === 422)) {
             throw new CliUsageError(
-              `Dosu could not read ${target.url} as owner ${target.owner} with the ${from} keys: ${err.message}`,
+              `Dosu could not read ${store.url} as owner ${target.owner} with the ${from} keys: ${err.message}`,
             );
           }
           throw err;

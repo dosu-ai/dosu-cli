@@ -124,6 +124,21 @@ Dosu also updates itself automatically. When the update check (every six hours) 
 
 Run `dosu <command> --help` for subcommands and flags.
 
+### Where sessions are stored
+
+`dosu setup` asks once (and `dosu setup --storage` asks again):
+
+| Choice | Who holds the bucket keys | How a session travels |
+|---|---|---|
+| **Dosu** | nobody; Dosu stores the transcripts | `dosu sync` normalizes and redacts locally, POSTs the records to Dosu |
+| **My own bucket** | this machine (write) and Dosu (read-only) | `dosu sync` normalizes and redacts locally and writes your S3 / R2 bucket in the [sessionstorage layout](https://github.com/dosu-ai/sessiondb/blob/main/docs/layout.md); Dosu tails the bucket's change feed |
+| **A sessiondb server** | the server (write) and Dosu (read-only); this machine holds only a token | `dosu sync` uploads the raw transcript to your team's [sessiondb server](https://github.com/dosu-ai/sessiondb/blob/main/docs/server.md), which normalizes, redacts and writes the bucket; Dosu tails the bucket as above |
+
+Non-interactively: `dosu sources setup --provider r2 --bucket … --account-id … …` for a bucket,
+or `dosu sources setup --server https://sessions.example.com --token sdb_… --yes` for a server.
+`dosu get`, `dosu export`, `dosu changes` and `dosu redact` work against all three bucket-backed
+targets (a server target reads through the server's API).
+
 ### Supported AI tools
 
 `dosu mcp add <id>` and the setup wizard support the coding agents whose sessions Dosu can learn from — each one keeps a session log on disk that [`@letta-ai/trajectory`](https://github.com/letta-ai/trajectory) normalizes:

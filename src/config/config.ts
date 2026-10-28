@@ -257,6 +257,7 @@ function normalizeBucketTarget(value: unknown): BucketTarget | undefined {
     ...(stringValue(value.region) ? { region: value.region as string } : {}),
     ...(stringValue(value.account_id) ? { account_id: value.account_id as string } : {}),
     ...(stringValue(value.endpoint) ? { endpoint: value.endpoint as string } : {}),
+    ...(stringValue(value.token) ? { token: value.token as string } : {}),
     ...(credentials ? { credentials } : {}),
     ...(stringValue(value.source_id) ? { source_id: value.source_id as string } : {}),
   };
