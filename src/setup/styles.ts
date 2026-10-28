@@ -14,7 +14,7 @@ const INK_FG = "\u001B[38;2;14;14;14m";
 const RESET_FG = "\u001B[39m";
 const RESET_BG = "\u001B[49m";
 
-function hasTruecolor(): boolean {
+export function hasTruecolor(): boolean {
   return /truecolor|24bit/i.test(process.env.COLORTERM ?? "");
 }
 

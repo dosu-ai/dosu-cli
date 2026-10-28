@@ -136,7 +136,7 @@ export function createProgram(): Command {
       }
     })
     .allowExcessArguments(true)
-    .action(() => {
+    .action(async () => {
       const command = program.args[0];
       if (command !== undefined) {
         // An unrecognized first token reaches the root action instead of a
@@ -149,7 +149,14 @@ export function createProgram(): Command {
         process.exitCode = 1;
         return;
       }
-      program.outputHelp();
+      // Default: the interactive home screen when there is a terminal to draw it on; piped
+      // or scripted, the help text says what the commands are.
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        program.outputHelp();
+        return;
+      }
+      const { runTUI } = await import("../tui/tui");
+      await runTUI();
     });
 
   // login

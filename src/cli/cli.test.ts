@@ -27,6 +27,9 @@ vi.mock("../debug/logger", () => ({
 }));
 
 vi.mock("../version/update-check", () => ({ checkForUpdates: vi.fn() }));
+// The home screen takes over the terminal; the root action only has to reach it.
+const { mockRunTUI } = vi.hoisted(() => ({ mockRunTUI: vi.fn(async () => {}) }));
+vi.mock("../tui/tui", () => ({ runTUI: mockRunTUI }));
 vi.mock("../version/incognito-backfill-check", () => ({ checkForIncognitoBackfill: vi.fn() }));
 vi.mock("../version/mcp-refresh-check", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version/mcp-refresh-check")>()),
@@ -473,6 +476,32 @@ describe("CLI", () => {
       process.exitCode = originalExitCode;
       errorSpy.mockRestore();
     }
+  });
+
+  describe("no arguments", () => {
+    const tty = { stdin: process.stdin.isTTY, stdout: process.stdout.isTTY };
+    afterEach(() => {
+      Object.defineProperty(process.stdin, "isTTY", { value: tty.stdin, configurable: true });
+      Object.defineProperty(process.stdout, "isTTY", { value: tty.stdout, configurable: true });
+      mockRunTUI.mockReset();
+    });
+
+    it("launches the home screen on a terminal", async () => {
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      await createProgram().parseAsync(["node", "dosu"]);
+      expect(mockRunTUI).toHaveBeenCalledOnce();
+    });
+
+    it("prints help instead when stdin or stdout is not a terminal", async () => {
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      const program = createProgram();
+      const helpSpy = vi.spyOn(program, "outputHelp").mockImplementation(() => {});
+      await program.parseAsync(["node", "dosu"]);
+      expect(mockRunTUI).not.toHaveBeenCalled();
+      expect(helpSpy).toHaveBeenCalledOnce();
+    });
   });
 
   it("does not expose the removed hooks command", () => {

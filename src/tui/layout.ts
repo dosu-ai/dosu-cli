@@ -2,6 +2,7 @@
  * (clack has no indent support), so all TUI output shares one centered column. */
 
 import pc from "picocolors";
+import { brand } from "../setup/styles";
 
 const ESC = String.fromCharCode(27);
 
@@ -126,4 +127,61 @@ export function installCenteredLayout(stream: NodeJS.WriteStream = process.stdou
     active = false;
     activeMargin = 0;
   };
+}
+
+/** Padding inside each equal-width tab cell (cells mode). */
+const TAB_CELL_PAD = 2;
+
+/** Shared tab strip: labels over a rule whose heavier segment marks the active tab. Spread mode
+ * stretches labels across `width`; cells mode centers each label in equal-width cells. */
+export function tabStrip<Id extends string>(
+  labels: ReadonlyArray<readonly [Id, string]>,
+  active: Id,
+  width: number,
+  { spread = true }: { spread?: boolean } = {},
+): [string, string] {
+  if (!spread) {
+    const cellW = Math.max(...labels.map(([, label]) => label.length)) + 2 * TAB_CELL_PAD;
+    let row = "";
+    let rule = "";
+    for (const [id, label] of labels) {
+      const left = Math.floor((cellW - label.length) / 2);
+      const cell = " ".repeat(left) + label + " ".repeat(cellW - label.length - left);
+      row += id === active ? brand(pc.bold(cell)) : pc.dim(cell);
+      rule += id === active ? brand("\u2501".repeat(cellW)) : pc.dim("\u2500".repeat(cellW));
+    }
+    return [row, rule];
+  }
+  // Narrow frames fall back to a minimum gap and let the row run long.
+  const GAP_MIN = 3;
+  const totalLen = labels.reduce((sum, [, label]) => sum + label.length, 0);
+  const slots = Math.max(1, labels.length - 1);
+  const spare = Math.max(GAP_MIN * slots, width - totalLen);
+  const baseGap = Math.floor(spare / slots);
+  const bonus = spare % slots; // first `bonus` gaps get one extra column
+  let row = "";
+  let col = 0;
+  let activeStart = 0;
+  let activeLen = 0;
+  labels.forEach(([id, label], i) => {
+    if (i > 0) {
+      const gap = baseGap + (i <= bonus ? 1 : 0);
+      row += " ".repeat(gap);
+      col += gap;
+    }
+    if (id === active) {
+      activeStart = col;
+      activeLen = label.length;
+      row += brand(pc.bold(label));
+    } else {
+      row += pc.dim(label);
+    }
+    col += label.length;
+  });
+  const tail = Math.max(0, width - activeStart - activeLen);
+  const rule =
+    pc.dim("\u2500".repeat(activeStart)) +
+    brand("\u2501".repeat(activeLen)) +
+    pc.dim("\u2500".repeat(tail));
+  return [row, rule];
 }
