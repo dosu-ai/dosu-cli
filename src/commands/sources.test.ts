@@ -25,13 +25,11 @@ const SERVER: ServerTarget = {
   token: "sdb_test",
 };
 
-/** What the server reports it writes for the owner (`GET /v1/storage`). */
+/** What the server reports it writes (`GET /v1/me`). */
 let storage: Record<string, unknown>;
 const SERVER_STORAGE = {
   url: "s3://acme-sessions/agents",
   region: "us-east-1",
-  credentials: "static",
-  updated_at: "2026-10-22T00:00:00.000Z",
 };
 
 function source(extra: Partial<SourceStatus> = {}): SourceStatus {
@@ -94,7 +92,7 @@ function calls(): Array<{ method: string; path: string; body?: unknown }> {
 /** Dosu answers with `impl`; the sessiondb server always says what bucket it writes. */
 function dosuAnswers(impl: Fetch): void {
   fetchImpl.mockImplementation(async (url, init) =>
-    url.startsWith(SERVER.url) ? json(storage) : impl(url, init),
+    url.startsWith(SERVER.url) ? json({ owner: "james", storage }) : impl(url, init),
   );
 }
 
@@ -251,23 +249,11 @@ describe("sources connect", () => {
   });
 
   it("refuses a server that writes a folder on its own disk: Dosu cannot read that", async () => {
-    storage = { url: "file:///srv/sessions", credentials: "none", updated_at: "x" };
+    storage = { url: "file:///srv/sessions" };
     vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
     vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
     await expect(dosu("connect")).rejects.toThrow(/not a bucket Dosu can read/);
     expect(calls().map((c) => c.method)).toEqual(["GET"]);
-  });
-
-  it("says when the server has no bucket linked yet", async () => {
-    dosuAnswers(async () => json({ sources: [] }));
-    fetchImpl.mockImplementation(async (url) =>
-      url.startsWith(SERVER.url)
-        ? json({ error: { code: "no_storage", message: "none" } }, 404)
-        : json({ sources: [] }),
-    );
-    vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
-    vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
-    await expect(dosu("connect")).rejects.toThrow(/no bucket linked for james yet/);
   });
 
   it("needs a login: a source is Dosu reading on your behalf", async () => {

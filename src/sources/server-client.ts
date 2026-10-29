@@ -31,20 +31,19 @@ export async function serverError(response: Response): Promise<string> {
   return `HTTP ${response.status}`;
 }
 
-/** The owner's linked bucket, as `GET /v1/storage` describes it (never its keys). */
+/** The bucket the server writes, as `GET /v1/me` describes it (never its keys). */
 export interface LinkedStorage {
   /** `s3://bucket/prefix`, `r2://bucket/prefix` or `file:///path`. */
   url: string;
   region?: string;
   account_id?: string;
   endpoint?: string;
-  credentials: "static" | "env" | "none";
-  updated_at?: string;
 }
 
 export interface Me {
+  /** The name sessions are filed under in the bucket (`owners/<owner>/`). */
   owner: string;
-  storage: LinkedStorage | null;
+  storage: LinkedStorage;
 }
 
 /** `sessionstorage/metadata/1`, as the layout documents it. */
@@ -125,11 +124,6 @@ export class SessiondbClient {
 
   me(): Promise<Me> {
     return this.call("GET", "/v1/me");
-  }
-
-  /** The owner's linked bucket; null when none is. */
-  storage(): Promise<LinkedStorage | null> {
-    return this.call("GET", "/v1/storage", { notFound: null });
   }
 
   session(agent: string, sessionId: string): Promise<SessionMetadata | null> {

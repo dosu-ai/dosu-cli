@@ -18,23 +18,6 @@ import type { LinkedStorage } from "./server-client";
 
 export type BucketProvider = "s3" | "r2" | "compatible";
 
-export const PROVIDERS: readonly p.SelectOption<BucketProvider>[] = [
-  { value: "s3", label: "Amazon S3", hint: "an S3 bucket in your AWS account" },
-  { value: "r2", label: "Cloudflare R2", hint: "an R2 bucket in your Cloudflare account" },
-  {
-    value: "compatible",
-    label: "S3-compatible",
-    hint: "MinIO, RustFS, Backblaze B2, Wasabi… anything with an S3 endpoint",
-  },
-];
-
-/** `s3://bucket/prefix` for S3 and S3-compatible stores, `r2://bucket/prefix` for R2. */
-export function targetUrl(provider: BucketProvider, bucket: string, prefix: string): string {
-  const scheme = provider === "r2" ? "r2" : "s3";
-  const path = prefix.replace(/^\/+|\/+$/g, "");
-  return path ? `${scheme}://${bucket}/${path}` : `${scheme}://${bucket}`;
-}
-
 /** A bucket as Dosu is told about it: what the server reports it writes to. */
 export interface ConnectableBucket {
   name: string;
@@ -67,24 +50,12 @@ export interface ConnectResult {
 }
 
 export interface ConnectOptions {
-  /** Static write keys entered a moment ago (linking the bucket on the server), offered as
-   * "the same keys" for Dosu to read with. */
-  write?: KeyPair;
-  /** Dosu's read keys, given up front; `"same"` reuses `write`. */
-  read?: KeyPair | "same";
+  /** Dosu's read keys, given up front. */
+  read?: KeyPair;
   connect?: boolean;
   yes: boolean;
   /** Why Dosu cannot be asked right now (the preflight's answer), if it cannot. */
   dosuUnavailable?: string;
-}
-
-function requireStatic(write: KeyPair | undefined): KeyPair {
-  if (!write) {
-    throw new Error(
-      "give Dosu a key pair: --read-access-key-id/--read-secret-access-key, or DOSU_SOURCE_ACCESS_KEY_ID/DOSU_SOURCE_SECRET_ACCESS_KEY",
-    );
-  }
-  return { ...write };
 }
 
 /** Ask which keys Dosu reads with, register the source, and retry or skip on failure. The
@@ -99,7 +70,6 @@ export async function connectBucketToDosu(
   s: ReturnType<typeof p.spinner>,
 ): Promise<ConnectResult> {
   const { name, url, provider, bucket, prefix, owner, region, accountId, endpoint } = target;
-  const write = options.write;
   const input = { read: options.read, connect: options.connect, yes: options.yes };
   const dosuUnavailable = options.dosuUnavailable;
   if (!api) {
@@ -138,35 +108,19 @@ export async function connectBucketToDosu(
   }
 
   let read: KeyPair;
-  if (input.read && input.read !== "same") {
+  if (input.read) {
     read = input.read;
-  } else if (input.read === "same" || envCredentials("DOSU_SOURCE")) {
-    read = envCredentials("DOSU_SOURCE") ?? requireStatic(write);
   } else {
-    const choice = await ask.select(
-      {
-        message: "Keys Dosu reads the bucket with",
-        options: [
-          ...(write
-            ? [
-                {
-                  value: "same" as const,
-                  label: "The same keys",
-                  hint: "simplest; Dosu only reads",
-                },
-              ]
-            : []),
-          {
-            value: "enter" as const,
-            label: "A separate read-only key pair",
-            hint: "recommended: a key limited to GetObject + ListBucket",
-          },
-        ],
-      },
-      undefined,
-    );
-    read =
-      choice === "same" ? requireStatic(write) : await askKeyPair(ask, "Read-only keys", undefined);
+    const fromEnv = envCredentials("DOSU_SOURCE");
+    if (fromEnv) {
+      read = fromEnv;
+    } else {
+      p.log.info(
+        wrapLog("Dosu needs a key pair limited to GetObject + ListBucket on the bucket."),
+        io,
+      );
+      read = await askKeyPair(ask, "Read-only keys", undefined);
+    }
   }
 
   // A failed connect is retried from here: again, with other keys for Dosu, or skipped (the

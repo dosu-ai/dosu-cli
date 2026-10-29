@@ -32,14 +32,14 @@ interface ActiveAccount {
 }
 
 /** A sessiondb server sessions ship to. The server holds the bucket and its keys; this machine
- * holds a token minted for one owner. Several can be configured; `default_target` names the one
+ * holds a token from the server's `.env`. Several can be configured; `default_target` names the one
  * `dosu sync` uses without `--target`. */
 export interface ServerTarget {
   /** How the target is named on the command line (`--target team`). */
   name: string;
   /** `https://host`, no trailing slash. */
   url: string;
-  /** The owner the token was minted for; the layout and dedupe are per owner. */
+  /** The name the server files sessions under (`owners/<owner>/`); dedupe is per owner. */
   owner: string;
   /** The bearer token (`sdb_…`). The config file is 0600. */
   token: string;

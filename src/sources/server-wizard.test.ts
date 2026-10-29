@@ -1,6 +1,6 @@
 /** The server wizard: the token is checked against the server, the bucket behind it is
- * learned (or linked), the target is saved with the token, and Dosu is asked to read the
- * server's bucket with its own keys. */
+ * learned, the target is saved with the token, and Dosu is asked to read the server's bucket
+ * with its own keys. */
 
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,14 +31,14 @@ let home: string;
 
 /** The sessiondb server and the Dosu backend behind one fetch. */
 interface World {
-  storage: Record<string, unknown> | null;
+  storage: Record<string, unknown>;
   dosuSources: Record<string, unknown>[];
   calls: { url: string; init?: RequestInit }[];
 }
 
 function world(overrides: Partial<World> = {}): World & { fetch: Fetch } {
   const w: World = {
-    storage: { url: "r2://acme-sessions/dosu", account_id: "acct", credentials: "static" },
+    storage: { url: "r2://acme-sessions/dosu", account_id: "acct" },
     dosuSources: [],
     calls: [],
     ...overrides,
@@ -52,17 +52,6 @@ function world(overrides: Partial<World> = {}): World & { fetch: Fetch } {
         return json({ error: { code: "unauthorized", message: "nope" } }, 401);
       }
       if (url.endsWith("/v1/me")) return json({ owner: "acme", storage: w.storage });
-      if (url.endsWith("/v1/storage") && init?.method === "PUT") {
-        const body = JSON.parse(init.body as string) as Record<string, unknown>;
-        if (body.access_key_id === "bad") {
-          return json({ error: { code: "storage_unreachable", message: "denied" } }, 422);
-        }
-        w.storage = { url: body.url, account_id: body.account_id, credentials: "static" };
-        return json(w.storage);
-      }
-      if (url.endsWith("/v1/storage")) {
-        return w.storage ? json(w.storage) : json({ error: { code: "no_storage" } }, 404);
-      }
       return json({ error: { code: "not_found" } }, 404);
     }
     // Dosu's sources API.
@@ -151,15 +140,17 @@ describe("helpers", () => {
   });
 
   it("reads the bucket out of a storage view", () => {
-    expect(bucketOfStorage({ url: "r2://b/p/q", credentials: "static" })).toEqual({
+    expect(bucketOfStorage({ url: "r2://b/p/q" })).toEqual({
       provider: "r2",
       bucket: "b",
       prefix: "p/q",
     });
-    expect(
-      bucketOfStorage({ url: "s3://b", endpoint: "http://minio:9000", credentials: "env" }),
-    ).toEqual({ provider: "compatible", bucket: "b", prefix: "" });
-    expect(bucketOfStorage({ url: "file:///srv/sessions", credentials: "none" })).toBeUndefined();
+    expect(bucketOfStorage({ url: "s3://b", endpoint: "http://minio:9000" })).toEqual({
+      provider: "compatible",
+      bucket: "b",
+      prefix: "",
+    });
+    expect(bucketOfStorage({ url: "file:///srv/sessions" })).toBeUndefined();
   });
 });
 
@@ -169,7 +160,6 @@ describe("runServerWizard", () => {
     vi.stubGlobal("fetch", w.fetch);
     script({
       "Let Dosu read the bucket and learn from the sessions in it?": true,
-      "Keys Dosu reads the bucket with": "enter",
       "Read-only keys: access key id": "AKIAREAD",
       "Read-only keys: secret access key": "readsecret",
     });
@@ -209,7 +199,6 @@ describe("runServerWizard", () => {
     expect(asked()).toEqual([
       "Read-only keys: access key id",
       "Read-only keys: secret access key",
-      "Keys Dosu reads the bucket with",
       "Let Dosu read the bucket and learn from the sessions in it?",
     ]);
   });
@@ -274,7 +263,7 @@ describe("runServerWizard", () => {
       ),
     ).rejects.toThrow(/not a server URL/);
 
-    const folder = world({ storage: { url: "file:///srv/sessions", credentials: "none" } });
+    const folder = world({ storage: { url: "file:///srv/sessions" } });
     const cfg = loadConfig();
     cfg.targets = [
       { name: "team", url: SERVER, owner: "acme", token: "old", source_id: "src-old" },
@@ -292,119 +281,12 @@ describe("runServerWizard", () => {
     expect(logged("info")).toContain("folder on the server");
   });
 
-  it("links an S3 or S3-compatible bucket with the matching questions", async () => {
-    const w = world({ storage: null });
-    vi.stubGlobal("fetch", w.fetch);
-    script({
-      "Link a bucket on the server now?": true,
-      "Where should the server keep your sessions?": "compatible",
-      "Bucket name": "sessions",
-      "Prefix inside the bucket": "",
-      "S3 endpoint URL": "http://minio:9000",
-      "Keys the server writes with: access key id": "minio",
-      "Keys the server writes with: secret access key": "minio123",
-      "Name for this target": "server",
-      "Let Dosu read the bucket and learn from the sessions in it?": false,
-    });
-    await runServerWizard(loadConfig(), { server: SERVER, token: TOKEN }, {}, w.fetch);
-    const put = w.calls.find((c) => c.init?.method === "PUT");
-    expect(JSON.parse(put?.init?.body as string)).toEqual({
-      url: "s3://sessions",
-      endpoint: "http://minio:9000",
-      access_key_id: "minio",
-      secret_access_key: "minio123",
-    });
-
-    const w2 = world({ storage: null });
-    script({
-      "Link a bucket on the server now?": true,
-      "Where should the server keep your sessions?": "s3",
-      "Bucket name": "sessions",
-      "Prefix inside the bucket": "dosu",
-      "AWS region": "eu-west-1",
-      "Keys the server writes with: access key id": "AKIA",
-      "Keys the server writes with: secret access key": "s",
-      "Name for this target": "server",
-      "Let Dosu read the bucket and learn from the sessions in it?": false,
-    });
-    await runServerWizard(loadConfig(), { server: SERVER, token: TOKEN }, {}, w2.fetch);
-    const put2 = w2.calls.find((c) => c.init?.method === "PUT");
-    expect(JSON.parse(put2?.init?.body as string)).toMatchObject({
-      url: "s3://sessions/dosu",
-      region: "eu-west-1",
-    });
-  });
-
   it("refuses a bad token under --yes instead of prompting", async () => {
     const w = world();
     await expect(
       runServerWizard(loadConfig(), { server: SERVER, token: "sdb_wrong", yes: true }, {}, w.fetch),
     ).rejects.toThrow(CliUsageError);
     expect(asked()).toEqual([]);
-  });
-
-  it("offers to link a bucket on the server when none is, then connects it", async () => {
-    const w = world({ storage: null });
-    vi.stubGlobal("fetch", w.fetch);
-    script({
-      "Link a bucket on the server now?": true,
-      "Where should the server keep your sessions?": "r2",
-      "Bucket name": "acme-sessions",
-      "Prefix inside the bucket": "dosu",
-      "Cloudflare account id": "acct",
-      "Keys the server writes with: access key id": ["bad", "AKIAWRITE"],
-      "Keys the server writes with: secret access key": "writesecret",
-      "What now?": "keys",
-      "Name for this target": "server",
-      "Let Dosu read the bucket and learn from the sessions in it?": true,
-      "Keys Dosu reads the bucket with": "enter",
-      "Read-only keys: access key id": "AKIAREAD",
-      "Read-only keys: secret access key": "readsecret",
-    });
-
-    const result = await runServerWizard(
-      loadConfig(),
-      { server: SERVER, token: TOKEN },
-      {},
-      w.fetch,
-    );
-
-    const puts = w.calls.filter((c) => c.init?.method === "PUT");
-    expect(puts).toHaveLength(2); // the rejected keys, then the good ones
-    expect(JSON.parse(puts[1]?.init?.body as string)).toEqual({
-      url: "r2://acme-sessions/dosu",
-      account_id: "acct",
-      access_key_id: "AKIAWRITE",
-      secret_access_key: "writesecret",
-    });
-    expect(result?.source).toMatchObject({ url: "r2://acme-sessions/dosu" });
-    // The write keys went to the server only; the CLI config holds the token and no keys.
-    const saved = loadConfig().targets?.[0];
-    expect(saved).toEqual({
-      name: "server",
-      url: SERVER,
-      owner: "acme",
-      token: TOKEN,
-      source_id: "src-1",
-    });
-  });
-
-  it("saves the target without connecting when the server has no bucket and the user declines", async () => {
-    const w = world({ storage: null });
-    script({
-      "Link a bucket on the server now?": false,
-      "Name for this target": "server",
-    });
-    const result = await runServerWizard(
-      loadConfig(),
-      { server: SERVER, token: TOKEN },
-      {},
-      w.fetch,
-    );
-    expect(result).toEqual({
-      target: { name: "server", url: SERVER, owner: "acme", token: TOKEN },
-    });
-    expect(w.calls.some((c) => c.init?.method === "POST")).toBe(false);
   });
 });
 
@@ -422,9 +304,9 @@ describe("bucketOfTarget", () => {
     });
     await expect(
       bucketOfTarget(
-        { name: "team", url: SERVER, owner: "acme", token: TOKEN },
-        world({ storage: null }).fetch,
+        { name: "team", url: SERVER, owner: "acme", token: "sdb_wrong" },
+        world().fetch,
       ),
-    ).rejects.toThrow(/no bucket linked/);
+    ).rejects.toThrow(/answered/);
   });
 });

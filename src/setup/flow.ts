@@ -295,7 +295,7 @@ export async function stepChooseSessionStorage(
   logger.info("setup", "Step: choose session storage");
   p.log.message(
     wrapLog(
-      "Dosu memory learns from finished agent sessions. They go to a sessiondb server, which redacts them and writes a bucket you own; Dosu reads that bucket, keeps only what it learns, and loses access the moment you disconnect. Your team's admin runs the server and mints you a token.",
+      "Dosu memory learns from finished agent sessions. They go to a sessiondb server, which redacts them and writes a bucket you own; Dosu reads that bucket, keeps only what it learns, and loses access the moment you disconnect. Whoever runs the server gives you its URL and a token.",
     ),
   );
   const choice = await p.select({
