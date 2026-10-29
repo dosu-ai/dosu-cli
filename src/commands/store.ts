@@ -108,7 +108,6 @@ function printSession(metadata: SessionMetadata, trace: Trace | null, target: Se
   };
   console.log(pc.bold(`${metadata.agent}:${metadata.session_id}`));
   row("target", `${target.name} (${target.url})`);
-  row("owner", metadata.owner);
   row("archive", metadata.archive_id);
   row("status", metadata.status);
   row("project", metadata.project);

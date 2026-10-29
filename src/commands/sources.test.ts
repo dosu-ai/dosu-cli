@@ -244,7 +244,7 @@ describe("sources connect", () => {
     );
     await expect(
       dosu("connect", "--access-key-id", "AKIAREAD", "--secret-access-key", "readsecret"),
-    ).rejects.toThrow(/could not read s3:\/\/acme-sessions\/agents as owner james .*AccessDenied/);
+    ).rejects.toThrow(/could not read s3:\/\/acme-sessions\/agents with .*AccessDenied/);
     expect(savedSourceId()).toBeUndefined();
   });
 
@@ -299,7 +299,7 @@ describe("sources status", () => {
 
     expect(calls()).toEqual([{ method: "GET", path: `/v1/memory/sources/${source().id}` }]);
     const text = out.join("\n");
-    expect(text).toContain("Target:     team → s3://acme-sessions/agents, owner james");
+    expect(text).toContain("Target:     team → s3://acme-sessions/agents");
     expect(text).toContain("Last sync:  3m ago · 4 processed");
     expect(text).toContain("Cursor:     2026-10-22T00:00:00.000Z-abc");
     expect(text).toContain("Behind:     2 changes · re-reads 300s of lag");

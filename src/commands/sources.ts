@@ -100,7 +100,7 @@ async function requireSource(api: SourcesApi, target: ServerTarget): Promise<Sou
   const source = await findSource(api, target);
   if (!source) {
     throw new CliUsageError(
-      `target ${target.name} (${target.url}, owner ${target.owner}) is not connected to Dosu: run 'dosu sources connect --target ${target.name}'`,
+      `target ${target.name} (${target.url}) is not connected to Dosu: run 'dosu sources connect --target ${target.name}'`,
     );
   }
   return source;
@@ -394,7 +394,7 @@ function connectCommand(): Command {
         } catch (err) {
           if (err instanceof SourcesApiError && (err.status === 400 || err.status === 422)) {
             throw new CliUsageError(
-              `Dosu could not read ${store.url} as owner ${target.owner} with the ${from} keys: ${err.message}`,
+              `Dosu could not read ${store.url} with the ${from} keys: ${err.message}`,
             );
           }
           throw err;
@@ -405,7 +405,7 @@ function connectCommand(): Command {
           printResult(source, opts);
           return;
         }
-        console.log(`${pc.green("✓")} Dosu can read ${source.url} (owner ${source.owner}).`);
+        console.log(`${pc.green("✓")} Dosu can read ${source.url}.`);
         console.log(
           `${pc.green("✓")} Source "${source.name}" connected (${source.id}); keys from ${from}, encrypted at rest.`,
         );
@@ -477,7 +477,7 @@ function sourceState(s: SourceStatus): string {
 function printSourceStatus(s: SourceStatus, target: ServerTarget, now: Date = new Date()): void {
   const dot = !s.enabled ? pc.dim("○") : s.last_error ? pc.yellow("●") : pc.green("●");
   console.log(`${dot} ${s.name} ${pc.dim(`(${s.id})`)}`);
-  console.log(`  Target:     ${target.name} → ${s.url}, owner ${s.owner}`);
+  console.log(`  Target:     ${target.name} → ${s.url}`);
   console.log(
     `  Last sync:  ${
       s.last_synced_at
