@@ -117,9 +117,6 @@ Dosu also updates itself automatically. When the update check (every six hours) 
 | `dosu memory` | Search Dosu memory, learned from earlier agent sessions, as an agent's MCP tools do |
 | `dosu project` | Show or link the project key Dosu memory scopes a directory's sessions by |
 | `dosu sources` | sessiondb servers this machine ships to, and their buckets connected to Dosu, which pulls the sessions into memory (`setup`, `connect`, `status`, `sync`, `disconnect`) |
-| `dosu get <session>` | Show a shipped session: its metadata and current trace |
-| `dosu export <session>` | Write a shipped session's current trace as JSON |
-| `dosu changes` | List the server's change feed: traces published, sessions redacted |
 | `dosu redact <session>` | Remove a shipped session from the server |
 
 Run `dosu <command> --help` for subcommands and flags.
@@ -134,7 +131,8 @@ and Dosu reads that bucket (read-only) to learn from them.
 `dosu setup` asks for the server once (`dosu setup --storage` asks again). Non-interactively:
 `dosu sources setup --server https://sessions.example.com --token sdb_… --yes`.
 
-`dosu get`, `dosu export`, `dosu changes` and `dosu redact` read and write through the server's API.
+`dosu redact` removes a shipped session through the server's API; everything else about a shipped
+session is read from the bucket, not through this machine.
 
 ### Supported AI tools
 

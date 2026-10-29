@@ -1,7 +1,7 @@
-/** A sessiondb server's API, as the CLI uses it with an owner token: who the token is, which
- * bucket the owner linked, and reading back what shipped (`dosu get`, `dosu export`,
- * `dosu changes`, `dosu redact`). Shipping itself is shipper/target.ts. The shapes mirror the
- * server's docs/server.md; only the fields the CLI reads are typed. */
+/** A sessiondb server's API, as the CLI uses it with an owner token: who the token is and which
+ * bucket the server writes (`GET /v1/me`, for setup), and removing a session (`dosu redact`).
+ * Shipping itself is shipper/target.ts. The shapes mirror the server's docs/server.md; only the
+ * fields the CLI reads are typed. */
 
 import { VERSION } from "../version/version";
 
@@ -46,48 +46,6 @@ export interface Me {
   storage: LinkedStorage;
 }
 
-/** `sessionstorage/metadata/1`, as the layout documents it. */
-export interface SessionMetadata {
-  owner: string;
-  agent: string;
-  session_id: string;
-  archive_id: string;
-  status: "active" | "redacted";
-  project?: string;
-  branch?: string;
-  parent_session_id?: string;
-  created_at: string;
-  updated_at: string;
-  head?: string;
-  traces: { content_hash: string; continuation?: { from_record: number } }[];
-  raw: unknown[];
-}
-
-interface TraceEvent {
-  role: string;
-  tool_name?: string;
-  text: string;
-}
-
-export interface Trace {
-  events: TraceEvent[];
-  [key: string]: unknown;
-}
-
-export interface ChangeEntry {
-  at: string;
-  kind: "published" | "redacted";
-  session_id: string;
-  content_hash?: string;
-  continuation?: { from_record: number };
-}
-
-export interface ChangesPage {
-  entries: { key: string; entry: ChangeEntry }[];
-  cursor?: string;
-  truncated: boolean;
-}
-
 export class SessiondbClient {
   private readonly url: string;
   private readonly fetchImpl: Fetch;
@@ -124,37 +82,6 @@ export class SessiondbClient {
 
   me(): Promise<Me> {
     return this.call("GET", "/v1/me");
-  }
-
-  session(agent: string, sessionId: string): Promise<SessionMetadata | null> {
-    return this.call(
-      "GET",
-      `/v1/sessions/${encodeURIComponent(agent)}/${encodeURIComponent(sessionId)}`,
-      { notFound: null },
-    );
-  }
-
-  /** The session's current trace; null when the session is unknown or has none (redacted). */
-  async trace(agent: string, sessionId: string): Promise<Trace | null> {
-    try {
-      return await this.call(
-        "GET",
-        `/v1/sessions/${encodeURIComponent(agent)}/${encodeURIComponent(sessionId)}/trace`,
-        { notFound: null },
-      );
-    } catch (err) {
-      if (err instanceof ServerError && err.status === 410) return null;
-      throw err;
-    }
-  }
-
-  changes(query: { since?: string; after?: string; limit?: number }): Promise<ChangesPage> {
-    const params = new URLSearchParams();
-    if (query.since) params.set("since", query.since);
-    if (query.after) params.set("after", query.after);
-    if (query.limit !== undefined) params.set("limit", String(query.limit));
-    const qs = params.toString();
-    return this.call("GET", `/v1/changes${qs ? `?${qs}` : ""}`);
   }
 
   /** Tombstone a session; null when the server has no such session. */
