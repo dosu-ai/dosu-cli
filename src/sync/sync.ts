@@ -2,7 +2,6 @@
  * ingest API. Each session the ship step settles gets a ledger entry, so it is not shipped
  * again until it changes, and quiet hook-triggered runs never throw or write to stdout/stderr. */
 
-import type { ShippedPrefix } from "@dosu/sessionstorage";
 import { logger } from "../debug/logger";
 import type { EndedSession } from "../sessions/capture";
 import { type SessionLinks, sessionLineage } from "../sessions/lineage";
@@ -17,6 +16,7 @@ import {
   scannedEverywhere,
   sessionAtPath,
 } from "../sessions/scan";
+import type { ShippedPrefix } from "../shipper/target";
 import { VERSION } from "../version/version";
 import { fileLock, type SyncLock } from "./lock";
 import {

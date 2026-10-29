@@ -1,16 +1,14 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MIN_SESSION_CHARS, type NormalizedRecord, prefixSha256 } from "@dosu/sessionstorage";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectKey } from "../sessions/project";
 import type { AgentSession } from "../sessions/scan";
 import { createShipStep } from "./runner";
-import type { SessionUsage } from "./usage";
+import type { Target } from "./target";
 
-const mockLoggerDebug = vi.hoisted(() => vi.fn());
 vi.mock("../debug/logger", () => ({
-  logger: { debug: mockLoggerDebug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 function session(id: string, overrides: Partial<AgentSession> = {}): AgentSession {
@@ -23,226 +21,119 @@ function session(id: string, overrides: Partial<AgentSession> = {}): AgentSessio
   };
 }
 
-/** A conversation big enough to be worth learning from. */
-const RECORDS = [
-  { role: "meta", source: "claude-code" },
-  { role: "user", content: "why does the sync lock leak?", timestamp: "2026-09-01T00:00:00.000Z" },
-  { role: "assistant", content: "x".repeat(2000), timestamp: "2026-09-01T00:00:05.000Z" },
-];
+type Send = Target["send"];
+type Sent = Parameters<Send>[0];
+type Answer = Awaited<ReturnType<Send>>;
 
-function accepted(body: unknown = { task_id: "task-1", session_url: "https://app/m/s1" }) {
-  return new Response(JSON.stringify(body), { status: 202 });
-}
+const SHIPPED = { records: 7, prefix_sha256: "a".repeat(64) };
+const stored: Answer = { status: "shipped", taskId: "stored:abc", shipped: SHIPPED };
 
 interface StepOverrides {
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  send?: Send;
   isIncognito?: (s: AgentSession) => boolean;
-  normalize?: (s: AgentSession) => Promise<unknown[] | null>;
-  readUsage?: (s: AgentSession) => SessionUsage | null;
+  readTranscript?: (s: AgentSession) => string | null;
   resolveProject?: (s: AgentSession) => ProjectKey | null;
   resolveBranch?: (s: AgentSession, at?: string) => string | null;
 }
 
+/** A ship step against a fake server that records what it was sent. */
 function makeStep(overrides: StepOverrides = {}) {
-  const fetchImpl = overrides.fetchImpl ?? vi.fn().mockResolvedValue(accepted());
+  const send = vi.fn<Send>(overrides.send ?? (async () => stored));
+  const target: Target = { name: "team", url: "https://sessions.test", send };
   const step = createShipStep({
-    apiKey: "sk_user_test",
-    deploymentId: "dep1",
-    backendUrl: "https://api.dosu.test/",
-    fetchImpl,
+    target,
     isIncognito: overrides.isIncognito ?? (() => false),
-    // biome-ignore lint/suspicious/noExplicitAny: test records stand in for the package's type
-    normalize: (overrides.normalize ?? (async () => RECORDS)) as any,
-    readUsage: overrides.readUsage ?? (() => null),
+    readTranscript: overrides.readTranscript ?? (() => '{"type":"user"}\n'),
     resolveProject:
       overrides.resolveProject ?? (() => ({ project: "github.com/acme/app", rule: "origin" })),
     resolveBranch: overrides.resolveBranch ?? (() => null),
   });
-  return { step, fetchImpl: fetchImpl as ReturnType<typeof vi.fn> };
+  const sent = (n = 0): Sent => send.mock.calls[n]?.[0] as Sent;
+  return { step, send, sent };
 }
 
 describe("createShipStep", () => {
-  beforeEach(() => {
-    mockLoggerDebug.mockClear();
-  });
+  it("sends the raw transcript with what this machine knows, and records the server's answer", async () => {
+    const { step, sent } = makeStep({ resolveBranch: () => "feat/x" });
 
-  it("defaults its boundaries: real incognito check, normalizer, and project resolver", async () => {
-    // A real (tiny) Claude transcript on disk, so the default normalize and
-    // resolver paths run end to end; only HTTP is mocked, and the backend URL
-    // comes from the runtime override like a repointed install.
-    const dir = mkdtempSync(join(tmpdir(), "dosu-ship-runner-"));
-    const path = join(dir, "sess1.jsonl");
-    writeFileSync(
-      path,
-      [
-        JSON.stringify({
-          type: "user",
-          uuid: "u1",
-          timestamp: "2026-09-01T00:00:00.000Z",
-          cwd: dir,
-          sessionId: "sess1",
-          message: { role: "user", content: "how does the sync lock work?" },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          uuid: "a1",
-          timestamp: "2026-09-01T00:00:05.000Z",
-          sessionId: "sess1",
-          requestId: "req_1",
-          message: {
-            id: "msg_1",
-            role: "assistant",
-            model: "claude-x",
-            usage: { input_tokens: 12, output_tokens: 34 },
-            content: [
-              {
-                type: "text",
-                text: `single-flight via a pid lock file. ${"Details. ".repeat(250)}`,
-              },
-            ],
-          },
-        }),
-      ].join("\n"),
-    );
-    const fetchImpl = vi.fn().mockResolvedValue(accepted());
-    process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.dosu.test";
-    try {
-      const step = createShipStep({
-        apiKey: "sk_user_test",
-        deploymentId: "dep1",
-        fetchImpl,
-      });
-      const results = await step([session("sess1", { path })]);
+    const [result] = await step([session("s1", { parentId: "p1" })]);
 
-      expect(results[0].outcome).toBe("shipped");
-      const [url, init] = fetchImpl.mock.calls[0];
-      expect(url).toBe("https://api.dosu.test/v1/memory/ingest/async");
-      const body = JSON.parse(init.body);
-      expect(body.records[0]).toMatchObject({ role: "meta", source: "claude-code" });
-      // The project comes from the transcript's own cwd: not a checkout, so its path.
-      expect(body.metadata.project).toBe(`path:${realpathSync(dir)}`);
-      expect(body.metadata.repo).toBe(body.metadata.project);
-      // Usage read from the same journal by the default reader.
-      expect(body.usage.requests).toEqual([
-        expect.objectContaining({ id: "req_1", model: "claude-x", input: 12, output: 34 }),
-      ]);
-    } finally {
-      delete process.env.DOSU_BACKEND_URL_OVERRIDE;
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("POSTs redacted records with metadata and records the accepted task", async () => {
-    const { step, fetchImpl } = makeStep();
-
-    const results = await step([session("s1")]);
-
-    expect(results).toEqual([
-      {
-        session: session("s1"),
-        outcome: "shipped",
-        taskId: "task-1",
-        sessionUrl: "https://app/m/s1",
-        project: "github.com/acme/app",
-        records: 3,
-        prefixSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-      },
-    ]);
-    const [url, init] = fetchImpl.mock.calls[0];
-    expect(url).toBe("https://api.dosu.test/v1/memory/ingest/async");
-    expect(init.method).toBe("POST");
-    expect(init.headers).toMatchObject({
-      "Content-Type": "application/json",
-      "X-Dosu-API-Key": "sk_user_test",
-    });
-    expect(JSON.parse(init.body)).toEqual({
-      records: RECORDS,
-      metadata: {
-        deployment_id: "dep1",
-        project: "github.com/acme/app",
-        // Older servers require `repo`; it carries the same key.
-        repo: "github.com/acme/app",
-        // The trajectory source, not the CLI's harness id.
-        agent: "claude-code",
-        session_id: "s1",
-      },
-    });
-  });
-
-  it("ships the session's token usage next to its records when the journal has any", async () => {
-    const usage: SessionUsage = {
-      requests: [
-        {
-          id: "req_1",
-          model: "claude-x",
-          timestamp: "2026-09-01T00:00:05.000Z",
-          input: 1,
-          output: 2,
-          cache_read: 3,
-          cache_write: 4,
-          cache_write_1h: 0,
-          speed: null,
-          tool_call_ids: [],
-        },
-      ],
-    };
-    const { step, fetchImpl } = makeStep({ readUsage: (s) => (s.id === "s1" ? usage : null) });
-
-    await step([session("s1"), session("s2")]);
-
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).usage).toEqual(usage);
-    expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).not.toHaveProperty("usage");
-  });
-
-  it("omits session_url when the backend returns none", async () => {
-    const { step } = makeStep({
-      fetchImpl: vi.fn().mockResolvedValue(accepted({ task_id: "task-2", session_url: null })),
-    });
-
-    const [result] = await step([session("s1")]);
-
-    expect(result).toEqual({
-      session: session("s1"),
-      outcome: "shipped",
-      taskId: "task-2",
+    expect(sent()).toEqual({
+      agent: "claude-code",
+      session_id: "s1",
+      transcript: '{"type":"user"}\n',
+      format: "jsonl",
       project: "github.com/acme/app",
-      records: 3,
-      prefixSha256: expect.any(String),
+      branch: "feat/x",
+      parent_session_id: "p1",
+    });
+    expect(result).toEqual({
+      session: expect.objectContaining({ id: "s1" }),
+      outcome: "shipped",
+      taskId: "stored:abc",
+      project: "github.com/acme/app",
+      records: 7,
+      prefixSha256: SHIPPED.prefix_sha256,
     });
   });
 
-  it("tolerates a 202 with an unparseable body", async () => {
-    const { step } = makeStep({
-      fetchImpl: vi.fn().mockResolvedValue(new Response("not json", { status: 202 })),
-    });
+  it("sends back what shipped before, so the server writes only the tail", async () => {
+    const { step, sent } = makeStep();
 
-    const [result] = await step([session("s1")]);
+    await step([session("s1")], () => ({ records: 3, prefix_sha256: "b".repeat(64) }));
 
-    expect(result.outcome).toBe("shipped");
-    expect(result.taskId).toBe("unknown");
+    expect(sent().shipped).toEqual({ records: 3, prefix_sha256: "b".repeat(64) });
+  });
+
+  it("names a fork's parent twice: as its parent, and as the history it copied", async () => {
+    const { step, sent } = makeStep();
+
+    await step([session("fork", { forkOf: { id: "parent", path: "/tmp/parent.jsonl" } })]);
+
+    expect(sent().parent_session_id).toBe("parent");
+    expect(sent().fork_of).toBe("parent");
   });
 
   it("sends 'unknown' when neither the working directory nor DOSU_PROJECT is known", async () => {
-    const { step, fetchImpl } = makeStep({ resolveProject: () => null });
+    const { step, sent } = makeStep({ resolveProject: () => null });
 
     await step([session("s1")]);
 
-    const { metadata } = JSON.parse(fetchImpl.mock.calls[0][1].body);
-    expect(metadata).toMatchObject({ project: "unknown", repo: "unknown" });
+    expect(sent().project).toBe("unknown");
+  });
+
+  it("leaves the branch out when nothing knows it", async () => {
+    const { step, sent } = makeStep();
+
+    await step([session("s1")]);
+
+    expect(sent().branch).toBeUndefined();
+  });
+
+  it("OpenCode's export is JSON; everything else is JSONL", async () => {
+    const { step, sent } = makeStep();
+
+    await step([session("o1", { harness: "opencode" }), session("c1", { harness: "codex" })]);
+
+    expect([sent(0).agent, sent(0).format]).toEqual(["opencode", "json"]);
+    expect([sent(1).agent, sent(1).format]).toEqual(["codex", "jsonl"]);
   });
 
   it("never ships an incognito session", async () => {
-    const { step, fetchImpl } = makeStep({ isIncognito: (s) => s.id === "s1" });
+    const { step, send } = makeStep({ isIncognito: (s) => s.id === "s2" });
 
-    const results = await step([session("s1"), session("s2")]);
+    const results = await step([session("s1"), session("s2"), session("s3")]);
 
-    expect(results.map((r) => r.outcome)).toEqual(["incognito", "shipped"]);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).metadata.session_id).toBe("s2");
+    expect(results.map((r) => [r.session.id, r.outcome])).toEqual([
+      ["s1", "shipped"],
+      ["s2", "incognito"],
+      ["s3", "shipped"],
+    ]);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it("reads the user's switches before each upload, and holds the rest of the batch to them", async () => {
-    // Put in incognito once s1 has gone out, and shipping turned off as s3 is being normalized.
+    // Put in incognito once s1 has gone out, and shipping turned off as s3 is being read.
     let reads = 0;
     const hold = vi.fn((s: AgentSession) => {
       reads += 1;
@@ -250,8 +141,8 @@ describe("createShipStep", () => {
       if (s.id === "s3" && reads > 4) return "stop" as const;
       return s.id === "s2" ? ("agent" as const) : null;
     });
-    const normalize = vi.fn(async (_session: AgentSession) => RECORDS);
-    const { step, fetchImpl } = makeStep({ normalize });
+    const readTranscript = vi.fn((_s: AgentSession) => "{}\n");
+    const { step, send } = makeStep({ readTranscript });
 
     const results = await step(
       [session("s1"), session("s2"), session("s3"), session("s4")],
@@ -263,18 +154,19 @@ describe("createShipStep", () => {
       ["s1", "shipped", undefined],
       ["s2", "incognito", true],
     ]);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
     // s2 was never read, and nothing after s3's check was.
-    expect(normalize.mock.calls.map(([s]) => s.id)).toEqual(["s1", "s3"]);
+    expect(readTranscript.mock.calls.map(([s]) => s.id)).toEqual(["s1", "s3"]);
   });
 
   it("reports each result as it settles, before the next session is read", async () => {
     const order: string[] = [];
-    const normalize = vi.fn(async (s: AgentSession) => {
-      order.push(`read ${s.id}`);
-      return RECORDS;
+    const { step } = makeStep({
+      readTranscript: (s) => {
+        order.push(`read ${s.id}`);
+        return "{}\n";
+      },
     });
-    const { step } = makeStep({ normalize });
 
     const results = await step([session("s1"), session("s2")], undefined, undefined, (r) =>
       order.push(`${r.outcome} ${r.session.id}`),
@@ -284,440 +176,120 @@ describe("createShipStep", () => {
     expect(order).toEqual(["read s1", "shipped s1", "read s2", "shipped s2"]);
   });
 
-  it("a transcript the normalizer cannot read is unsupported, not a failure", async () => {
-    const { step, fetchImpl } = makeStep({ normalize: async () => null });
+  it("a transcript that cannot be read is unsupported, not a failure", async () => {
+    const { step, send } = makeStep({ readTranscript: () => null });
 
     const results = await step([session("s1"), session("s2")]);
 
     expect(results.map((r) => r.outcome)).toEqual(["unsupported", "unsupported"]);
-    expect(results[0].message).toBe("transcript could not be normalized");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("a transcript with no conversation in it is trivial and never uploaded", async () => {
-    const { step, fetchImpl } = makeStep({ normalize: async () => [] });
-
-    const [result] = await step([session("s1")]);
-
-    expect(result.outcome).toBe("trivial");
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(results[0]?.message).toBe("transcript could not be read");
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("a harness with no normalizer is unsupported and never reads its transcript", async () => {
-    const normalize = vi.fn(async () => RECORDS);
-    const { step, fetchImpl } = makeStep({ normalize });
+    const readTranscript = vi.fn(() => "{}\n");
+    const { step, send } = makeStep({ readTranscript });
 
-    // A harness a newer scanner lists but this build cannot normalize.
-    const harness = "aider" as AgentSession["harness"];
-    const [result] = await step([session("s1", { harness })]);
+    const [result] = await step([session("s1", { harness: "vim" as AgentSession["harness"] })]);
 
-    expect(result).toMatchObject({
-      outcome: "unsupported",
-      message: "no normalizer for aider sessions yet",
-    });
-    expect(normalize).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result?.outcome).toBe("unsupported");
+    expect(result?.message).toBe("no normalizer for vim sessions yet");
+    expect(readTranscript).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
-  it("settles a refused payload (422) as rejected and carries on with the batch", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("bad", { status: 422 }))
-      .mockResolvedValueOnce(accepted());
-    const { step } = makeStep({ fetchImpl: fetchImpl });
+  it("what the server calls trivial settles as trivial, without a shipped prefix", async () => {
+    const { step } = makeStep({ send: async () => ({ status: "trivial", shipped: SHIPPED }) });
+
+    const [result] = await step([session("s1")]);
+
+    expect(result).toEqual({ session: expect.objectContaining({ id: "s1" }), outcome: "trivial" });
+  });
+
+  it("settles a refused upload (422) as rejected and carries on with the batch", async () => {
+    const { step } = makeStep({
+      send: async ({ session_id }) =>
+        session_id === "s1"
+          ? { status: "rejected", httpStatus: 422, message: "invalid: bad role" }
+          : stored,
+    });
 
     const results = await step([session("s1"), session("s2")]);
 
     expect(results.map((r) => r.outcome)).toEqual(["rejected", "shipped"]);
-    expect(results[0]).toMatchObject({ httpStatus: 422, message: "ingest rejected: HTTP 422" });
+    expect(results[0]).toMatchObject({ httpStatus: 422, message: "invalid: bad role" });
   });
 
   it("a server failure stops the batch so unprocessed sessions retry after backoff", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(new Response("down", { status: 503 }));
-    const { step } = makeStep({ fetchImpl: fetchImpl });
+    const { step, send } = makeStep({
+      send: async () => ({ status: "failed", message: "server https://sessions.test: HTTP 502" }),
+    });
 
     const results = await step([session("s1"), session("s2")]);
 
     expect(results).toHaveLength(1);
-    expect(results[0].outcome).toBe("failed");
-    expect(results[0].message).toContain("HTTP 503");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("a network error is a failed result, never a throw", async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new Error("socket hang up"));
-    const { step } = makeStep({ fetchImpl: fetchImpl });
-
-    const results = await step([session("s1"), session("s2")]);
-
-    expect(results).toEqual([
-      { session: session("s1"), outcome: "failed", message: "socket hang up" },
-    ]);
-  });
-});
-
-/** One Claude Code transcript line. */
-function line(type: string, uuid: string, second: number, content: unknown): string {
-  return JSON.stringify({
-    type,
-    uuid,
-    timestamp: `2026-09-01T00:00:${String(second).padStart(2, "0")}.000Z`,
-    sessionId: "s",
-    message: { role: type, model: "claude-x", content },
-  });
-}
-
-describe("createShipStep worthiness, judged on the normalized and redacted records", () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dosu-ship-worth-"));
-  });
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  /** Ships one real transcript through the default normalizer. */
-  async function shipTranscript(lines: string[]) {
-    const path = join(dir, "s.jsonl");
-    writeFileSync(path, lines.join("\n"));
-    const fetchImpl = vi.fn().mockResolvedValue(accepted());
-    const step = createShipStep({
-      apiKey: "k",
-      deploymentId: "dep1",
-      backendUrl: "https://api.dosu.test",
-      fetchImpl,
-      isIncognito: () => false,
-      resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" }),
+    expect(results[0]).toMatchObject({
+      outcome: "failed",
+      message: expect.stringContaining("502"),
     });
-    const [result] = await step([session("s", { path })]);
-    return { result, fetchImpl };
-  }
-
-  it("ships a terse, tool-heavy run: tool arguments and results count, not just prose", async () => {
-    // Two words of prose each way; the substance is in the tool traffic. A text-only turn
-    // count called this trivial.
-    const { result, fetchImpl } = await shipTranscript([
-      line("user", "u1", 0, "fix it"),
-      line("assistant", "a1", 1, [
-        { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "npm test 2>&1" } },
-      ]),
-      line("user", "u2", 2, [
-        {
-          type: "tool_result",
-          tool_use_id: "toolu_1",
-          content: `FAIL auth.test.ts\n${"at x\n".repeat(500)}`,
-        },
-      ]),
-      line("assistant", "a2", 3, [{ type: "text", text: "Fixed." }]),
-    ]);
-
-    expect(result.outcome).toBe("shipped");
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("a short exchange is trivial and never uploaded", async () => {
-    const { result, fetchImpl } = await shipTranscript([
-      line("user", "u1", 0, "hello"),
-      line("assistant", "a1", 1, [{ type: "text", text: "Hi! How can I help?" }]),
-    ]);
-
-    expect(result.outcome).toBe("trivial");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("a long prompt nobody answered is trivial", async () => {
-    const { result } = await shipTranscript([line("user", "u1", 0, "y".repeat(5000))]);
-
-    expect(result.outcome).toBe("trivial");
-  });
-
-  it("the threshold is on the records as shipped, after redaction", async () => {
-    // 2,100 characters of which most is one secret: redacted, it falls under the bar.
-    const secret = `ghp_${"a".repeat(36)}`;
-    const { result } = await shipTranscript([
-      line("user", "u1", 0, `use ${secret} ${"z".repeat(10)}`),
-      line("assistant", "a1", 1, [{ type: "text", text: `${secret.repeat(50)} ok` }]),
-    ]);
-
-    expect(result.outcome).toBe("trivial");
-  });
-});
-
-describe("createShipStep worthiness thresholds", () => {
-  const user = { role: "user", content: "u", timestamp: "2026-09-01T00:00:00.000Z" };
-  const assistant = (content: string) => ({
-    role: "assistant",
-    content,
-    timestamp: "2026-09-01T00:00:01.000Z",
-  });
-
-  it.each([
-    // The user record holds one character.
-    ["exactly the minimum", [user, assistant("a".repeat(MIN_SESSION_CHARS - 1))], "shipped"],
-    ["one character short", [user, assistant("a".repeat(MIN_SESSION_CHARS - 2))], "trivial"],
-    [
-      "no user record",
-      [
-        assistant("a".repeat(3000)),
-        { role: "tool", tool_call_id: "t", content: "r", timestamp: "x" },
-      ],
-      "trivial",
-    ],
-    [
-      "only a tool result answering the user",
-      [
-        user,
-        { role: "tool", tool_call_id: "t", content: "r".repeat(MIN_SESSION_CHARS), timestamp: "x" },
-      ],
-      "shipped",
-    ],
-    [
-      "tool arguments count",
-      [
-        user,
-        {
-          role: "assistant",
-          content: null,
-          tool_calls: [{ id: "t", name: "Edit", args: "a".repeat(MIN_SESSION_CHARS - 1) }],
-          timestamp: "x",
-        },
-      ],
-      "shipped",
-    ],
-  ])("%s", async (_label, body, outcome) => {
-    const meta = { role: "meta", source: "claude-code", cwd: "/m".repeat(5000) };
-    const { step } = makeStep({ normalize: async () => [meta, ...body] });
-
-    const [result] = await step([session("s1")]);
-
-    // The meta record never counts, however long its strings.
-    expect(result.outcome).toBe(outcome);
-  });
-});
-
-describe("createShipStep continuation", () => {
-  const turn = (i: number) => [
-    { role: "user", content: `question ${i}`, timestamp: `2026-09-01T00:0${i}:00.000Z` },
-    { role: "assistant", content: "a".repeat(2000), timestamp: `2026-09-01T00:0${i}:30.000Z` },
-  ];
-  const meta = { role: "meta", source: "claude-code", cwd: "/repo/app" };
-  const first = [meta, ...turn(1)];
-  const grown = [...first, ...turn(2)];
-  const hash = (records: unknown[], count: number) =>
-    prefixSha256(records as NormalizedRecord[], count);
-  const shippedFirst = { records: 3, prefix_sha256: hash(first, 3) };
-
-  function body(fetchImpl: ReturnType<typeof vi.fn>, call = 0) {
-    return JSON.parse(fetchImpl.mock.calls[call][1].body);
-  }
-
-  it("a first ship reports how many records went and their hash", async () => {
-    const { step, fetchImpl } = makeStep({ normalize: async () => first });
-
-    const [result] = await step([session("s1")]);
-
-    expect(result).toMatchObject({ records: 3, prefixSha256: hash(first, 3) });
-    expect(body(fetchImpl).metadata.continuation).toBeUndefined();
-  });
-
-  it("a session that grew after shipping sends the meta record and only the new tail", async () => {
-    const { step, fetchImpl } = makeStep({ normalize: async () => grown });
-
-    const [result] = await step([session("s1")], () => shippedFirst);
-
-    const sent = body(fetchImpl);
-    expect(sent.records).toEqual([meta, ...turn(2)]);
-    expect(sent.metadata.continuation).toEqual({
-      from_record: 3,
-      prefix_sha256: shippedFirst.prefix_sha256,
-    });
-    // What has shipped now covers the whole session.
-    expect(result).toMatchObject({ outcome: "shipped", records: 5, prefixSha256: hash(grown, 5) });
-  });
-
-  it("ships the whole session again when the shipped prefix no longer matches", async () => {
-    const rewritten = [meta, { ...turn(1)[0], content: "edited" }, turn(1)[1], ...turn(2)];
-    const { step, fetchImpl } = makeStep({ normalize: async () => rewritten });
-
-    await step([session("s1")], () => shippedFirst);
-
-    expect(body(fetchImpl).records).toEqual(rewritten);
-    expect(body(fetchImpl).metadata.continuation).toBeUndefined();
-  });
-
-  it("a new tail too small to learn from is trivial and never uploaded", async () => {
-    const pleasantries = [
-      ...first,
-      { role: "user", content: "thanks!", timestamp: "2026-09-01T00:09:00.000Z" },
-      { role: "assistant", content: "Anytime.", timestamp: "2026-09-01T00:09:01.000Z" },
-    ];
-    const { step, fetchImpl } = makeStep({ normalize: async () => pleasantries });
-
-    const [result] = await step([session("s1")], () => shippedFirst);
-
-    expect(result.outcome).toBe("trivial");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("a session touched without new records is trivial", async () => {
-    const { step, fetchImpl } = makeStep({ normalize: async () => first });
-
-    const [result] = await step([session("s1")], () => shippedFirst);
-
-    expect(result.outcome).toBe("trivial");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("names the parent of a child session, and only then", async () => {
-    const { step, fetchImpl } = makeStep();
-
-    await step([session("child", { parentId: "parent-1" }), session("top")]);
-
-    expect(body(fetchImpl, 0).metadata.parent_session_id).toBe("parent-1");
-    expect("parent_session_id" in body(fetchImpl, 1).metadata).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("createShipStep branch", () => {
-  const withBranch = (gitBranch: string) => [
-    { ...RECORDS[0], git_branch: gitBranch },
-    ...RECORDS.slice(1),
-  ];
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
 
-  function metadata(fetchImpl: ReturnType<typeof vi.fn>) {
-    return JSON.parse(fetchImpl.mock.calls[0][1].body).metadata;
+  /** A Claude Code log on disk, read for real (the default transcript reader and start peek). */
+  function claudeLog(name: string, lines: Record<string, unknown>[]): AgentSession {
+    dir ??= realpathSync(mkdtempSync(join(tmpdir(), "dosu-ship-")));
+    const path = join(dir, `${name}.jsonl`);
+    writeFileSync(path, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    return session(name, { path });
   }
 
-  it("sends the branch the transcript recorded, the one the server read before", async () => {
-    const { step, fetchImpl } = makeStep({
-      normalize: async () => withBranch("feat/recorded"),
-      resolveBranch: () => "feat/elsewhere",
-    });
-
-    await step([session("s1")]);
-
-    expect(metadata(fetchImpl).branch).toBe("feat/recorded");
-  });
-
-  it("sends a recorded branch verbatim, though redaction would take its name for a secret", async () => {
-    // A Jira-style name reads as high-entropy text; a branch is identity, not text.
-    const branch = "feature/PROJ-4821-AddRetryLogicForPayments";
-    const dir = mkdtempSync(join(tmpdir(), "dosu-ship-branch-"));
-    const at = "2026-10-02T10:00:00.000Z";
-    const rollout = join(dir, "rollout-2026-10-02T10-00-00-01a0ff2b.jsonl");
-    const lines = [
-      {
-        type: "session_meta",
-        payload: { id: "01a0ff2b", timestamp: at, cwd: dir, git: { branch, commit_hash: "abc" } },
-      },
-      {
-        type: "response_item",
-        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "q" }] },
-      },
-      {
-        type: "response_item",
-        payload: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: `answer: ${"detail ".repeat(400)}` }],
-        },
-      },
-    ];
-    writeFileSync(rollout, lines.map((r) => JSON.stringify({ timestamp: at, ...r })).join("\n"));
-    const fetchImpl = vi.fn().mockResolvedValue(accepted());
+  it("sends the branch the transcript recorded rather than asking git", async () => {
+    const send = vi.fn(async () => stored);
+    const resolveBranch = vi.fn(() => "feat/resolved");
     const step = createShipStep({
-      apiKey: "sk_user_test",
-      deploymentId: "dep1",
-      backendUrl: "https://api.dosu.test",
-      fetchImpl,
+      target: { name: "t", url: "u", send },
       isIncognito: () => false,
-      resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" }),
-      resolveBranch: () => "feat/elsewhere",
+      resolveProject: () => null,
+      resolveBranch,
     });
-    try {
-      await step([session("01a0ff2b", { harness: "codex", path: rollout, updated: at })]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-
-    const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
-    expect(sent.metadata.branch).toBe(branch);
-    // The meta record, which servers that predate metadata.branch read, says the same.
-    expect(sent.records[0]).toMatchObject({ role: "meta", git_branch: branch });
-  });
-
-  it.each([
-    ["recorded none", RECORDS],
-    ["recorded a detached HEAD", withBranch("HEAD")],
-  ])("a transcript that %s ships the branch resolved for its session", async (_label, records) => {
-    const { step, fetchImpl } = makeStep({
-      normalize: async () => records,
-      resolveBranch: (s) => (s.id === "s1" ? "feat/resolved" : null),
-    });
-
-    await step([session("s1")]);
-
-    expect(metadata(fetchImpl).branch).toBe("feat/resolved");
-  });
-
-  it("asks for the branch the session was on when its own records began", async () => {
-    const forked = [
-      { role: "meta", source: "pi" },
-      ...RECORDS.slice(1),
-      { role: "user", content: "and now?", timestamp: "2026-09-02T08:00:00.000Z" },
-      { role: "assistant", content: "y".repeat(2000), timestamp: "2026-09-02T08:00:09.000Z" },
-    ];
-    const byTime: Record<string, string> = {
-      "2026-09-01T00:00:00.000Z": "feat/parent-start",
-      "2026-09-02T08:00:00.000Z": "feat/fork-start",
-    };
-    const { step, fetchImpl } = makeStep({
-      normalize: async (s) => (s.id === "parent" ? RECORDS : s.id === "fork" ? forked : RECORDS),
-      resolveBranch: (_s, at) => (at ? (byTime[at] ?? null) : null),
-    });
-
-    await step([
-      session("s1"),
-      // A fork's copy of its parent's history began before the fork did.
-      session("fork", { forkOf: { id: "parent", path: "/tmp/parent.jsonl" } }),
+    const log = claudeLog("recorded", [
+      { type: "user", gitBranch: "feat/recorded", timestamp: "2026-09-01T00:00:00.000Z" },
     ]);
 
-    const branches = fetchImpl.mock.calls.map(([, init]) => JSON.parse(init.body).metadata.branch);
-    expect(branches).toEqual(["feat/parent-start", "feat/fork-start"]);
+    await step([log]);
+
+    expect(resolveBranch).not.toHaveBeenCalled();
+    expect((send.mock.calls[0] as unknown as [Sent])[0].branch).toBe("feat/recorded");
   });
 
-  it("asks about a resumed session's first prompt, not its tail's", async () => {
-    const grown = [
-      ...RECORDS,
-      { role: "user", content: "and now?", timestamp: "2026-09-03T00:00:00.000Z" },
-      { role: "assistant", content: "z".repeat(2000), timestamp: "2026-09-03T00:00:09.000Z" },
-    ];
-    const byTime: Record<string, string> = {
-      "2026-09-01T00:00:00.000Z": "feat/start",
-      "2026-09-03T00:00:00.000Z": "feat/resumed-on",
-    };
-    const { step, fetchImpl } = makeStep({
-      normalize: async () => grown,
+  it("asks git about the session's first prompt when the log recorded no branch", async () => {
+    const send = vi.fn(async () => stored);
+    const byTime: Record<string, string> = { "2026-09-02T08:00:00.000Z": "feat/at-start" };
+    const step = createShipStep({
+      target: { name: "t", url: "u", send },
+      isIncognito: () => false,
+      resolveProject: () => null,
       resolveBranch: (_s, at) => (at ? (byTime[at] ?? null) : null),
     });
+    const log = claudeLog("plain", [
+      {
+        type: "user",
+        timestamp: "2026-09-02T08:00:00.000Z",
+        message: { role: "user", content: "hi" },
+      },
+      { type: "assistant", timestamp: "2026-09-02T08:00:05.000Z" },
+    ]);
 
-    await step([session("s1")], () => ({
-      records: RECORDS.length,
-      prefix_sha256: prefixSha256(RECORDS as unknown as NormalizedRecord[], RECORDS.length),
-    }));
+    await step([log]);
 
-    const sent = JSON.parse(fetchImpl.mock.calls[0][1].body);
-    expect(sent.metadata.continuation).toBeDefined();
-    expect(sent.metadata.branch).toBe("feat/start");
-  });
-
-  it("leaves the branch out when nothing knows it", async () => {
-    const { step, fetchImpl } = makeStep();
-
-    await step([session("s1")]);
-
-    expect("branch" in metadata(fetchImpl)).toBe(false);
+    expect((send.mock.calls[0] as unknown as [Sent])[0].branch).toBe("feat/at-start");
   });
 });

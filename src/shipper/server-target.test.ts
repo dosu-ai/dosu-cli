@@ -22,13 +22,10 @@ function target(fetchImpl: FetchMock) {
   });
 }
 
-function stored(status = 201) {
-  return new Response(
-    JSON.stringify({ status: status === 201 ? "stored" : "duplicate", content_hash: "h1" }),
-    {
-      status,
-    },
-  );
+const WHOLE = { records_total: 9, prefix_sha256: "f".repeat(64) };
+
+function answer(status: number, body: Record<string, unknown>) {
+  return new Response(JSON.stringify({ ...WHOLE, ...body }), { status });
 }
 
 function refusal(status: number, code: string, message: string) {
@@ -42,89 +39,84 @@ function sentBody(fetchImpl: FetchMock): Record<string, unknown> {
   return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
 }
 
-const METADATA = {
+const UPLOAD = {
   agent: "claude-code",
   session_id: "sess1",
+  transcript: '{"type":"user"}\n',
+  format: "jsonl" as const,
   project: "github.com/acme/app",
   branch: "main",
+  shipped: { records: 4, prefix_sha256: "c".repeat(64) },
 };
 
 describe("createServerTarget", () => {
-  it("posts the raw transcript gzipped with the bearer token and the session's metadata", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(stored());
-    const result = await target(fetchImpl).send({
-      records: [],
-      metadata: { ...METADATA, continuation: { from_record: 3, prefix_sha256: "p" } },
-      transcript: () => ({ text: '{"type":"user"}\n', format: "jsonl" }),
+  it("posts the upload gzipped with the bearer token, and hands back the server's prefix", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(answer(201, { status: "stored", content_hash: "h1" }));
+
+    const result = await target(fetchImpl).send(UPLOAD);
+
+    expect(result).toEqual({
+      status: "shipped",
+      taskId: "stored:h1",
+      shipped: { records: 9, prefix_sha256: "f".repeat(64) },
     });
-    expect(result).toEqual({ status: "shipped", taskId: "stored:h1" });
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://sessions.example.com/v1/sessions");
     expect(init.method).toBe("POST");
-    const headers = init.headers as Record<string, string>;
-    expect(headers.Authorization).toBe("Bearer sdb_test");
-    expect(headers["Content-Encoding"]).toBe("gzip");
-    expect(sentBody(fetchImpl)).toEqual({
-      agent: "claude-code",
-      session_id: "sess1",
-      transcript: '{"type":"user"}\n',
-      format: "jsonl",
-      project: "github.com/acme/app",
-      branch: "main",
-      continuation: { from_record: 3, prefix_sha256: "p" },
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer sdb_test",
+      "Content-Encoding": "gzip",
+      "Content-Type": "application/json",
     });
+    expect(sentBody(fetchImpl)).toEqual(UPLOAD);
   });
 
-  it("counts a duplicate as shipped", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(stored(200));
-    const result = await target(fetchImpl).send({
-      records: [],
-      metadata: METADATA,
-      transcript: () => ({ text: "x", format: "jsonl" }),
+  it("counts a duplicate as shipped, and a trivial answer as trivial", async () => {
+    const dup = vi.fn().mockResolvedValue(answer(200, { status: "duplicate", content_hash: "h1" }));
+    expect(await target(dup).send(UPLOAD)).toMatchObject({
+      status: "shipped",
+      taskId: "duplicate:h1",
     });
-    expect(result).toEqual({ status: "shipped", taskId: "duplicate:h1" });
+
+    const trivial = vi.fn().mockResolvedValue(answer(200, { status: "trivial" }));
+    expect(await target(trivial).send(UPLOAD)).toEqual({
+      status: "trivial",
+      shipped: { records: 9, prefix_sha256: "f".repeat(64) },
+    });
   });
 
   it("settles the server's refusals as rejected and everything else as a failure", async () => {
-    const send = (response: Response) =>
-      target(vi.fn().mockResolvedValue(response)).send({
-        records: [],
-        metadata: METADATA,
-        transcript: () => ({ text: "x", format: "jsonl" }),
-      });
-    expect(await send(refusal(422, "empty", "transcript has no conversation"))).toEqual({
+    const rejected = vi.fn().mockResolvedValue(refusal(422, "invalid", "bad role"));
+    expect(await target(rejected).send(UPLOAD)).toEqual({
       status: "rejected",
       httpStatus: 422,
-      message: "empty: transcript has no conversation",
+      message: "invalid: bad role",
     });
-    expect(await send(refusal(409, "no_storage", "no storage linked"))).toEqual({
+
+    const noStorage = vi.fn().mockResolvedValue(refusal(409, "no_storage", "link a bucket"));
+    expect(await target(noStorage).send(UPLOAD)).toEqual({
       status: "failed",
-      message: "server https://sessions.example.com: no_storage: no storage linked",
+      message: "server https://sessions.example.com: no_storage: link a bucket",
     });
-    expect(await send(new Response("gateway", { status: 502 }))).toEqual({
+
+    const down = vi.fn().mockResolvedValue(new Response("gateway", { status: 502 }));
+    expect(await target(down).send(UPLOAD)).toEqual({
       status: "failed",
       message: "server https://sessions.example.com: HTTP 502",
     });
-    expect(
-      await send(refusal(401, "unauthorized", "a valid owner token is required")),
-    ).toMatchObject({
-      status: "failed",
-    });
+
+    const unauthorized = vi.fn().mockResolvedValue(refusal(401, "unauthorized", "bad token"));
+    expect((await target(unauthorized).send(UPLOAD)).status).toBe("failed");
   });
 
-  it("fails without a readable transcript or a reachable server", async () => {
+  it("fails without a reachable server", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
-    expect(
-      await target(fetchImpl).send({ records: [], metadata: METADATA, transcript: () => null }),
-    ).toEqual({ status: "failed", message: "transcript could not be read" });
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(
-      await target(fetchImpl).send({
-        records: [],
-        metadata: METADATA,
-        transcript: () => ({ text: "x", format: "jsonl" }),
-      }),
-    ).toEqual({ status: "failed", message: "ECONNREFUSED" });
+    expect(await target(fetchImpl).send(UPLOAD)).toEqual({
+      status: "failed",
+      message: "ECONNREFUSED",
+    });
   });
 });
 
@@ -134,15 +126,16 @@ describe("ship step with a server target", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("reads the native log off disk and sends it, after the local worthiness checks", async () => {
+  it("reads the native log off disk and sends it verbatim with the recorded branch", async () => {
     dir = mkdtempSync(join(tmpdir(), "dosu-server-target-"));
     const path = join(dir, "sess1.jsonl");
-    const text = [
+    const text = `${[
       JSON.stringify({
         type: "user",
         uuid: "u1",
         timestamp: "2026-09-01T00:00:00.000Z",
         cwd: dir,
+        gitBranch: "feat/lock",
         sessionId: "sess1",
         message: { role: "user", content: "how does the sync lock work?" },
       }),
@@ -154,10 +147,10 @@ describe("ship step with a server target", () => {
         message: {
           role: "assistant",
           model: "claude-x",
-          content: [{ type: "text", text: `a pid lock file. ${"Details. ".repeat(250)}` }],
+          content: [{ type: "text", text: "a pid lock file." }],
         },
       }),
-    ].join("\n");
+    ].join("\n")}\n`;
     writeFileSync(path, text);
     const session: AgentSession = {
       id: "sess1",
@@ -165,20 +158,26 @@ describe("ship step with a server target", () => {
       path,
       updated: "2026-09-01T00:00:05.000Z",
     };
-    const fetchImpl = vi.fn().mockResolvedValue(stored());
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(answer(201, { status: "stored", content_hash: "h1" }));
     const step = createShipStep({
       target: target(fetchImpl),
       isIncognito: () => false,
-      readUsage: () => null,
       resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" }),
       resolveBranch: () => "main",
     });
-    const results = await step([session]);
-    expect(results.map((r) => r.outcome)).toEqual(["shipped"]);
-    const body = sentBody(fetchImpl);
-    expect(body.transcript).toBe(text);
-    expect(body.format).toBe("jsonl");
-    expect(body.agent).toBe("claude-code");
-    expect(body.project).toBe("github.com/acme/app");
+
+    const [result] = await step([session]);
+
+    expect(result).toMatchObject({ outcome: "shipped", records: 9 });
+    expect(sentBody(fetchImpl)).toEqual({
+      agent: "claude-code",
+      session_id: "sess1",
+      transcript: text,
+      format: "jsonl",
+      project: "github.com/acme/app",
+      branch: "feat/lock",
+    });
   });
 });

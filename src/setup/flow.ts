@@ -16,7 +16,7 @@ import {
   saveConfig,
   updateTarget,
 } from "../config/config";
-import { configuredTargets, isServerTarget } from "../config/targets";
+import { configuredTargets } from "../config/targets";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
@@ -27,7 +27,6 @@ import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
 import { runServerWizard } from "../sources/server-wizard";
-import { runBucketWizard } from "../sources/wizard";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
@@ -240,7 +239,7 @@ async function runSetupFlow(opts: SetupOptions = {}): Promise<void> {
   );
   const mcpCompleted = configuredProviders.length > 0;
 
-  // Where finished sessions go: Dosu, or the user's own bucket that Dosu reads from.
+  // Where finished sessions go: the sessiondb server that writes the user's bucket.
   if (mcpCompleted && cfg.mode !== MODE_OSS) {
     const chosen = await stepChooseSessionStorage(cfg, opts);
     if (chosen === null) return;
@@ -272,75 +271,63 @@ function setupOutroMessage(mcpCompleted: boolean): string {
   return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
 }
 
-/** Where finished sessions are kept. Dosu is the default; the alternatives are the user's own
- * S3 / R2 bucket, which `dosu sync` writes and Dosu reads (keeping only what it learns), or a
- * sessiondb server that writes such a bucket for this machine. A target already set up is shown
- * and kept unless `--storage` asks again. Returns null when the user cancelled the flow mid-way
- * (nothing was saved), so setup stops where they did. */
+/** Where finished sessions are kept: a sessiondb server, which normalizes and redacts them and
+ * writes a bucket the user owns; Dosu reads that bucket and keeps only what it learns. A server
+ * already set up is shown and kept unless `--storage` asks again. Returns null when the user
+ * cancelled the flow mid-way (nothing was saved), so setup stops where they did; "none" when
+ * they chose to ship nowhere for now. */
 export async function stepChooseSessionStorage(
   cfg: Config,
   opts: Pick<SetupOptions, "storage"> = {},
-): Promise<"dosu" | "bucket" | "server" | null> {
-  const buckets = configuredTargets(cfg).filter((t) => /^(s3|r2|https?):\/\//.test(t.url));
-  const current = buckets.find((t) => t.name === cfg.default_target);
+): Promise<"server" | "none" | null> {
+  const targets = configuredTargets(cfg);
+  const current = targets.find((t) => t.name === cfg.default_target) ?? targets[0];
   if (current && !opts.storage) {
-    const server = isServerTarget(current);
     p.log.success(
       wrapLog(
-        `Sessions ship ${server ? "through your sessiondb server" : "to your bucket"} ${current.url} (owner ${current.owner})${
-          current.source_id ? ", which Dosu reads" : ""
+        `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
+          current.source_id ? ", whose bucket Dosu reads" : ""
         }. ${info("dosu setup --storage")} changes that.`,
       ),
     );
-    return server ? "server" : "bucket";
+    return "server";
   }
   logger.info("setup", "Step: choose session storage");
   p.log.message(
     wrapLog(
-      "Dosu memory learns from finished agent sessions. The transcripts can live with Dosu, or in a bucket you own: then Dosu reads them from there, keeps only what it learns, and loses access the moment you disconnect. A sessiondb server is a bucket your team hosts the keys for: this machine only gets a token.",
+      "Dosu memory learns from finished agent sessions. They go to a sessiondb server, which redacts them and writes a bucket you own; Dosu reads that bucket, keeps only what it learns, and loses access the moment you disconnect. Your team's admin runs the server and mints you a token.",
     ),
   );
   const choice = await p.select({
-    message: "Where should your agent sessions be stored?",
+    message: "Set up session storage now?",
     options: [
-      { value: "dosu" as const, label: "Dosu", hint: "simplest; transcripts stored by Dosu" },
-      {
-        value: "bucket" as const,
-        label: "My own bucket",
-        hint: "Amazon S3, Cloudflare R2 or S3-compatible; you hold the keys",
-      },
-      {
-        value: "server" as const,
-        label: "A sessiondb server",
-        hint: "your team's server writes the bucket; you paste a token",
-      },
+      { value: "server" as const, label: "Yes, I have a server URL and token" },
+      { value: "none" as const, label: "Not now", hint: "nothing ships until a server is set up" },
     ],
   });
-  if (p.isCancel(choice) || (choice !== "bucket" && choice !== "server")) {
-    if (cfg.default_target !== undefined && cfg.default_target !== "dosu") {
-      cfg.default_target = "dosu";
-      saveConfig(cfg);
-      p.log.info(wrapLog(`Sessions ship to Dosu again; your bucket targets stay in config.`));
-    }
-    return "dosu";
+  if (p.isCancel(choice) || choice !== "server") {
+    p.log.info(
+      wrapLog(
+        `Nothing ships until then. ${info("dosu sources setup --server <url> --token <token>")} sets it up later.`,
+      ),
+    );
+    return "none";
   }
   try {
-    const result = choice === "server" ? await runServerWizard(cfg) : await runBucketWizard(cfg);
+    const result = await runServerWizard(cfg);
     if (!result) {
       p.log.info(
         wrapLog(
-          choice === "server"
-            ? `No server set up; sessions ship to Dosu. ${info("dosu sources setup --server <url>")} tries again.`
-            : `No bucket set up; sessions ship to Dosu. ${info("dosu sources setup")} tries again.`,
+          `No server set up; nothing ships until then. ${info("dosu sources setup --server <url>")} tries again.`,
         ),
       );
       return null;
     }
-    return choice;
+    return "server";
   } catch (err) {
     if (!(err instanceof CliUsageError)) throw err;
-    p.log.warn(wrapLog(`${err.message}\nSessions ship to Dosu until then.`));
-    return "dosu";
+    p.log.warn(wrapLog(`${err.message}\nNothing ships until a server is set up.`));
+    return "none";
   }
 }
 
@@ -351,9 +338,8 @@ export async function stepChooseSessionStorage(
  * forgets) a session that shipped and has grown since. On consent the drain runs fully detached
  * so setup never blocks. */
 export async function stepOfferInitialSync(cfg: Config): Promise<void> {
-  const target = cfg.active_account?.target;
-  // Without an API key + deployment the detached run couldn't ship anyway.
-  if (!target?.api_key || !target.deployment_id) return;
+  // Without a server the detached run couldn't ship anyway.
+  if (configuredTargets(cfg).length === 0) return;
   const state = loadSyncState();
   if (!isShippingEnabled(state)) return;
 
@@ -377,12 +363,13 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   const them = n === 1 ? "it" : "them";
   // What happens to the sessions, why it's worth it, and how to keep something out.
   const incognito = installedIncognitoCommands();
-  const bucket = configuredTargets(cfg).find((t) => t.name === cfg.default_target);
+  const targets = configuredTargets(cfg);
+  const server = targets.find((t) => t.name === cfg.default_target) ?? targets[0];
   p.log.message(
     wrapLog(
       [
         "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
-        `Sessions are uploaded to ${bucket ? `your bucket ${bucket.url}` : "Dosu"}, with secrets redacted on this machine first. ${
+        `Sessions are uploaded to your sessiondb server${server ? ` ${server.url}` : ""}, which redacts secrets before anything is stored. ${
           incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"
         } dosu knowledge transcripts disable to stop shipping altogether.`,
       ].join("\n"),

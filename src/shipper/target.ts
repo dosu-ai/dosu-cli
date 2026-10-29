@@ -1,215 +1,86 @@
-/** Where a session goes once the ship step has decided it should: the Dosu memory ingest API
- * (`POST /v1/memory/ingest/async` with the login's API key), a `@dosu/sessionstorage` store (an
- * S3 / R2 bucket or a local folder) written in-process, or a sessiondb server that writes the
- * bucket for us. The first two take the redacted trajectory-v1 records; the server takes the
- * raw transcript and normalizes and redacts it itself. All answer with the same three outcomes. */
+/** A sessiondb server, as the ship step sees it: it takes the raw transcript of a session with
+ * the owner's bearer token, normalizes and redacts it, decides whether it is worth keeping and
+ * how much of it is new, and writes the owner's bucket. Its answer becomes the session's outcome
+ * in the sync ledger. */
 
 import { gzipSync } from "node:zlib";
-import {
-  type IngestMetadata,
-  IngestRejected,
-  ingest,
-  type NormalizedRecord,
-  type Store,
-} from "@dosu/sessionstorage";
 import { VERSION } from "../version/version";
-import type { SessionUsage } from "./usage";
 
-/** What one session's upload came to. `rejected` is settled (the same records can never
- * succeed); `failed` stops the batch, backs off, and is retried later. */
+/** What a client stores of a session it shipped, from the server's answer: how many normalized
+ * records the session had and the sha256 of their canonical JSON. Sent back on the next upload
+ * so only the session's tail is written. */
+export interface ShippedPrefix {
+  records: number;
+  prefix_sha256: string;
+}
+
+/** What one session's upload came to. `shipped` and `trivial` are settled; `rejected` is
+ * settled too (the same bytes can never succeed); `failed` stops the batch, backs off, and is
+ * retried later. */
 type TargetResult =
-  | { status: "shipped"; taskId?: string; sessionUrl?: string }
+  | { status: "shipped"; taskId: string; shipped: ShippedPrefix }
+  | { status: "trivial"; shipped: ShippedPrefix }
   | { status: "rejected"; httpStatus?: number; message: string }
   | { status: "failed"; message: string };
 
-interface RawTranscript {
-  text: string;
-  format: "jsonl" | "json";
-}
-
 interface TargetSend {
-  records: NormalizedRecord[];
-  metadata: IngestMetadata;
-  /** The session's token usage, when its journal records any; the Dosu target ships it next to
-   * the records, a store keeps only what the layout defines. */
-  usage?: SessionUsage;
-  /** The native log, read on demand: only a server target asks for it. */
-  transcript?: () => RawTranscript | null;
+  /** The trajectory source (`claude-code`, `codex`, …). */
+  agent: string;
+  session_id: string;
+  transcript: string;
+  format: "jsonl" | "json";
+  project?: string;
+  /** The client's best guess; the transcript's own record wins on the server. */
+  branch?: string;
+  parent_session_id?: string;
+  /** A fork: the session whose history this log begins with. */
+  fork_of?: string;
+  /** What the last answer said, when this session shipped before. */
+  shipped?: ShippedPrefix;
 }
 
 export interface Target {
-  /** `dosu`, or the bucket target's configured name. */
+  /** The configured name (`--target team`). */
   name: string;
-  kind: "dosu" | "store" | "server";
-  /** For messages: the backend URL or the store URL. */
+  /** For messages. */
   url: string;
   send(input: TargetSend): Promise<TargetResult>;
 }
 
-/** Statuses where re-sending identical records cannot succeed (bad/oversized/unparseable
- * payload): the session is settled as rejected instead of failing every run behind a poison
- * pill. Everything else non-202 — auth, rate limit, 5xx, a not-yet-deployed endpoint — is a
- * failure that backs off and retries. */
+/** Statuses where re-sending the same bytes cannot succeed: the session is settled as rejected
+ * instead of failing every run behind a poison pill. Everything else — auth, rate limit, 5xx,
+ * the owner's bucket down (502) — is a failure that backs off and retries. */
 const REJECTED_STATUSES = new Set([400, 413, 422]);
 
 /** Per-request cap; ship runs are already detached from the hook, so patience is cheap. */
 const REQUEST_TIMEOUT_MS = 60_000;
 
-interface IngestAccepted {
-  task_id?: string;
-  session_url?: string | null;
-}
-
-export interface DosuTargetOptions {
-  apiKey: string;
-  deploymentId: string;
-  /** Without a trailing slash. */
-  backendUrl: string;
-  /** Injectable boundary, for tests. Narrower than `typeof fetch` on purpose: the target only
-   * needs the call signature, and Bun's fetch type carries extras like `preconnect`. */
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
-}
-
-/** The Dosu target: fire-and-forget against the async ingest endpoint; the accepted task is
- * never polled, and the task id and shareable session_url come back for the ledger. */
-export function createDosuTarget(options: DosuTargetOptions): Target {
-  const backendUrl = options.backendUrl.replace(/\/$/, "");
-  const fetchImpl = options.fetchImpl ?? fetch;
-  return {
-    name: "dosu",
-    kind: "dosu",
-    url: backendUrl,
-    async send({ records, metadata, usage }) {
-      const body = JSON.stringify({
-        records,
-        metadata: {
-          deployment_id: options.deploymentId,
-          project: metadata.project,
-          // Servers that predate `project` require `repo`; same key.
-          repo: metadata.project,
-          agent: metadata.agent,
-          session_id: metadata.session_id,
-          ...(metadata.branch ? { branch: metadata.branch } : {}),
-          ...(metadata.parent_session_id ? { parent_session_id: metadata.parent_session_id } : {}),
-          ...(metadata.continuation ? { continuation: metadata.continuation } : {}),
-        },
-        ...(usage ? { usage } : {}),
-      });
-      try {
-        const response = await fetchImpl(`${backendUrl}/v1/memory/ingest/async`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Dosu-API-Key": options.apiKey,
-          },
-          body,
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        if (response.status === 202) {
-          const accepted = (await response.json().catch(() => ({}))) as IngestAccepted;
-          return {
-            status: "shipped",
-            taskId: accepted.task_id ?? "unknown",
-            ...(typeof accepted.session_url === "string"
-              ? { sessionUrl: accepted.session_url }
-              : {}),
-          };
-        }
-        if (REJECTED_STATUSES.has(response.status)) {
-          return {
-            status: "rejected",
-            httpStatus: response.status,
-            message: `ingest rejected: HTTP ${response.status}`,
-          };
-        }
-        return { status: "failed", message: `ingest failed: HTTP ${response.status}` };
-      } catch (err) {
-        return { status: "failed", message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  };
-}
-
-export interface StoreTargetOptions {
-  name: string;
-  store: Store & { url: string };
-  owner: string;
-}
-
-/** A bucket or folder target: the library's `ingest()` in-process. A duplicate (the same
- * records already stored) counts as shipped; the library's refusals settle as rejected, and
- * anything else (network, credentials, a bucket that is gone) is a failure to retry. */
-export function createStoreTarget(options: StoreTargetOptions): Target {
-  return {
-    name: options.name,
-    kind: "store",
-    url: options.store.url,
-    async send({ records, metadata }) {
-      try {
-        const result = await ingest({
-          store: options.store,
-          owner: options.owner,
-          records,
-          metadata,
-          client: `dosu-cli/${VERSION}`,
-        });
-        return { status: "shipped", taskId: `${result.status}:${result.content_hash}` };
-      } catch (err) {
-        if (err instanceof IngestRejected) {
-          return { status: "rejected", message: `${err.code}: ${err.message}` };
-        }
-        return { status: "failed", message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  };
-}
-
-export interface ServerTargetOptions {
-  name: string;
-  /** `https://host`, without a trailing slash. */
-  url: string;
-  token: string;
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
-}
-
-interface ServerStored {
-  status: "stored" | "duplicate";
-  content_hash: string;
+interface ServerAnswer {
+  status: "stored" | "duplicate" | "trivial";
+  content_hash?: string;
+  records_total: number;
+  prefix_sha256: string;
 }
 
 interface ServerError {
   error?: { code?: string; message?: string };
 }
 
-/** A sessiondb server: `POST /v1/sessions` with the raw transcript, gzipped. The server
- * normalizes, redacts, plans the continuation and writes the bucket; its 422s are the library's
- * refusals and settle as rejected, 409 (no bucket linked yet) and everything else retry. */
+export interface ServerTargetOptions {
+  name: string;
+  url: string;
+  token: string;
+  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+}
+
 export function createServerTarget(options: ServerTargetOptions): Target {
   const url = options.url.replace(/\/$/, "");
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
     name: options.name,
-    kind: "server",
     url,
-    async send({ metadata, transcript }) {
-      const raw = transcript?.();
-      if (!raw) return { status: "failed", message: "transcript could not be read" };
-      const body = gzipSync(
-        Buffer.from(
-          JSON.stringify({
-            agent: metadata.agent,
-            session_id: metadata.session_id,
-            transcript: raw.text,
-            format: raw.format,
-            ...(metadata.project ? { project: metadata.project } : {}),
-            ...(metadata.branch ? { branch: metadata.branch } : {}),
-            ...(metadata.parent_session_id
-              ? { parent_session_id: metadata.parent_session_id }
-              : {}),
-            ...(metadata.continuation ? { continuation: metadata.continuation } : {}),
-          }),
-        ),
-      );
+    async send(input) {
+      const body = gzipSync(Buffer.from(JSON.stringify(input)));
       try {
         const response = await fetchImpl(`${url}/v1/sessions`, {
           method: "POST",
@@ -217,19 +88,22 @@ export function createServerTarget(options: ServerTargetOptions): Target {
             "Content-Type": "application/json",
             "Content-Encoding": "gzip",
             Authorization: `Bearer ${options.token}`,
+            "User-Agent": `dosu-cli/${VERSION}`,
           },
           body: new Uint8Array(body),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         if (response.status === 200 || response.status === 201) {
-          const stored = (await response.json()) as ServerStored;
-          return { status: "shipped", taskId: `${stored.status}:${stored.content_hash}` };
+          const answer = (await response.json()) as ServerAnswer;
+          const shipped = { records: answer.records_total, prefix_sha256: answer.prefix_sha256 };
+          if (answer.status === "trivial") return { status: "trivial", shipped };
+          return { status: "shipped", taskId: `${answer.status}:${answer.content_hash}`, shipped };
         }
         const detail = (await response.json().catch(() => ({}))) as ServerError;
         const message = detail.error?.message
           ? `${detail.error.code ?? response.status}: ${detail.error.message}`
           : `HTTP ${response.status}`;
-        if (response.status === 422 || response.status === 400 || response.status === 413) {
+        if (REJECTED_STATUSES.has(response.status)) {
           return { status: "rejected", httpStatus: response.status, message };
         }
         return { status: "failed", message: `server ${url}: ${message}` };

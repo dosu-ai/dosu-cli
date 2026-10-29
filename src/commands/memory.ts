@@ -21,7 +21,7 @@ import {
 } from "../mcp/call-session";
 import { callMcpTool, proxyRelay, type ToolResult, toolText } from "../mcp/proxy";
 import { SESSION_HARNESSES } from "../sessions/scan";
-import { trajectorySourceOf } from "../shipper/normalize";
+import { trajectorySourceOf } from "../sessions/start";
 import { printResult } from "./output";
 
 interface MemoryOptions {

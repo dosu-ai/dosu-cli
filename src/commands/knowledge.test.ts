@@ -396,7 +396,7 @@ describe("knowledge sync", () => {
     await run("sync");
 
     const output = allOutput();
-    expect(output).toContain("Shipped 3 sessions to Dosu memory");
+    expect(output).toContain("Shipped 3 sessions to a sessiondb server");
     expect(output).toContain("2 passed over");
     expect(output).not.toContain("run sync again");
     expect(process.exitCode).toBeUndefined();
@@ -433,7 +433,7 @@ describe("knowledge sync", () => {
     await run("sync");
 
     const output = allOutput();
-    expect(output).toContain("Shipped 1 session to Dosu memory.");
+    expect(output).toContain("Shipped 1 session to a sessiondb server.");
     expect(output).not.toContain("passed over");
     expect(output).not.toContain("still in progress");
   });
@@ -452,7 +452,7 @@ describe("knowledge sync", () => {
     await run("sync");
 
     const output = allOutput();
-    expect(output).toContain("Shipped 1 session to Dosu memory.");
+    expect(output).toContain("Shipped 1 session to a sessiondb server.");
     expect(output).toContain("Shipping stopped: 502 Bad Gateway. It will be retried.");
     expect(process.exitCode).toBe(1);
   });
@@ -1298,45 +1298,45 @@ describe("knowledge hooks", () => {
 });
 
 describe("knowledge sync shipping wiring", () => {
+  const team = {
+    name: "team",
+    url: "https://sessions.example.com",
+    owner: "11111111-1111-4111-8111-111111111111",
+    token: "sdb_test",
+  };
+
   beforeEach(() => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
     mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    process.env.DOSU_BACKEND_URL_OVERRIDE = "https://api.dosu.test";
-  });
-
-  afterEach(() => {
-    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
   });
 
   function syncDeps(call = 0): { ship?: unknown } {
     return mockRunSync.mock.calls[call][0].deps;
   }
 
-  it("builds a ship step for an authenticated cloud install", async () => {
+  it("builds a ship step when a sessiondb server is configured", async () => {
+    mockLoadConfig.mockReturnValue({
+      ...makeValidConfig(),
+      targets: [team],
+      default_target: "team",
+    });
     await run("sync");
     expect(typeof syncDeps().ship).toBe("function");
   });
 
-  it("does not build a ship step without an API key", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ api_key: undefined }));
+  it("builds a ship step for the only configured server without a default", async () => {
+    mockLoadConfig.mockReturnValue({ ...makeValidConfig(), targets: [team] });
+    await run("sync");
+    expect(typeof syncDeps().ship).toBe("function");
+  });
+
+  it("does not build a ship step without a configured server, even when signed in", async () => {
     await run("sync");
     expect(syncDeps().ship).toBeUndefined();
   });
 
-  it("does not build a ship step without a deployment", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: undefined }));
-    await run("sync");
-    expect(syncDeps().ship).toBeUndefined();
-  });
-
-  it("does not build a ship step in OSS mode", async () => {
+  it("does not build a ship step in OSS mode without a server", async () => {
     mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1", mode: "oss" }));
-    await run("sync");
-    expect(syncDeps().ship).toBeUndefined();
-  });
-
-  it("does not build a ship step without a backend URL", async () => {
-    delete process.env.DOSU_BACKEND_URL_OVERRIDE;
     await run("sync");
     expect(syncDeps().ship).toBeUndefined();
   });

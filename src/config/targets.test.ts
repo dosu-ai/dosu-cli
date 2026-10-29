@@ -1,65 +1,42 @@
-import { FsStore } from "@dosu/sessionstorage";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { RemoteStore } from "../store/remote";
+import { describe, expect, it } from "vitest";
 import { CONFIG_SCHEMA_VERSION, type Config } from "./schema";
-import { configuredTargets, isServerTarget, openStore, resolveBucketTarget } from "./targets";
+import { configuredTargets, selectTarget } from "./targets";
 
-const SERVER = { name: "team", url: "https://sessions.example.com", owner: "acme", token: "sdb_x" };
-const BUCKET = { name: "r2", url: "r2://sessions/dosu", owner: "acme", account_id: "acct" };
-const FOLDER = { name: "local", url: "file:///tmp/sessions", owner: "acme" };
+const TEAM = { name: "team", url: "https://sessions.example.com", owner: "acme", token: "sdb_x" };
+const LAB = { name: "lab", url: "https://lab.example.com", owner: "acme", token: "sdb_y" };
 
-function cfg(targets: Config["targets"], default_target?: string): Config {
-  return { schema_version: CONFIG_SCHEMA_VERSION, targets, default_target };
+function config(extra: Partial<Config> = {}): Config {
+  return { schema_version: CONFIG_SCHEMA_VERSION, ...extra };
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
-describe("isServerTarget", () => {
-  it("is true for http(s) urls only", () => {
-    expect(isServerTarget(SERVER)).toBe(true);
-    expect(isServerTarget({ url: "http://localhost:7200" })).toBe(true);
-    expect(isServerTarget(BUCKET)).toBe(false);
-    expect(isServerTarget(FOLDER)).toBe(false);
-    expect(isServerTarget({ url: "/srv/sessions" })).toBe(false);
+describe("configuredTargets", () => {
+  it("is the config's servers, or none", () => {
+    expect(configuredTargets(config())).toEqual([]);
+    expect(configuredTargets(config({ targets: [TEAM] }))).toEqual([TEAM]);
   });
 });
 
-describe("openStore", () => {
-  it("opens a server target read-only through RemoteStore", () => {
-    const store = openStore(SERVER);
-    expect(store).toBeInstanceOf(RemoteStore);
-    expect(store.url).toBe("https://sessions.example.com");
+describe("selectTarget", () => {
+  it("finds a configured server by name", () => {
+    expect(selectTarget(config({ targets: [LAB, TEAM] }), "team")).toBe(TEAM);
   });
 
-  it("refuses a server target without a token", () => {
-    expect(() => openStore({ ...SERVER, token: undefined })).toThrow(/no token/);
+  it("falls back to the default, then to the only one", () => {
+    expect(selectTarget(config({ targets: [LAB, TEAM], default_target: "lab" }))).toBe(LAB);
+    expect(selectTarget(config({ targets: [TEAM] }))).toBe(TEAM);
+    expect(selectTarget(config())).toBeUndefined();
   });
 
-  it("opens folders as before (S3Store needs the Bun runtime; see s3 tests)", () => {
-    expect(openStore(FOLDER)).toBeInstanceOf(FsStore);
-  });
-});
-
-describe("resolveBucketTarget", () => {
-  it("finds a configured target by name, server targets included", () => {
-    expect(resolveBucketTarget(cfg([BUCKET, SERVER]), "team")).toEqual(SERVER);
-    expect(configuredTargets(cfg(undefined))).toEqual([]);
-  });
-
-  it("takes an ad-hoc URL with its owner, and explains what else it accepts", () => {
-    expect(resolveBucketTarget(cfg([]), "s3://b/p", { owner: "me" })).toEqual({
-      name: "s3://b/p",
-      url: "s3://b/p",
-      owner: "me",
-      credentials: "env",
-    });
-    vi.stubEnv("DOSU_OWNER", "env-owner");
-    expect(resolveBucketTarget(cfg([]), "/tmp/x").owner).toBe("env-owner");
-    vi.stubEnv("DOSU_OWNER", undefined);
-    expect(() => resolveBucketTarget(cfg([]), "r2://b")).toThrow(/needs an owner/);
-    expect(() => resolveBucketTarget(cfg([BUCKET]), "nope")).toThrow(/configured: r2/);
-    expect(() => resolveBucketTarget(cfg([]), "nope")).toThrow(/no bucket targets configured/);
+  it("explains what it could not resolve", () => {
+    expect(() => selectTarget(config({ targets: [TEAM] }), "lab")).toThrow(
+      "unknown target 'lab' (configured: team); run 'dosu setup' or 'dosu sources setup --server <url> --token <token>'",
+    );
+    expect(() => selectTarget(config({ targets: [LAB, TEAM] }))).toThrow(
+      "several servers are configured (lab, team): pass --target <name> or set default_target",
+    );
+    // A default that was removed from the targets is a configuration error, not silence.
+    expect(() => selectTarget(config({ targets: [TEAM], default_target: "gone" }))).toThrow(
+      /unknown target 'gone'/,
+    );
   });
 });

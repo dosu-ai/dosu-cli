@@ -1,63 +1,34 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { MODE_OSS } from "../config/config";
-import { makeTestConfig } from "../config/config.test-utils";
+import { describe, expect, it } from "vitest";
 import { CONFIG_SCHEMA_VERSION, type Config } from "../config/schema";
 import { selectTarget } from "./select";
 
-const SERVER = { name: "team", url: "https://sessions.example.com", owner: "acme", token: "sdb_x" };
-const FOLDER = { name: "local", url: "file:///tmp/sessions", owner: "acme" };
+const TEAM = { name: "team", url: "https://sessions.example.com", owner: "acme", token: "sdb_x" };
+const LAB = { name: "lab", url: "https://lab.example.com", owner: "acme", token: "sdb_y" };
 
-function loggedIn(extra: Partial<Config> = {}): Config {
-  return {
-    ...makeTestConfig({
-      access_token: "t",
-      refresh_token: "r",
-      expires_at: 0,
-      api_key: "sk_test",
-      deployment_id: "dep1",
-      org_id: "org1",
-    }),
-    ...extra,
-  };
-}
-
-function loggedOut(extra: Partial<Config> = {}): Config {
+function config(extra: Partial<Config> = {}): Config {
   return { schema_version: CONFIG_SCHEMA_VERSION, ...extra };
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
 describe("selectTarget", () => {
-  it("ships to a configured server target by name, as the default, or as the only target", () => {
-    vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
-    const named = selectTarget(loggedIn({ targets: [FOLDER, SERVER] }), { target: "team" });
-    expect(named).toMatchObject({ kind: "server", name: "team", url: SERVER.url });
+  it("ships to a configured server by name, as the default, or as the only one", () => {
+    const named = selectTarget(config({ targets: [LAB, TEAM] }), { target: "team" });
+    expect(named).toMatchObject({ name: "team", url: TEAM.url });
 
-    const byDefault = selectTarget(loggedIn({ targets: [FOLDER, SERVER], default_target: "team" }));
-    expect(byDefault?.kind).toBe("server");
+    const byDefault = selectTarget(config({ targets: [LAB, TEAM], default_target: "team" }));
+    expect(byDefault?.name).toBe("team");
 
-    const only = selectTarget(loggedOut({ targets: [SERVER] }));
-    expect(only?.kind).toBe("server");
+    expect(selectTarget(config({ targets: [LAB] }))?.name).toBe("lab");
   });
 
-  it("refuses a server target without a token", () => {
-    expect(() =>
-      selectTarget(loggedOut({ targets: [{ ...SERVER, token: undefined }] }), { target: "team" }),
-    ).toThrow(/no token/);
+  it("has nothing to ship to without a server, and will not guess between several", () => {
+    expect(selectTarget(config())).toBeUndefined();
+    expect(() => selectTarget(config({ targets: [LAB, TEAM] }))).toThrow(/several servers/);
   });
 
-  it("prefers the Dosu login when it can ship and nothing else is named", () => {
-    vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
-    expect(selectTarget(loggedIn({ targets: [SERVER] }))?.kind).toBe("dosu");
-    expect(selectTarget(loggedIn({ targets: [FOLDER] }), { target: "dosu" })?.kind).toBe("dosu");
-    expect(selectTarget(loggedIn({ targets: [FOLDER] }), { target: "local" })?.kind).toBe("store");
-  });
-
-  it("has nothing to ship to when logged out with no targets, and says so for --target dosu", () => {
-    expect(selectTarget(loggedOut())).toBeUndefined();
-    expect(() => selectTarget(loggedOut(), { target: "dosu" })).toThrow(/cannot ship/);
-    expect(selectTarget(loggedIn({ mode: MODE_OSS }))).toBeUndefined();
+  it("explains an unknown --target", () => {
+    expect(() => selectTarget(config({ targets: [TEAM] }), { target: "nope" })).toThrow(
+      /unknown target 'nope' \(configured: team\)/,
+    );
+    expect(() => selectTarget(config(), { target: "nope" })).toThrow(/no server configured/);
   });
 });

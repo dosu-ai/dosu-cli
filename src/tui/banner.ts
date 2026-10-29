@@ -22,7 +22,7 @@ export interface BannerContext {
   agents: string[];
   /** Setup steps still missing ("Library", "MCP", "agents", "hooks"); rendered as warning rows. */
   setupMissing?: string[];
-  /** Where finished sessions ship: the user's own bucket (its URL), or Dosu when unset. */
+  /** Where finished sessions ship: the sessiondb server (name and URL), or unset. */
   storage?: string;
   /** True when a knowledge-sync run is shipping sessions right now. */
   syncing?: boolean;
@@ -122,7 +122,12 @@ function checklistRows(ctx: BannerContext, width: number): string[] {
   if (missing.has("Library")) rows.push(["library", warnRow]);
   else if (ctx.libraryName) rows.push(["library", `${on} ${ctx.libraryName}`]);
   if (ctx.signedIn && !ctx.sessionExpired && missing.size === 0) {
-    rows.push(["storage", ctx.storage ? `${on} ${ctx.storage}` : `${on} Dosu`]);
+    rows.push([
+      "storage",
+      ctx.storage
+        ? `${on} ${ctx.storage}`
+        : `${off} ${pc.yellow("no server")} ${pc.dim(`${DOT} run Setup`)}`,
+    ]);
   }
   if (missing.has("agents")) rows.push(["agents", warnRow]);
   else if (ctx.agents.length > 0) rows.push(["agents", `${on} ${ctx.agents.join(LIST_SEP)}`]);

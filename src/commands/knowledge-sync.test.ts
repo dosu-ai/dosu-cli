@@ -21,6 +21,7 @@ import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { contextHookOutput } from "../memory/context-hook";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
+import { type Fetch, fakeSessiondb, type Upload } from "../shipper/fake-sessiondb.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { lockPath } from "../sync/lock";
 import { emptySyncState, loadSyncState, saveSyncState, syncStatePath } from "../sync/state";
@@ -34,8 +35,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 let home: string;
-type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
+let server: ReturnType<typeof fakeSessiondb>;
+let fetchImpl: ReturnType<typeof fakeSessiondb>["fetchImpl"];
+
+/** The sessiondb server every run ships to. */
+const SERVER = { name: "team", url: "https://sessions.test", owner: "james", token: "sdb_t" };
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-knowledge-sync-")));
@@ -47,18 +51,19 @@ beforeEach(() => {
   vi.stubEnv("DOSU_DEV", undefined);
   vi.stubEnv("DOSU_PROJECT", undefined);
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
-  saveConfig(
-    makeTestConfig({
+  saveConfig({
+    ...makeTestConfig({
       access_token: "t",
       refresh_token: "r",
       expires_at: 0,
       api_key: "sk_test",
       deployment_id: "dep1",
     }),
-  );
-  fetchImpl = vi.fn<Fetch>(
-    async () => new Response(JSON.stringify({ task_id: "task" }), { status: 202 }),
-  );
+    targets: [SERVER],
+    default_target: "team",
+  });
+  server = fakeSessiondb();
+  fetchImpl = server.fetchImpl;
   vi.stubGlobal("fetch", fetchImpl);
 });
 
@@ -76,8 +81,9 @@ async function dosu(...args: string[]): Promise<void> {
   await cmd.parseAsync(["node", "dosu", ...args]);
 }
 
-function posted(): Array<{ records: { role: string }[]; metadata: Record<string, unknown> }> {
-  return fetchImpl.mock.calls.map(([, init]) => JSON.parse(init?.body as string));
+/** What the fake server received, upload by upload. */
+function posted(): Upload[] {
+  return server.uploads;
 }
 
 /** Feed `payload` to this process's stdin, as an agent hands a hook its JSON. */
@@ -191,9 +197,7 @@ describe("knowledge sync from a session-end hook", () => {
     vi.stubEnv("DOSU_PROJECT", "poc-alpha");
     await dosu("sync", "--quiet", "--ended", `claude:aaaa=${ended}`);
 
-    const projects = Object.fromEntries(
-      posted().map((p) => [p.metadata.session_id, p.metadata.project]),
-    );
+    const projects = Object.fromEntries(posted().map((p) => [p.session_id, p.project]));
     expect(projects).toEqual({ aaaa: "poc-alpha", bbbb: "github.com/acme/beta" });
   });
 
@@ -210,7 +214,9 @@ describe("knowledge sync from a session-end hook", () => {
     vi.stubEnv("DOSU_PROJECT", undefined);
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.project)).toEqual(["poc-alpha", "poc-alpha"]);
+    // The first try never reached the fake server's log; the later run still says poc-alpha.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(posted().map((p) => p.project)).toEqual(["poc-alpha"]);
   });
 
   it("the --detach parent hands the SessionEnd payload's session to the run it spawns", async () => {
@@ -232,7 +238,7 @@ describe("knowledge sync from a session-end hook", () => {
 
     // The spawned run ships the session that ended; the live one waits out the quiet period.
     await dosu(...child);
-    expect(posted().map((p) => p.metadata.session_id)).toEqual(["aaaa"]);
+    expect(posted().map((p) => p.session_id)).toEqual(["aaaa"]);
   });
 
   it("a hook's session and an explicit --ended-path stay two sessions, each with its transcript", async () => {
@@ -251,9 +257,9 @@ describe("knowledge sync from a session-end hook", () => {
     await dosu(...respawnedArgs());
 
     const [shipped] = posted();
-    expect(shipped.metadata.session_id).toBe("aaaa");
-    expect(JSON.stringify(shipped.records)).toContain("question 1");
-    expect(JSON.stringify(shipped.records)).not.toContain("question 2");
+    expect(shipped.session_id).toBe("aaaa");
+    expect(shipped.transcript).toContain("question 1");
+    expect(shipped.transcript).not.toContain("question 2");
   });
 
   it("ships the session a Codex SessionEnd names at once, under its rollout's name", async () => {
@@ -279,7 +285,7 @@ describe("knowledge sync from a session-end hook", () => {
     ]);
     await dosu(...child);
 
-    expect(posted().map((p) => p.metadata)).toEqual([
+    expect(posted()).toEqual([
       expect.objectContaining({
         agent: "codex",
         session_id: `rollout-2026-10-02T17-28-17-${uuid}`,
@@ -309,11 +315,7 @@ describe("knowledge sync of Codex subagents", () => {
 
     await dosu("sync");
 
-    expect(
-      Object.fromEntries(
-        posted().map((p) => [p.metadata.session_id, p.metadata.parent_session_id]),
-      ),
-    ).toEqual({
+    expect(Object.fromEntries(posted().map((p) => [p.session_id, p.parent_session_id]))).toEqual({
       [parent]: undefined,
       "rollout-2026-10-02T17-33-26-01a0ff2e-1861-7b61-a549-34bdff8539e0": parent,
     });
@@ -335,7 +337,7 @@ describe("knowledge sync of a Codex session that ran $dosu-incognito", () => {
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.session_id)).toEqual([on]);
+    expect(posted().map((p) => p.session_id)).toEqual([on]);
     expect(loadSyncState().sessions[`codex/${off}`]?.outcome).toBe("incognito");
   });
 });
@@ -367,7 +369,7 @@ describe("knowledge sync of an incognito Codex session's descendants", () => {
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.session_id)).toEqual([other]);
+    expect(posted().map((p) => p.session_id)).toEqual([other]);
   });
 });
 
@@ -395,7 +397,7 @@ describe("knowledge sync of what descends from a session its agent's switch sett
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.session_id)).toEqual([other]);
+    expect(posted().map((p) => p.session_id)).toEqual([other]);
     const sessions = loadSyncState().sessions;
     for (const key of [fork, subagent, forkOfSubagent]) {
       expect(sessions[`codex/${key}`]).toMatchObject({ outcome: "incognito", by_agent: true });
@@ -425,7 +427,7 @@ describe("knowledge sync of what descends from a session its agent's switch sett
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.session_id)).toEqual(["other"]);
+    expect(posted().map((p) => p.session_id)).toEqual(["other"]);
     expect(loadSyncState().sessions["claude/branch"]).toMatchObject({
       outcome: "incognito",
       by_agent: true,
@@ -456,7 +458,7 @@ describe("knowledge sync of a session its agent's switch settled, long after", (
     utimesSync(path, new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 10 * 60_000));
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.session_id)).toEqual(["other"]);
+    expect(posted().map((p) => p.session_id)).toEqual(["other"]);
   });
 });
 
@@ -486,7 +488,7 @@ describe("knowledge sync, first after an upgrade from 0.66", () => {
 
     expect(
       posted()
-        .map((p) => p.metadata.session_id)
+        .map((p) => p.session_id)
         .sort(),
     ).toEqual(["since", "studied"]);
     const state = loadSyncState();
@@ -509,7 +511,7 @@ describe("knowledge sync of Codex subagents, ended", () => {
 
     expect(
       posted()
-        .map((p) => p.metadata.session_id)
+        .map((p) => p.session_id)
         .sort(),
     ).toEqual([
       `rollout-2026-10-02T18-14-03-${uuid}`,
@@ -555,7 +557,7 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
     await dosu(...child);
 
     // The session still running elsewhere waits out the quiet period.
-    expect(posted().map((p) => p.metadata)).toEqual([
+    expect(posted()).toEqual([
       expect.objectContaining({
         agent: "opencode",
         session_id: "ses_root",
@@ -567,7 +569,8 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
         parent_session_id: "ses_root",
       }),
     ]);
-    expect(posted()[0].records[0]).toMatchObject({ role: "meta", source: "opencode", cwd: alpha });
+    expect(posted()[0]?.format).toBe("json");
+    expect(posted()[0]?.transcript).toContain(alpha);
   });
 
   it("applies opencode's DOSU_PROJECT to the sessions that ended there, a subagent's included", async () => {
@@ -584,9 +587,7 @@ describe("knowledge sync from opencode's Dosu plugin", () => {
     await dosu("sync");
     vi.useRealTimers();
 
-    const projects = Object.fromEntries(
-      posted().map((p) => [p.metadata.session_id, p.metadata.project]),
-    );
+    const projects = Object.fromEntries(posted().map((p) => [p.session_id, p.project]));
     expect(projects).toEqual({
       ses_root: "poc-alpha",
       ses_child: "poc-alpha",
@@ -643,7 +644,7 @@ describe("knowledge sync of a session's branch", () => {
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata)).toEqual([
+    expect(posted()).toEqual([
       expect.objectContaining({
         agent: "opencode",
         session_id: "ses_branch",
@@ -694,7 +695,7 @@ describe("knowledge sync of a session's branch", () => {
 
     const [[, init]] = context.mock.calls;
     expect(JSON.parse(init?.body as string).branch).toBe("feat/layout");
-    expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/layout"]);
+    expect(posted().map((p) => p.branch)).toEqual(["feat/layout"]);
   });
 
   it("ships a Cursor session with the branch its first turn was on, not one a later turn moved to", async () => {
@@ -731,9 +732,7 @@ describe("knowledge sync of a session's branch", () => {
 
     await dosu("sync", "--flush");
 
-    expect(posted().map((p) => [p.metadata.agent, p.metadata.branch])).toEqual([
-      ["cursor", "feat/start"],
-    ]);
+    expect(posted().map((p) => [p.agent, p.branch])).toEqual([["cursor", "feat/start"]]);
   });
 
   it("ships a Claude Code session with the branch its transcript recorded, as before", async () => {
@@ -748,8 +747,7 @@ describe("knowledge sync of a session's branch", () => {
     await dosu("sync");
 
     const [shipped] = posted();
-    expect(shipped.records[0]).toMatchObject({ role: "meta", git_branch: "feat/claude" });
-    expect(shipped.metadata.branch).toBe("feat/claude");
+    expect(shipped?.branch).toBe("feat/claude");
   });
 
   it("ships a Codex session with the branch its session_meta recorded, as before", async () => {
@@ -761,8 +759,7 @@ describe("knowledge sync of a session's branch", () => {
     await dosu("sync");
 
     const [shipped] = posted();
-    expect(shipped.records[0]).toMatchObject({ role: "meta", git_branch: "feat/codex" });
-    expect(shipped.metadata.branch).toBe("feat/codex");
+    expect(shipped?.branch).toBe("feat/codex");
   });
 
   it("ships a recorded branch verbatim, the one the session's prompts asked memory with", async () => {
@@ -804,10 +801,7 @@ describe("knowledge sync of a session's branch", () => {
     const asked = context.mock.calls.map(([, init]) => JSON.parse(init?.body as string).branch);
     expect(asked).toEqual([branch, branch]);
     const shipped = posted();
-    expect(shipped.map((p) => p.metadata.branch)).toEqual([branch, branch]);
-    for (const { records } of shipped) {
-      expect(records[0]).toMatchObject({ role: "meta", git_branch: branch });
-    }
+    expect(shipped.map((p) => p.branch)).toEqual([branch, branch]);
   });
 });
 
@@ -829,7 +823,7 @@ describe("knowledge sync of a resumed session", () => {
     await dosu("sync");
 
     const [, second] = posted();
-    expect(second?.metadata).toMatchObject({ session_id: "aaaa", continuation: expect.anything() });
+    expect(second).toMatchObject({ session_id: "aaaa", shipped: expect.anything() });
   });
 
   it("ships only the new tail the second time", async () => {
@@ -842,18 +836,20 @@ describe("knowledge sync of a resumed session", () => {
     utimesSync(path, later, later);
     await dosu("sync");
 
+    // The whole log goes up both times; the second upload tells the server what it already
+    // holds, and the server writes only the tail.
     const [first, second] = posted();
-    expect(first.metadata.continuation).toBeUndefined();
-    expect(second.metadata.continuation).toEqual({
-      from_record: first.records.length,
+    expect(first?.shipped).toBeUndefined();
+    expect(second?.shipped).toEqual({
+      records: 2,
       prefix_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
-    expect(second.records.map((r) => r.role)).toEqual(["meta", "user", "assistant"]);
+    expect(second?.transcript).toContain("question 2");
   });
 });
 
 describe("knowledge sync --flush (the last step before a machine is torn down)", () => {
-  const shippedIds = () => posted().map((p) => p.metadata.session_id);
+  const shippedIds = () => posted().map((p) => p.session_id);
 
   it("ships every pending session now, the ones still inside the quiet period included", async () => {
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
@@ -895,7 +891,9 @@ describe("knowledge sync --flush (the last step before a machine is torn down)",
 
     await dosu("sync", "--flush");
 
-    expect(shippedIds()).toEqual(["kept"]);
+    // The trivial one is the server's call, so it was uploaded and judged; the rest never went.
+    expect(shippedIds()).toEqual(["kept", "trivial"]);
+    expect(loadSyncState().sessions["claude/trivial"]?.outcome).toBe("trivial");
   });
 
   it("is an explicit command: it resumes paused syncing, even with --quiet", async () => {
@@ -985,9 +983,9 @@ describe("knowledge sync --status", () => {
   });
 });
 
-describe("knowledge sync to a bucket target connected as a Dosu source", () => {
-  /** A folder target standing in for the bucket; `source_id` is what connect would have kept. */
-  function configureStoreTarget(sourceId?: string): void {
+describe("knowledge sync to a server whose bucket is connected as a Dosu source", () => {
+  /** `source_id` is what `dosu sources connect` would have kept on the target. */
+  function configureTarget(sourceId?: string): void {
     saveConfig({
       ...makeTestConfig({
         access_token: "t",
@@ -996,22 +994,25 @@ describe("knowledge sync to a bucket target connected as a Dosu source", () => {
         api_key: "sk_test",
         deployment_id: "dep1",
       }),
-      targets: [
-        {
-          name: "team",
-          url: join(home, "store"),
-          owner: "james",
-          ...(sourceId ? { source_id: sourceId } : {}),
-        },
-      ],
+      targets: [{ ...SERVER, ...(sourceId ? { source_id: sourceId } : {}) }],
       default_target: "team",
     });
   }
 
+  /** The fake server for uploads; `nudge` answers Dosu's sync-now call. */
+  function dosuAnswers(nudge: () => Response): void {
+    const upload = fetchImpl.getMockImplementation();
+    fetchImpl.mockImplementation(async (url, init) =>
+      url.startsWith("https://api.dosu.test/")
+        ? nudge()
+        : (upload as NonNullable<typeof upload>)(url, init),
+    );
+  }
+
   it("asks Dosu to read the bucket now once something shipped there", async () => {
-    configureStoreTarget("src-1");
-    fetchImpl.mockImplementation(
-      async () =>
+    configureTarget("src-1");
+    dosuAnswers(
+      () =>
         new Response(JSON.stringify({ id: "src-1", status: "queued", workflow_id: "wf" }), {
           status: 202,
         }),
@@ -1023,6 +1024,7 @@ describe("knowledge sync to a bucket target connected as a Dosu source", () => {
     await dosu("sync");
 
     expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ["https://sessions.test/v1/sessions", "POST"],
       ["https://api.dosu.test/v1/memory/sources/src-1/sync", "POST"],
     ]);
     const out = log.mock.calls.map((c) => c.join(" ")).join("\n");
@@ -1031,8 +1033,8 @@ describe("knowledge sync to a bucket target connected as a Dosu source", () => {
   });
 
   it("leaves the schedule to it when the nudge fails, without failing the run", async () => {
-    configureStoreTarget("src-1");
-    fetchImpl.mockImplementation(async () => new Response("", { status: 503 }));
+    configureTarget("src-1");
+    dosuAnswers(() => new Response("", { status: 503 }));
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
     claudeSession("aaaa", exchange(1, alpha), 30);
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -1046,15 +1048,15 @@ describe("knowledge sync to a bucket target connected as a Dosu source", () => {
   });
 
   it("does not call Dosu for a bucket that is only an archive, or when nothing shipped", async () => {
-    configureStoreTarget();
+    configureTarget();
     const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
     claudeSession("aaaa", exchange(1, alpha), 30);
     vi.spyOn(console, "log").mockImplementation(() => {});
     await dosu("sync");
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://sessions.test/v1/sessions"]);
 
-    configureStoreTarget("src-1");
+    configureTarget("src-1");
     await dosu("sync"); // Already shipped: nothing new, no nudge.
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

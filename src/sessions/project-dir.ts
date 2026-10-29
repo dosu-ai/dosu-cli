@@ -168,7 +168,7 @@ function fileMtime(path: string): string {
   }
 }
 
-/** What a session's transcript says about the branch it began on (shipper/session-start.ts):
+/** What a session's transcript says about the branch it began on (sessions/start.ts):
  * the branch it recorded then (Claude Code, Codex), and when its own first prompt was. */
 export interface SessionStart {
   recorded: string | null;

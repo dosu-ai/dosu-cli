@@ -23,12 +23,11 @@ function collectValues(value: string, previous: string[] = []): string[] {
 
 export function syncCommand(): Command {
   const cmd = new Command("sync")
-    .description("Ship finished local agent sessions to Dosu memory or a session store")
+    .description("Ship finished local agent sessions to your sessiondb server")
     .option(
-      "--target <name|url>",
-      "Where to ship: 'dosu', a configured target's name, or an s3:// / r2:// / file:// URL (default: the config's default_target, else Dosu when logged in, else the first configured target)",
+      "--target <name>",
+      "Which configured server to ship to (default: the config's default_target, else the only one configured)",
     )
-    .option("--owner <id>", "Owner id for sessions shipped to an ad-hoc --target URL")
     .option("--quiet", "Background mode for hooks: honor backoff, exit 0, print nothing")
     .option("--detach", "Re-spawn detached and return immediately (used by agent hooks)")
     .option(
@@ -69,7 +68,6 @@ export function syncCommand(): Command {
         status?: boolean;
         json?: boolean;
         target?: string;
-        owner?: string;
       }) => {
         const ended = parseEndedSessionArgs(opts.ended ?? [], opts.endedPath ?? []);
 
@@ -99,7 +97,6 @@ export function syncCommand(): Command {
             ...(opts.bootstrap ? ["--bootstrap"] : []),
             ...(opts.retryRejected ? ["--retry-rejected"] : []),
             ...(opts.target ? ["--target", opts.target] : []),
-            ...(opts.owner ? ["--owner", opts.owner] : []),
             ...[...ended, ...(hookEnded ? [hookEnded] : [])].flatMap(endedSessionArgs),
           ]);
           if (!spawned) logger.debug("sync", "detach failed; nothing shipped");
@@ -112,7 +109,7 @@ export function syncCommand(): Command {
         if (ended.length > 0) pinEndedSessionProjects(ended);
         let shipper: Shipper;
         try {
-          shipper = buildShipper({ target: opts.target, owner: opts.owner });
+          shipper = buildShipper({ target: opts.target });
         } catch (err) {
           if (opts.quiet) {
             logger.debug(
@@ -163,9 +160,9 @@ export function syncCommand(): Command {
 
 interface Shipper {
   ship: SyncDeps["ship"];
-  /** What the outcome says sessions went to: "Dosu memory", or a store's name and URL. */
+  /** What the outcome says sessions went to: the server's name and URL. */
   destination: string;
-  /** For a bucket target `dosu sources connect` registered: the source to nudge after a run. */
+  /** When `dosu sources connect` registered the server's bucket: the source to nudge after a run. */
   sourceId?: string;
 }
 
@@ -197,20 +194,16 @@ async function nudgeSource(
   }
 }
 
-/** Transcript-shipping step for the selected target; `ship` is undefined when nothing can take
- * sessions: logged out (or OSS mode, no API key/deployment, no backend URL) and no bucket target
+/** Transcript-shipping step for the selected server; `ship` is undefined when none is
  * configured. Throws when `--target` names something that does not resolve. The user's opt-out
  * is enforced inside the sync pipeline, against the same state file it already loads. */
 function buildShipper(selection: TargetSelection): Shipper {
   const cfg = loadConfig();
   const target = selectTarget(cfg, selection);
-  if (!target) return { ship: undefined, destination: "Dosu memory" };
-  const sourceId =
-    target.kind === "store"
-      ? configuredTargets(cfg).find((t) => t.name === target.name)?.source_id
-      : undefined;
+  if (!target) return { ship: undefined, destination: "a sessiondb server" };
+  const sourceId = configuredTargets(cfg).find((t) => t.name === target.name)?.source_id;
   return {
-    destination: target.kind === "dosu" ? "Dosu memory" : `${target.name} (${target.url})`,
+    destination: `${target.name} (${target.url})`,
     ...(sourceId ? { sourceId } : {}),
     ship: async (sessions, shipped, hold, settled) => {
       const { createShipStep } = await import("../shipper/runner");
@@ -355,11 +348,7 @@ function printSyncOutcome(outcome: SyncOutcome, destination: string): void {
       // Subagents' transcripts ship with their sessions; only sessions are counted here.
       const ready = outcome.readySessions - outcome.sessions.filter((s) => s.parentId).length;
       console.log(`✓ Scanned. ${ready} finished session${plural(ready)} ready to ship${inFlight}.`);
-      console.log(
-        pc.dim(
-          "Sign in with 'dosu setup' to ship them to Dosu memory, or add a bucket target to config.json.",
-        ),
-      );
+      console.log(pc.dim("Run 'dosu setup' to point this machine at a sessiondb server."));
       break;
     }
     case "shipped":

@@ -9,12 +9,16 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { fakeSessiondb } from "../shipper/fake-sessiondb.test-utils";
 import { emptySyncState, loadSyncState, saveSyncState, setShipTranscripts } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
 
 let home: string;
-type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
+let server: ReturnType<typeof fakeSessiondb>;
+let fetchImpl: ReturnType<typeof fakeSessiondb>["fetchImpl"];
+
+/** The sessiondb server every run ships to. */
+const SERVER = { name: "team", url: "https://sessions.test", owner: "james", token: "sdb_t" };
 let stdout: string[];
 
 beforeEach(() => {
@@ -27,18 +31,19 @@ beforeEach(() => {
   vi.stubEnv("DOSU_DEV", undefined);
   vi.stubEnv("DOSU_PROJECT", undefined);
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
-  saveConfig(
-    makeTestConfig({
+  saveConfig({
+    ...makeTestConfig({
       access_token: "t",
       refresh_token: "r",
       expires_at: 0,
       api_key: "sk_test",
       deployment_id: "dep1",
     }),
-  );
-  fetchImpl = vi.fn<Fetch>(
-    async () => new Response(JSON.stringify({ task_id: "task" }), { status: 202 }),
-  );
+    targets: [SERVER],
+    default_target: "team",
+  });
+  server = fakeSessiondb();
+  fetchImpl = server.fetchImpl;
   vi.stubGlobal("fetch", fetchImpl);
   stdout = [];
   vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
@@ -63,8 +68,7 @@ async function dosu(...args: string[]): Promise<void> {
   await cmd.parseAsync(["node", "dosu", ...args]);
 }
 
-const shippedIds = () =>
-  fetchImpl.mock.calls.map(([, init]) => JSON.parse(init?.body as string).metadata.session_id);
+const shippedIds = () => server.uploads.map((upload) => upload.session_id);
 
 /** A git checkout under the temporary home with one commit, and an origin when given one. */
 function gitRepo(name: string, origin?: string): string {

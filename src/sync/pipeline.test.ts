@@ -1,5 +1,5 @@
 /** The sync pipeline end to end: real session files under a temporary home, the real scanner,
- * ledger, and ship step, with only HTTP faked. */
+ * ledger, and ship step, with only the sessiondb server faked. */
 
 import { execFileSync } from "node:child_process";
 import {
@@ -16,7 +16,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { scanAgentSessions } from "../sessions/scan";
+import { fakeSessiondb, type Upload } from "../shipper/fake-sessiondb.test-utils";
 import { createShipStep } from "../shipper/runner";
+import { createServerTarget } from "../shipper/target";
 import { fileLock } from "./lock";
 import { loadSyncState, saveSyncState } from "./state";
 import { runKnowledgeSync, type SyncDeps } from "./sync";
@@ -26,8 +28,8 @@ const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000);
 
 let home: string;
 let configDir: string;
-type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
+let server: ReturnType<typeof fakeSessiondb>;
+let fetchImpl: ReturnType<typeof fakeSessiondb>["fetchImpl"];
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-pipeline-")));
@@ -36,10 +38,8 @@ beforeEach(() => {
   // The ship step's own project cache lives in the CLI's config dir.
   vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
   vi.stubEnv("DOSU_PROJECT", undefined);
-  fetchImpl = vi.fn<Fetch>(
-    async () =>
-      new Response(JSON.stringify({ task_id: "task", session_url: null }), { status: 202 }),
-  );
+  server = fakeSessiondb();
+  fetchImpl = server.fetchImpl;
 });
 
 afterEach(() => {
@@ -57,10 +57,12 @@ function deps(projects: "fixed" | "git" = "fixed"): SyncDeps {
     lock: fileLock(configDir),
     locator: createProjectDirResolver(configDir),
     ship: createShipStep({
-      apiKey: "sk_test",
-      deploymentId: "dep1",
-      backendUrl: "https://api.dosu.test",
-      fetchImpl,
+      target: createServerTarget({
+        name: "team",
+        url: "https://sessions.test",
+        token: "sdb_test",
+        fetchImpl,
+      }),
       ...(projects === "fixed"
         ? { resolveProject: () => ({ project: "github.com/acme/app", rule: "origin" as const }) }
         : {}),
@@ -119,8 +121,9 @@ function gitRepo(name: string, origin: string): string {
   return dir;
 }
 
-function posted(call: number): { records: { role: string }[]; metadata: Record<string, unknown> } {
-  return JSON.parse(fetchImpl.mock.calls[call][1]?.body as string);
+/** What the fake server received, upload by upload. */
+function posted(call: number): Upload {
+  return server.uploads[call] as Upload;
 }
 
 describe("knowledge sync, end to end", () => {
@@ -129,20 +132,20 @@ describe("knowledge sync, end to end", () => {
 
     expect((await runKnowledgeSync({ deps: deps() })).counts?.shipped).toBe(1);
     const first = posted(0);
-    expect(first.metadata.continuation).toBeUndefined();
+    expect(first.shipped).toBeUndefined();
 
     appendFileSync(path, exchange(2));
     utimesSync(path, minutesAgo(10), minutesAgo(10));
     expect((await runKnowledgeSync({ deps: deps() })).counts?.shipped).toBe(1);
 
+    // The whole log goes up again; the server is told what it already has, and writes the tail.
     const second = posted(1);
-    expect(second.metadata.continuation).toEqual({
-      from_record: first.records.length,
+    expect(second.shipped).toEqual({
+      records: 2,
       prefix_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
-    // The meta record, then only the second exchange.
-    expect(second.records.map((r) => r.role)).toEqual(["meta", "user", "assistant"]);
-    expect(JSON.stringify(second.records)).not.toContain("question 1");
+    expect(second.transcript).toContain("question 1");
+    expect(second.transcript).toContain("question 2");
 
     expect((await runKnowledgeSync({ deps: deps() })).status).toBe("nothing-new");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -168,8 +171,9 @@ describe("knowledge sync, end to end", () => {
     utimesSync(path, minutesAgo(20), minutesAgo(20));
     await runKnowledgeSync({ deps: deps() });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(posted(1).metadata.session_id).toBe("late");
+    // The server judged the tiny session trivial the first time, and stored it once it grew.
+    expect(server.uploads.map((u) => u.session_id)).toEqual(["late", "newer", "late"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it("ships the session a SessionEnd hook just named, while a live one waits until quiet", async () => {
@@ -184,7 +188,7 @@ describe("knowledge sync, end to end", () => {
 
     expect(outcome).toMatchObject({ status: "shipped", inFlightSessions: 1 });
     expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(posted(0).metadata.session_id).toBe("ended");
+    expect(posted(0).session_id).toBe("ended");
   });
 
   it("a sync carrying DOSU_PROJECT ships every other session under its own project", async () => {
@@ -208,10 +212,7 @@ describe("knowledge sync, end to end", () => {
     });
 
     const projects = Object.fromEntries(
-      fetchImpl.mock.calls.map((_, i) => [
-        posted(i).metadata.session_id,
-        posted(i).metadata.project,
-      ]),
+      server.uploads.map((upload) => [upload.session_id, upload.project]),
     );
     expect(projects).toEqual({ aaaa: "poc-alpha", bbbb: "github.com/acme/beta" });
   });
@@ -235,13 +236,12 @@ describe("knowledge sync, end to end", () => {
     // Later, from a shell without the variable: the run still knows where the session lives.
     utimesSync(path, minutesAgo(10), minutesAgo(10));
     expect((await runKnowledgeSync({ deps: deps() })).counts?.shipped).toBe(1);
-    expect(posted(1).metadata.session_id).toBe("far");
+    // (The failed try never reached the fake server's log.)
+    expect(posted(0).session_id).toBe("far");
 
     appendFileSync(path, exchange(2));
     utimesSync(path, minutesAgo(8), minutesAgo(8));
     expect((await runKnowledgeSync({ deps: deps() })).counts?.shipped).toBe(1);
-    expect(posted(2).metadata.continuation).toMatchObject({
-      from_record: posted(1).records.length,
-    });
+    expect(posted(1).shipped).toMatchObject({ records: 2 });
   });
 });

@@ -19,11 +19,10 @@ import { getAccessTokenUserID } from "./identity";
 import {
   type AccountTarget,
   type AuthenticatedConfig,
-  type BucketCredentials,
-  type BucketTarget,
   CONFIG_SCHEMA_VERSION,
   type Config,
   MODE_OSS,
+  type ServerTarget,
   type SessionCredentials,
 } from "./schema";
 
@@ -228,10 +227,10 @@ function normalizeV2(value: Config): Config {
   };
 }
 
-/** The bucket targets and default-target name, each kept only when well-formed. */
+/** The server targets and default-target name, each kept only when well-formed. */
 function targetsOf(value: Config): Pick<Config, "targets" | "default_target"> {
   const targets = Array.isArray(value.targets)
-    ? value.targets.map(normalizeBucketTarget).filter((t): t is BucketTarget => t !== undefined)
+    ? value.targets.map(normalizeServerTarget).filter((t): t is ServerTarget => t !== undefined)
     : [];
   return {
     ...(targets.length > 0 ? { targets } : {}),
@@ -239,39 +238,19 @@ function targetsOf(value: Config): Pick<Config, "targets" | "default_target"> {
   };
 }
 
-function normalizeBucketTarget(value: unknown): BucketTarget | undefined {
+function normalizeServerTarget(value: unknown): ServerTarget | undefined {
   if (!isRecord(value)) return undefined;
   const name = stringValue(value.name);
   const url = stringValue(value.url);
   const owner = stringValue(value.owner);
-  if (!name || !url || !owner) return undefined;
-  const credentials = isRecord(value.credentials)
-    ? normalizeBucketCredentials(value.credentials)
-    : value.credentials === "env"
-      ? "env"
-      : undefined;
+  const token = stringValue(value.token);
+  if (!name || !url || !owner || !token || !/^https?:\/\//.test(url)) return undefined;
   return {
     name,
-    url,
+    url: url.replace(/\/+$/, ""),
     owner,
-    ...(stringValue(value.region) ? { region: value.region as string } : {}),
-    ...(stringValue(value.account_id) ? { account_id: value.account_id as string } : {}),
-    ...(stringValue(value.endpoint) ? { endpoint: value.endpoint as string } : {}),
-    ...(stringValue(value.token) ? { token: value.token as string } : {}),
-    ...(credentials ? { credentials } : {}),
+    token,
     ...(stringValue(value.source_id) ? { source_id: value.source_id as string } : {}),
-  };
-}
-
-function normalizeBucketCredentials(value: Record<string, unknown>): BucketCredentials | undefined {
-  const accessKeyId = stringValue(value.access_key_id);
-  const secretAccessKey = stringValue(value.secret_access_key);
-  if (!accessKeyId || !secretAccessKey) return undefined;
-  const sessionToken = stringValue(value.session_token);
-  return {
-    access_key_id: accessKeyId,
-    secret_access_key: secretAccessKey,
-    ...(sessionToken ? { session_token: sessionToken } : {}),
   };
 }
 

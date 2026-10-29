@@ -18,7 +18,7 @@ function asRecord(value: unknown): JsonRecord | null {
 }
 
 /** Parse a .jsonl payload, skipping blank and malformed lines. */
-function jsonlRecords(raw: string): JsonRecord[] {
+export function jsonlRecords(raw: string): JsonRecord[] {
   const records: JsonRecord[] = [];
   for (const line of raw.split("\n")) {
     if (line.trim() === "") continue;

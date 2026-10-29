@@ -1,5 +1,6 @@
-/** `dosu sources connect|status|sync|disconnect` against a faked `/v1/memory/sources`: what
- * each sends, what it prints, and what it keeps in config.json. */
+/** `dosu sources connect|status|sync|disconnect` against a faked `/v1/memory/sources` and a
+ * faked sessiondb server (which says what bucket it writes): what each sends, what it prints,
+ * and what it keeps in config.json. */
 
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
-import type { BucketTarget } from "../config/schema";
+import type { ServerTarget } from "../config/schema";
 import type { SourceStatus } from "../sources/api";
 import { parseStdinCredentials, sourcesCommand, wizardInputFromOptions } from "./sources";
 
@@ -17,12 +18,20 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
 let out: string[];
 
-const BUCKET: BucketTarget = {
+const SERVER: ServerTarget = {
   name: "team",
-  url: "s3://acme-sessions/agents",
+  url: "https://sessions.example.com",
   owner: "james",
+  token: "sdb_test",
+};
+
+/** What the server reports it writes for the owner (`GET /v1/storage`). */
+let storage: Record<string, unknown>;
+const SERVER_STORAGE = {
+  url: "s3://acme-sessions/agents",
   region: "us-east-1",
-  credentials: { access_key_id: "AKIAWRITE", secret_access_key: "writesecret" },
+  credentials: "static",
+  updated_at: "2026-10-22T00:00:00.000Z",
 };
 
 function source(extra: Partial<SourceStatus> = {}): SourceStatus {
@@ -53,7 +62,7 @@ function source(extra: Partial<SourceStatus> = {}): SourceStatus {
   };
 }
 
-function configure(targets: BucketTarget[] = [BUCKET], loggedIn = true): void {
+function configure(targets: ServerTarget[] = [SERVER], loggedIn = true): void {
   saveConfig({
     ...makeTestConfig({
       access_token: "t",
@@ -69,12 +78,24 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
+/** The calls that reached Dosu (the server's storage lookups are left out). */
+function apiCalls(): Array<[string, RequestInit?]> {
+  return fetchImpl.mock.calls.filter(([url]) => url.startsWith("https://api.dosu.test"));
+}
+
 function calls(): Array<{ method: string; path: string; body?: unknown }> {
-  return fetchImpl.mock.calls.map(([url, init]) => ({
+  return apiCalls().map(([url, init]) => ({
     method: init?.method ?? "GET",
     path: url.replace("https://api.dosu.test", ""),
     ...(init?.body ? { body: JSON.parse(init.body as string) } : {}),
   }));
+}
+
+/** Dosu answers with `impl`; the sessiondb server always says what bucket it writes. */
+function dosuAnswers(impl: Fetch): void {
+  fetchImpl.mockImplementation(async (url, init) =>
+    url.startsWith(SERVER.url) ? json(storage) : impl(url, init),
+  );
 }
 
 beforeEach(() => {
@@ -85,7 +106,9 @@ beforeEach(() => {
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
   vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", undefined);
   vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", undefined);
-  fetchImpl = vi.fn<Fetch>(async () => json({ sources: [] }));
+  storage = { ...SERVER_STORAGE };
+  fetchImpl = vi.fn<Fetch>();
+  dosuAnswers(async () => json({ sources: [] }));
   vi.stubGlobal("fetch", fetchImpl);
   out = [];
   vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
@@ -114,7 +137,7 @@ function savedSourceId(): string | undefined {
 
 describe("sources connect", () => {
   it("registers the target with the keys given, and keeps the source id on it", async () => {
-    fetchImpl.mockImplementation(async (_url, init) =>
+    dosuAnswers(async (_url, init) =>
       init?.method === "POST"
         ? json(source({ layout_created_by: "dosu-cli/1.0" }), 201)
         : json({ sources: [] }),
@@ -140,51 +163,52 @@ describe("sources connect", () => {
         },
       },
     ]);
-    expect(fetchImpl.mock.calls[1]?.[1]?.headers).toMatchObject({ "X-Dosu-API-Key": "sk_test" });
+    expect(apiCalls()[1]?.[1]?.headers).toMatchObject({ "X-Dosu-API-Key": "sk_test" });
     expect(savedSourceId()).toBe(source().id);
     expect(out.join("\n")).toContain('Source "team" connected');
     expect(out.join("\n")).toContain("keys from flags");
     expect(out.join("\n")).toContain("layout written by dosu-cli/1.0");
   });
 
-  it("falls back to the target's own keys, then DOSU_SOURCE_* over them", async () => {
-    fetchImpl.mockImplementation(async (_url, init) =>
+  it("takes Dosu's keys from DOSU_SOURCE_*, with --lag and --name", async () => {
+    dosuAnswers(async (_url, init) =>
       init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
     );
-
-    await dosu("connect", "--lag", "60", "--name", "acme bucket");
-    expect(calls()[1]?.body).toMatchObject({
-      access_key_id: "AKIAWRITE",
-      secret_access_key: "writesecret",
-      lag_seconds: 60,
-      name: "acme bucket",
-    });
-    expect(out.join("\n")).toContain("keys from the target's own keys");
-
-    fetchImpl.mockClear();
-    configure(); // Forget the id so it connects again.
     vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
     vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
-    await dosu("connect");
+
+    await dosu("connect", "--lag", "60", "--name", "acme bucket");
+
     expect(calls()[1]?.body).toMatchObject({
       access_key_id: "AKIAENV",
       secret_access_key: "envsecret",
+      lag_seconds: 60,
+      name: "acme bucket",
     });
+    expect(out.join("\n")).toContain("keys from DOSU_SOURCE_* environment");
   });
 
-  it("--endpoint tells Dosu to read through a different endpoint than this machine writes to", async () => {
-    configure([{ ...BUCKET, endpoint: "http://127.0.0.1:9000" }]);
-    fetchImpl.mockImplementation(async (_url, init) =>
+  it("--endpoint tells Dosu to read through a different endpoint than the server writes to", async () => {
+    storage = { ...SERVER_STORAGE, endpoint: "http://127.0.0.1:9000" };
+    dosuAnswers(async (_url, init) =>
       init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
     );
 
-    await dosu("connect", "--endpoint", "http://minio.internal:9000");
+    await dosu(
+      "connect",
+      "--endpoint",
+      "http://minio.internal:9000",
+      "--access-key-id",
+      "AKIAREAD",
+      "--secret-access-key",
+      "readsecret",
+    );
 
     expect(calls()[1]?.body).toMatchObject({ endpoint: "http://minio.internal:9000" });
   });
 
   it("reads the keys from stdin with --read-credentials-stdin", async () => {
-    fetchImpl.mockImplementation(async (_url, init) =>
+    dosuAnswers(async (_url, init) =>
       init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
     );
     vi.spyOn(process, "stdin", "get").mockReturnValue(
@@ -199,14 +223,13 @@ describe("sources connect", () => {
     });
   });
 
-  it("says where the keys can come from when the target has none", async () => {
-    configure([{ ...BUCKET, credentials: "env" }]);
+  it("says where the keys can come from when none were given", async () => {
     await expect(dosu("connect")).rejects.toThrow(/no credentials for Dosu to read the bucket/);
-    expect(fetchImpl.mock.calls.map(([, init]) => init?.method ?? "GET")).toEqual(["GET"]);
+    expect(calls().map((c) => c.method)).toEqual(["GET"]);
   });
 
   it("reports an already-connected target instead of connecting it twice", async () => {
-    fetchImpl.mockImplementation(async () => json({ sources: [source()] }));
+    dosuAnswers(async () => json({ sources: [source()] }));
 
     await dosu("connect");
 
@@ -216,39 +239,53 @@ describe("sources connect", () => {
   });
 
   it("turns the backend's refusal into the exact reason", async () => {
-    fetchImpl.mockImplementation(async (_url, init) =>
+    dosuAnswers(async (_url, init) =>
       init?.method === "POST"
         ? json({ detail: "AccessDenied listing owners/james/changes/" }, 400)
         : json({ sources: [] }),
     );
-    await expect(dosu("connect")).rejects.toThrow(
-      /could not read s3:\/\/acme-sessions\/agents as owner james .*AccessDenied/,
-    );
+    await expect(
+      dosu("connect", "--access-key-id", "AKIAREAD", "--secret-access-key", "readsecret"),
+    ).rejects.toThrow(/could not read s3:\/\/acme-sessions\/agents as owner james .*AccessDenied/);
     expect(savedSourceId()).toBeUndefined();
   });
 
-  it("refuses a local folder: Dosu cannot reach this machine", async () => {
-    configure([{ name: "local", url: join(home, "store"), owner: "james" }]);
-    await expect(dosu("connect")).rejects.toThrow(/is a local folder/);
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it("refuses a server that writes a folder on its own disk: Dosu cannot read that", async () => {
+    storage = { url: "file:///srv/sessions", credentials: "none", updated_at: "x" };
+    vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
+    vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
+    await expect(dosu("connect")).rejects.toThrow(/not a bucket Dosu can read/);
+    expect(calls().map((c) => c.method)).toEqual(["GET"]);
+  });
+
+  it("says when the server has no bucket linked yet", async () => {
+    dosuAnswers(async () => json({ sources: [] }));
+    fetchImpl.mockImplementation(async (url) =>
+      url.startsWith(SERVER.url)
+        ? json({ error: { code: "no_storage", message: "none" } }, 404)
+        : json({ sources: [] }),
+    );
+    vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
+    vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
+    await expect(dosu("connect")).rejects.toThrow(/no bucket linked for james yet/);
   });
 
   it("needs a login: a source is Dosu reading on your behalf", async () => {
-    configure([BUCKET], false);
+    configure([SERVER], false);
     await expect(dosu("connect")).rejects.toThrow(/not logged in to Dosu/);
   });
 
   it("asks for --target when several are configured", async () => {
-    configure([BUCKET, { ...BUCKET, name: "other", url: "r2://other/x" }]);
-    await expect(dosu("connect")).rejects.toThrow(/several targets are configured \(team, other\)/);
+    configure([SERVER, { ...SERVER, name: "other", url: "https://other.example.com" }]);
+    await expect(dosu("connect")).rejects.toThrow(/several servers are configured \(team, other\)/);
   });
 });
 
 describe("sources status", () => {
   it("prints what Dosu has read of the target's source, by the remembered id", async () => {
-    configure([{ ...BUCKET, source_id: source().id }]);
+    configure([{ ...SERVER, source_id: source().id }]);
     const now = Date.now();
-    fetchImpl.mockImplementation(async () =>
+    dosuAnswers(async () =>
       json(
         source({
           cursor: "2026-10-22T00:00:00.000Z-abc",
@@ -285,7 +322,7 @@ describe("sources status", () => {
   });
 
   it("finds the source by bucket and owner when config has no id, and remembers it", async () => {
-    fetchImpl.mockImplementation(async (url) =>
+    dosuAnswers(async (url) =>
       url.endsWith(`/${source().id}`)
         ? json(source())
         : json({ sources: [source({ id: "other", owner: "someone-else" }), source()] }),
@@ -299,8 +336,8 @@ describe("sources status", () => {
   });
 
   it("forgets a remembered id the backend no longer knows", async () => {
-    configure([{ ...BUCKET, source_id: "gone" }]);
-    fetchImpl.mockImplementation(async (url) =>
+    configure([{ ...SERVER, source_id: "gone" }]);
+    dosuAnswers(async (url) =>
       url.endsWith("/gone") ? json({ detail: "not found" }, 404) : json({ sources: [] }),
     );
 
@@ -309,7 +346,7 @@ describe("sources status", () => {
   });
 
   it("--all lists every source under the login", async () => {
-    fetchImpl.mockImplementation(async () =>
+    dosuAnswers(async () =>
       json({ sources: [source(), source({ id: "2", name: "other", url: "r2://o/p" })] }),
     );
     await dosu("status", "--all");
@@ -322,8 +359,8 @@ describe("sources status", () => {
 
 describe("sources sync and disconnect", () => {
   it("sync queues a read now", async () => {
-    configure([{ ...BUCKET, source_id: source().id }]);
-    fetchImpl.mockImplementation(async (_url, init) =>
+    configure([{ ...SERVER, source_id: source().id }]);
+    dosuAnswers(async (_url, init) =>
       init?.method === "POST"
         ? json({ id: source().id, status: "queued", workflow_id: "wf-1" }, 202)
         : json(source()),
@@ -339,8 +376,8 @@ describe("sources sync and disconnect", () => {
   });
 
   it("disconnect --yes deletes the source and drops the id from config", async () => {
-    configure([{ ...BUCKET, source_id: source().id }]);
-    fetchImpl.mockImplementation(async (_url, init) =>
+    configure([{ ...SERVER, source_id: source().id }]);
+    dosuAnswers(async (_url, init) =>
       init?.method === "DELETE" ? new Response(null, { status: 204 }) : json(source()),
     );
 
@@ -383,14 +420,9 @@ describe("wizardInputFromOptions", () => {
     expect(wizardInputFromOptions({})).toEqual({});
     expect(
       wizardInputFromOptions({
-        provider: "r2",
-        bucket: "team",
-        prefix: "",
-        owner: "james",
-        accountId: "abc",
+        server: "https://sessions.example.com",
+        token: "sdb_x",
         name: "mine",
-        accessKeyId: "W",
-        secretAccessKey: "ws",
         readAccessKeyId: "R",
         readSecretAccessKey: "rs",
         connect: false,
@@ -398,30 +430,18 @@ describe("wizardInputFromOptions", () => {
         yes: true,
       }),
     ).toEqual({
-      provider: "r2",
-      bucket: "team",
-      prefix: "",
-      owner: "james",
-      accountId: "abc",
+      server: "https://sessions.example.com",
+      token: "sdb_x",
       name: "mine",
-      write: { access_key_id: "W", secret_access_key: "ws" },
       read: { access_key_id: "R", secret_access_key: "rs" },
       connect: false,
       makeDefault: false,
       yes: true,
     });
-    expect(wizardInputFromOptions({ useEnv: true, readSame: true })).toEqual({
-      write: "env",
-      read: "same",
-    });
   });
 
-  it("rejects an unknown provider, half a key pair, and two ways of giving the upload keys", () => {
-    expect(() => wizardInputFromOptions({ provider: "gcs" })).toThrow(/--provider must be/);
-    expect(() => wizardInputFromOptions({ accessKeyId: "W" })).toThrow(/go together/);
+  it("rejects half a key pair", () => {
     expect(() => wizardInputFromOptions({ readSecretAccessKey: "rs" })).toThrow(/go together/);
-    expect(() =>
-      wizardInputFromOptions({ useEnv: true, accessKeyId: "W", secretAccessKey: "ws" }),
-    ).toThrow(/not both/);
+    expect(() => wizardInputFromOptions({ readAccessKeyId: "R" })).toThrow(/go together/);
   });
 });

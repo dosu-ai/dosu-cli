@@ -37,8 +37,7 @@ import {
   scannedEverywhere,
   sessionAtPath,
 } from "../sessions/scan";
-import { trajectorySourceOf } from "../shipper/normalize";
-import { readSessionStart } from "../shipper/session-start";
+import { peekSessionStart, trajectorySourceOf } from "../sessions/start";
 import {
   codexRolloutIncognito,
   isIncognitoSession,
@@ -156,7 +155,7 @@ async function scopeOf(
   const project = resolver.resolveProjectAt(key, cwd)?.project ?? null;
   const branch = await resolver.resolveBranchAt(key, cwd, async () => {
     const stored = storedSession(session);
-    return stored ? readSessionStart(stored) : null;
+    return stored ? peekSessionStart(stored) : null;
   });
   resolver.flush();
   return { project, branch };

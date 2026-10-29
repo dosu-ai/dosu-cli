@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
+import { fakeSessiondb, type Upload, uploadOf } from "../shipper/fake-sessiondb.test-utils";
 import { loadSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
 
@@ -20,8 +21,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 let home: string;
-type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
+let server: ReturnType<typeof fakeSessiondb>;
+let fetchImpl: ReturnType<typeof fakeSessiondb>["fetchImpl"];
+
+/** The sessiondb server every run ships to. */
+const SERVER = { name: "team", url: "https://sessions.test", owner: "james", token: "sdb_t" };
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-knowledge-sync-claude-")));
@@ -33,18 +37,19 @@ beforeEach(() => {
   vi.stubEnv("DOSU_DEV", undefined);
   vi.stubEnv("DOSU_PROJECT", undefined);
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
-  saveConfig(
-    makeTestConfig({
+  saveConfig({
+    ...makeTestConfig({
       access_token: "t",
       refresh_token: "r",
       expires_at: 0,
       api_key: "sk_test",
       deployment_id: "dep1",
     }),
-  );
-  fetchImpl = vi.fn<Fetch>(
-    async () => new Response(JSON.stringify({ task_id: "task" }), { status: 202 }),
-  );
+    targets: [SERVER],
+    default_target: "team",
+  });
+  server = fakeSessiondb();
+  fetchImpl = server.fetchImpl;
   vi.stubGlobal("fetch", fetchImpl);
 });
 
@@ -62,17 +67,13 @@ async function dosu(...args: string[]): Promise<void> {
   await cmd.parseAsync(["node", "dosu", ...args]);
 }
 
-interface Posted {
-  records: { role: string; content?: string }[];
-  metadata: Record<string, unknown>;
+/** What the fake server received, upload by upload. */
+function posted(): Upload[] {
+  return server.uploads;
 }
 
-function posted(): Posted[] {
-  return fetchImpl.mock.calls.map(([, init]) => JSON.parse(init?.body as string));
-}
-
-function postedBySession(): Record<string, Posted> {
-  return Object.fromEntries(posted().map((p) => [p.metadata.session_id as string, p]));
+function postedBySession(): Record<string, Upload> {
+  return Object.fromEntries(posted().map((p) => [p.session_id, p]));
 }
 
 /** A git checkout under the temporary home, with one commit and the given origin. */
@@ -150,16 +151,16 @@ describe("knowledge sync of a session with subagents", () => {
 
     const shipped = postedBySession();
     expect(Object.keys(shipped).sort()).toEqual(["agent-a1", "parent"]);
-    expect(shipped["agent-a1"].metadata).toMatchObject({
+    expect(shipped["agent-a1"]).toMatchObject({
       parent_session_id: "parent",
       agent: "claude-code",
       project: "github.com/acme/alpha",
     });
-    expect("parent_session_id" in shipped.parent.metadata).toBe(false);
+    expect("parent_session_id" in shipped.parent).toBe(false);
     // The subagent's own conversation, normalized on its own; the parent's stays its own.
-    expect(JSON.stringify(shipped["agent-a1"].records)).toContain("question 2");
-    expect(JSON.stringify(shipped["agent-a1"].records)).not.toContain("question 1");
-    expect(JSON.stringify(shipped.parent.records)).not.toContain("question 2");
+    expect(shipped["agent-a1"]?.transcript).toContain("question 2");
+    expect(shipped["agent-a1"]?.transcript).not.toContain("question 1");
+    expect(shipped.parent.transcript).not.toContain("question 2");
 
     // Each settled on its own: nothing ships twice.
     await dosu("sync");
@@ -176,8 +177,8 @@ describe("knowledge sync of a session with subagents", () => {
 
     const shipped = postedBySession();
     expect(Object.keys(shipped).sort()).toEqual(["agent-w1", "parent"]);
-    expect(shipped["agent-w1"].metadata.parent_session_id).toBe("parent");
-    expect(JSON.stringify(shipped["agent-w1"].records)).toContain("question 2");
+    expect(shipped["agent-w1"].parent_session_id).toBe("parent");
+    expect(shipped["agent-w1"]?.transcript).toContain("question 2");
   });
 
   it("ships the subagents of a session that just ended in the same run, past the quiet period", async () => {
@@ -204,7 +205,7 @@ describe("knowledge sync of a session with subagents", () => {
 
     await dosu("sync", "--quiet", "--ended", `claude:parent=${ended}`);
 
-    const order = posted().map((p) => p.metadata.session_id);
+    const order = posted().map((p) => p.session_id);
     // Nothing runs after a throwaway machine's last session ends: this run is its only chance.
     expect(order[0]).toBe("parent");
     expect(order.slice(1, -1).sort()).toEqual(agents.map((a) => `agent-${a}`).sort());
@@ -220,16 +221,16 @@ describe("knowledge sync of a session with subagents", () => {
     claudeSession("before", exchange(3, alpha, { sessionId: "before" }), 30);
     await dosu("sync", "--quiet");
     fetchImpl.mockClear();
-    // The backend takes the session but not the subagent's transcript.
-    fetchImpl.mockImplementation(async (_url, init) =>
-      JSON.parse(init?.body as string).metadata.session_id === "parent"
-        ? new Response(JSON.stringify({ task_id: "task" }), { status: 202 })
+    // The server takes the session but not the subagent's transcript.
+    fetchImpl.mockImplementation(async (url, init) =>
+      uploadOf(init).session_id === "parent"
+        ? server.handle(url, init)
         : new Response("unavailable", { status: 503 }),
     );
 
     await dosu("sync", "--quiet", "--ended", `claude:parent=${ended}`);
 
-    expect(posted()[0].metadata.session_id).toBe("parent");
+    expect(posted()[0].session_id).toBe("parent");
   });
 
   it("ships a session's subagents under the project the session ended with", async () => {
@@ -240,7 +241,7 @@ describe("knowledge sync of a session with subagents", () => {
     vi.stubEnv("DOSU_PROJECT", "poc-alpha");
     await dosu("sync", "--quiet", "--ended", `claude:parent=${ended}`);
 
-    expect(posted().map((p) => p.metadata.project)).toEqual(["poc-alpha", "poc-alpha"]);
+    expect(posted().map((p) => p.project)).toEqual(["poc-alpha", "poc-alpha"]);
   });
 
   it("keeps the subagents of an incognito session off the record too", async () => {
@@ -321,7 +322,7 @@ describe("knowledge sync of a session with subagents", () => {
       utimesSync(path, later, later);
     }
     fetchImpl.mockClear();
-    fetchImpl.mockResolvedValue(new Response(JSON.stringify({ task_id: "task" }), { status: 202 }));
+    fetchImpl.mockImplementation(server.handle);
     vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
     await dosu("sync");
 
@@ -355,19 +356,11 @@ describe("knowledge sync of a session with a background agent", () => {
 
     await dosu("sync");
 
+    // The notification ships inside the session's own log (the server turns it into an
+    // observation record; sessiondb's goldens cover that); the agent's work ships linked to it.
     const shipped = postedBySession();
-    const observed = shipped.parent.records.filter((r) => r.role === "observation");
-    expect(observed.map((r) => r.content)).toEqual([
-      expect.stringContaining("The flaky test is test_retry"),
-    ]);
-    expect(shipped.parent.records.map((r) => r.role)).toEqual([
-      "meta",
-      "user",
-      "assistant",
-      "observation",
-      "assistant",
-    ]);
-    expect(shipped["agent-a1"].metadata.parent_session_id).toBe("parent");
+    expect(shipped.parent?.transcript).toContain("The flaky test is test_retry");
+    expect(shipped["agent-a1"]?.parent_session_id).toBe("parent");
   });
 
   it("keeps a result Claude Code queued while the session was busy", async () => {
@@ -399,14 +392,8 @@ describe("knowledge sync of a session with a background agent", () => {
     await dosu("sync");
 
     const { parent } = postedBySession();
-    expect(parent.records.map((r) => r.role)).toEqual([
-      "meta",
-      "user",
-      "assistant",
-      "observation",
-      "assistant",
-    ]);
-    expect(parent.records[3].content).toContain("The flaky test is test_retry");
+    expect(parent?.transcript).toContain('"commandMode":"task-notification"');
+    expect(parent?.transcript).toContain("The flaky test is test_retry");
   });
 });
 
@@ -429,7 +416,7 @@ describe("status views", () => {
     subagent("parent", "a2", 3, alpha, 32);
 
     expect(await output("sync")).toContain(
-      "Shipped 1 session to Dosu memory (+2 subagent transcripts)",
+      "Shipped 1 session to team (https://sessions.test) (+2 subagent transcripts)",
     );
     const status = await output("sync", "--status");
     expect(status).toMatch(/Shipped: +1 session\n/);
@@ -457,16 +444,18 @@ describe("status views", () => {
     const short = exchange(4, alpha, { isSidechain: true, agentId: "a3", sessionId: "parent" });
     short[1] = { ...short[1], message: { role: "assistant", content: "ok" } };
     write(join(PROJECTS(), "parent", "subagents", "agent-a3.jsonl"), short, 33);
-    // The backend refuses one transcript.
-    fetchImpl.mockImplementation(async (_url, init) =>
-      JSON.parse(init?.body as string).metadata.session_id === "agent-a2"
+    // The server refuses one transcript.
+    fetchImpl.mockImplementation(async (url, init) =>
+      uploadOf(init).session_id === "agent-a2"
         ? new Response("bad payload", { status: 422 })
-        : new Response(JSON.stringify({ task_id: "task" }), { status: 202 }),
+        : server.handle(url, init),
     );
 
     const said = await output("sync");
 
-    expect(said).toContain("Shipped 1 session to Dosu memory (+1 subagent transcript)");
+    expect(said).toContain(
+      "Shipped 1 session to team (https://sessions.test) (+1 subagent transcript)",
+    );
     expect(said).toContain("Subagent transcripts passed over: 1 trivial · 1 rejected");
     expect(await output("sync", "--status")).toMatch(
       /Subagents: +1 shipped · 1 trivial · 1 rejected\n/,

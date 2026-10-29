@@ -675,22 +675,22 @@ describe("runTUI", () => {
       makeCfg({ access_token: "tok", space_id: "sp", deployment_id: "d", api_key: "k" }),
     );
 
-    // Dosu holds the sessions by default.
+    // No server yet: the row says so.
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
-    expect(stripAnsi(stdoutWrites.join(""))).toMatch(/storage\s+\u2714 Dosu/);
+    expect(stripAnsi(stdoutWrites.join(""))).toMatch(/storage\s+.*no server/);
 
-    // A bucket set as the default target is named instead.
+    // The server sessions ship to is named.
     stdoutWrites.length = 0;
     const cfg = readRealConfig();
     cfg.targets = [
-      { name: "r2", url: "r2://session-db-test/dosu", owner: "owner-1", account_id: "acct" },
+      { name: "team", url: "https://sessions.example.com", owner: "owner-1", token: "sdb_t" },
     ];
-    cfg.default_target = "r2";
+    cfg.default_target = "team";
     writeRealConfig(cfg);
     mockMenuSelect.mockResolvedValueOnce("exit");
     await runTUI();
-    expect(stripAnsi(stdoutWrites.join(""))).toContain("r2://session-db-test/dosu");
+    expect(stripAnsi(stdoutWrites.join(""))).toContain("https://sessions.example.com");
 
     // Mid-setup, the next step is what matters; the row waits.
     stdoutWrites.length = 0;
@@ -824,7 +824,7 @@ describe("runTUI", () => {
 
     expect(mockRunSetup).toHaveBeenCalledWith({ storage: true });
     const settingsOptions = mockMenuSelect.mock.calls[1]?.[1] ?? [];
-    expect(settingsOptions.find((o) => o.value === "storage")?.hint).toBe("Dosu");
+    expect(settingsOptions.find((o) => o.value === "storage")?.hint).toBe("not set up");
   });
 
   it("settings submenu shows the active target and goes back", async () => {

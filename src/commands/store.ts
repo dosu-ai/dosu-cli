@@ -1,33 +1,23 @@
-/** Looking at what was shipped: `dosu get`, `dosu export`, `dosu changes` read a bucket or folder
- * target through `@dosu/sessionstorage`; `dosu redact` removes a session from a store target
- * (tombstone) or from Dosu (the backend's session redaction). Sessions are named the way the
- * hooks name them, `<harness>:<id>` (`claude:abc…`); the store keys them by trajectory source
- * (`claude-code`), and either spelling is accepted. */
+/** Looking at what was shipped: `dosu get`, `dosu export`, `dosu changes` read it back from the
+ * sessiondb server; `dosu redact` removes a session there (its trace and raw objects become a
+ * tombstone), or with `--dosu` from Dosu memory (the backend's session redaction). Sessions are
+ * named the way the hooks name them, `<harness>:<id>` (`claude:abc…`); the server keys them by
+ * trajectory source (`claude-code`), and either spelling is accepted. */
 
-import {
-  type ChangeEntry,
-  getSession,
-  getTrace,
-  readChanges,
-  type SessionMetadata,
-  type Store,
-  type Trace,
-  tombstone,
-  trajectorySourceOf,
-} from "@dosu/sessionstorage";
 import { Command } from "commander";
 import pc from "picocolors";
 import { CliUsageError } from "../cli/errors";
 import { type Config, loadConfig, MODE_OSS } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
-import type { BucketTarget } from "../config/schema";
+import type { ServerTarget } from "../config/schema";
+import { configuredTargets, selectTarget } from "../config/targets";
+import { trajectorySourceOf } from "../sessions/start";
 import {
-  configuredTargets,
-  isServerTarget,
-  openStore,
-  resolveBucketTarget,
-} from "../config/targets";
-import { serverError } from "../store/remote";
+  type ChangeEntry,
+  SessiondbClient,
+  type SessionMetadata,
+  type Trace,
+} from "../sources/server-client";
 import { confirm, isCancel } from "../tui/prompts";
 import { printResult, printTable, truncate } from "./output";
 
@@ -39,36 +29,33 @@ export function storeCommands(): Command[] {
 
 interface StoreSelection {
   target?: string;
-  owner?: string;
 }
 
-/** The bucket target a read command works against: `--target`, else the config's default when
- * it is a bucket target, else the only configured one. Dosu is not a store to read. */
-function selectBucketTarget(cfg: Config, selection: StoreSelection): BucketTarget {
-  const named =
-    selection.target ?? (cfg.default_target !== "dosu" ? cfg.default_target : undefined);
-  if (named !== undefined) return resolveBucketTarget(cfg, named, { owner: selection.owner });
-  const targets = configuredTargets(cfg);
-  if (targets.length === 1) return targets[0] as BucketTarget;
-  if (targets.length === 0) {
+/** The server a read command works against: `--target`, else the default, else the only one. */
+function selectServer(cfg: Config, selection: StoreSelection): ServerTarget {
+  let target: ServerTarget | undefined;
+  try {
+    target = selectTarget(cfg, selection.target);
+  } catch (err) {
+    throw new CliUsageError(err instanceof Error ? err.message : String(err));
+  }
+  if (!target) {
     throw new CliUsageError(
-      "no bucket target to read: pass --target <name|url> (and --owner for a URL), or add one to config.json",
+      "no sessiondb server configured: run 'dosu setup' or 'dosu sources setup --server <url> --token <token>'",
     );
   }
-  throw new CliUsageError(
-    `several targets are configured (${targets.map((t) => t.name).join(", ")}): pass --target <name>`,
-  );
+  return target;
 }
 
 function openSelected(selection: StoreSelection): {
-  store: Store & { url: string };
-  target: BucketTarget;
+  client: SessiondbClient;
+  target: ServerTarget;
 } {
-  const target = selectBucketTarget(loadConfig(), selection);
-  return { store: openStore(target), target };
+  const target = selectServer(loadConfig(), selection);
+  return { client: new SessiondbClient(target.url, target.token), target };
 }
 
-/** `<harness>:<id>` → the agent the store keys by, and the session id. */
+/** `<harness>:<id>` → the agent the server keys by, and the session id. */
 function parseSessionRef(ref: string): { agent: string; sessionId: string; harness: string } {
   const at = ref.indexOf(":");
   if (at <= 0 || at === ref.length - 1) {
@@ -82,23 +69,19 @@ function parseSessionRef(ref: string): { agent: string; sessionId: string; harne
 }
 
 async function loadSession(
-  store: Store,
-  owner: string,
+  client: SessiondbClient,
+  target: ServerTarget,
   ref: string,
 ): Promise<{ metadata: SessionMetadata; trace: Trace | null }> {
   const { agent, sessionId } = parseSessionRef(ref);
-  const metadata = await getSession(store, owner, agent, sessionId);
-  if (!metadata) throw new CliUsageError(`session ${ref} is not in this target (owner ${owner})`);
-  const trace = metadata.head
-    ? await getTrace(store, owner, metadata.archive_id, metadata.head)
-    : null;
+  const metadata = await client.session(agent, sessionId);
+  if (!metadata) throw new CliUsageError(`session ${ref} is not on ${target.name}`);
+  const trace = metadata.head ? await client.trace(agent, sessionId) : null;
   return { metadata, trace };
 }
 
 const targetOptions = (cmd: Command): Command =>
-  cmd
-    .option("--target <name|url>", "A configured target's name, or an s3:// / r2:// / file:// URL")
-    .option("--owner <id>", "Owner id for an ad-hoc --target URL");
+  cmd.option("--target <name>", "Which configured server (default: the default, or the only one)");
 
 // --- get -----------------------------------------------------------------------
 
@@ -108,8 +91,8 @@ function getCommand(): Command {
     .argument("<session>", "<harness>:<session-id>, as the hooks name it (claude:abc123)")
     .option("--json", "Output as JSON ({ metadata, trace })")
     .action(async (ref: string, opts: StoreSelection & { json?: boolean }) => {
-      const { store, target } = openSelected(opts);
-      const { metadata, trace } = await loadSession(store, target.owner, ref);
+      const { client, target } = openSelected(opts);
+      const { metadata, trace } = await loadSession(client, target, ref);
       if (opts.json) {
         printResult({ metadata, trace }, opts);
         return;
@@ -119,7 +102,7 @@ function getCommand(): Command {
   return targetOptions(cmd);
 }
 
-function printSession(metadata: SessionMetadata, trace: Trace | null, target: BucketTarget): void {
+function printSession(metadata: SessionMetadata, trace: Trace | null, target: ServerTarget): void {
   const row = (label: string, value: string | undefined) => {
     if (value !== undefined) console.log(`  ${label.padEnd(10)} ${value}`);
   };
@@ -160,8 +143,8 @@ function exportCommand(): Command {
     .argument("<session>", "<harness>:<session-id>")
     .option("--out <path>", "Write to a file instead of stdout")
     .action(async (ref: string, opts: StoreSelection & { out?: string }) => {
-      const { store, target } = openSelected(opts);
-      const { metadata, trace } = await loadSession(store, target.owner, ref);
+      const { client, target } = openSelected(opts);
+      const { metadata, trace } = await loadSession(client, target, ref);
       if (!trace) {
         throw new CliUsageError(
           `session ${ref} has no trace to export${metadata.status === "redacted" ? " (redacted)" : ""}`,
@@ -183,7 +166,7 @@ function exportCommand(): Command {
 
 function changesCommand(): Command {
   const cmd = new Command("changes")
-    .description("List a target's change feed: traces published, sessions redacted")
+    .description("List the server's change feed: traces published, sessions redacted")
     .option("--since <iso>", "Start from this time (ISO 8601)")
     .option("--after <key>", "Continue after this change key (the cursor a previous page printed)")
     .option("--limit <n>", "Page size", (v: string) => Number.parseInt(v, 10), 50)
@@ -195,8 +178,8 @@ function changesCommand(): Command {
         if (!Number.isInteger(opts.limit) || opts.limit <= 0) {
           throw new CliUsageError("--limit must be a positive integer");
         }
-        const { store, target } = openSelected(opts);
-        const page = await readChanges(store, target.owner, {
+        const { client, target } = openSelected(opts);
+        const page = await client.changes({
           since: opts.since,
           after: opts.after,
           limit: opts.limit,
@@ -207,7 +190,7 @@ function changesCommand(): Command {
         }
         if (page.entries.length === 0) {
           console.log(
-            pc.dim(`No changes${opts.since ? ` since ${opts.since}` : ""} in ${target.name}.`),
+            pc.dim(`No changes${opts.since ? ` since ${opts.since}` : ""} on ${target.name}.`),
           );
           return;
         }
@@ -238,84 +221,63 @@ function changeRow(entry: ChangeEntry): string[] {
 function redactCommand(): Command {
   const cmd = new Command("redact")
     .description(
-      "Remove a shipped session from its target: a bucket target drops its trace and raw objects (tombstone); Dosu redacts it and the memories built from it",
+      "Remove a shipped session from the server (its trace and raw objects become a tombstone), or with --dosu from Dosu memory and the memories built from it",
     )
     .argument("<session>", "<harness>:<session-id>")
+    .option("--dosu", "Redact from Dosu memory instead of the server")
     .option("--yes", "Skip the confirmation")
     .option("--json", "Output as JSON")
-    .action(async (ref: string, opts: StoreSelection & { yes?: boolean; json?: boolean }) => {
-      const cfg = loadConfig();
-      const named = opts.target ?? cfg.default_target;
-      const { sessionId, agent } = parseSessionRef(ref);
-      const toDosu =
-        named === "dosu" || (named === undefined && configuredTargets(cfg).length === 0);
-      const where = toDosu ? "Dosu" : selectBucketTarget(cfg, opts).name;
-      if (!opts.yes) {
-        const ok = await confirm({
-          message: `Redact ${ref} from ${where}? This cannot be undone.`,
-          initialValue: false,
-        });
-        if (isCancel(ok) || !ok) {
-          console.log(pc.dim("Kept."));
+    .action(
+      async (
+        ref: string,
+        opts: StoreSelection & { dosu?: boolean; yes?: boolean; json?: boolean },
+      ) => {
+        const cfg = loadConfig();
+        const { sessionId, agent } = parseSessionRef(ref);
+        const toDosu = opts.dosu === true || configuredTargets(cfg).length === 0;
+        const where = toDosu ? "Dosu" : selectServer(cfg, opts).name;
+        if (!opts.yes) {
+          const ok = await confirm({
+            message: `Redact ${ref} from ${where}? This cannot be undone.`,
+            initialValue: false,
+          });
+          if (isCancel(ok) || !ok) {
+            console.log(pc.dim("Kept."));
+            return;
+          }
+        }
+        const result = toDosu
+          ? await redactFromDosu(cfg, sessionId)
+          : await redactOnServer(cfg, opts, { agent, sessionId });
+        if (opts.json) {
+          printResult({ session: ref, target: where, ...result }, opts);
           return;
         }
-      }
-      const result = toDosu
-        ? await redactFromDosu(cfg, sessionId)
-        : await redactFromStore(cfg, opts, { agent, sessionId });
-      if (opts.json) {
-        printResult({ session: ref, target: where, ...result }, opts);
-        return;
-      }
-      console.log(`Redacted ${ref} from ${where}: ${result.summary}`);
-    });
+        console.log(`Redacted ${ref} from ${where}: ${result.summary}`);
+      },
+    );
   return targetOptions(cmd);
 }
 
-async function redactFromStore(
+async function redactOnServer(
   cfg: Config,
   selection: StoreSelection,
   session: { agent: string; sessionId: string },
 ): Promise<{ summary: string; removed: number }> {
-  const target = selectBucketTarget(cfg, selection);
-  // A server target tombstones through its API (the store it opens here is read-only).
-  const result = isServerTarget(target)
-    ? await redactOnServer(target, session)
-    : await tombstone({
-        store: openStore(target),
-        owner: target.owner,
-        agent: session.agent,
-        session_id: session.sessionId,
-      });
+  const target = selectServer(cfg, selection);
+  const result = await new SessiondbClient(target.url, target.token).redact(
+    session.agent,
+    session.sessionId,
+  );
   if (!result) {
     throw new CliUsageError(
-      `session ${session.agent}:${session.sessionId} is not in ${target.name}`,
+      `session ${session.agent}:${session.sessionId} is not on ${target.name}`,
     );
   }
   return {
     summary: `${result.removed} object${result.removed === 1 ? "" : "s"} removed`,
     ...result,
   };
-}
-
-async function redactOnServer(
-  target: BucketTarget,
-  session: { agent: string; sessionId: string },
-): Promise<{ removed: number } | null> {
-  if (!target.token)
-    throw new CliUsageError(`target ${target.name} has no token; run 'dosu setup'`);
-  const url = `${target.url.replace(/\/$/, "")}/v1/sessions/${encodeURIComponent(
-    session.agent,
-  )}/${encodeURIComponent(session.sessionId)}`;
-  const response = await fetch(url, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${target.token}` },
-  });
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`${target.name}: redact failed: ${await serverError(response)}`);
-  }
-  return (await response.json()) as { removed: number };
 }
 
 interface DosuRedaction {
@@ -337,9 +299,7 @@ async function redactFromDosu(
     !account.org_id ||
     !isAbsoluteHttpUrl(backendUrl)
   ) {
-    throw new CliUsageError(
-      "not logged in to Dosu: run 'dosu setup', or pass --target for a bucket target",
-    );
+    throw new CliUsageError("not logged in to Dosu: run 'dosu setup'");
   }
   const url = `${backendUrl.replace(/\/$/, "")}/v1/memory/browse/sessions/${encodeURIComponent(sessionId)}/redact?org=${encodeURIComponent(account.org_id)}`;
   const response = await fetch(url, {

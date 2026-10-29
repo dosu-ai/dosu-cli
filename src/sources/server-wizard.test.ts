@@ -10,12 +10,8 @@ import { CliUsageError } from "../cli/errors";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import * as p from "../tui/prompts";
-import {
-  bucketOfStorage,
-  bucketOfTarget,
-  normalizeServerUrl,
-  runServerWizard,
-} from "./server-wizard";
+import { bucketOfStorage } from "./connect";
+import { bucketOfTarget, normalizeServerUrl, runServerWizard } from "./server-wizard";
 
 vi.mock("../tui/prompts", () => ({
   text: vi.fn(),
@@ -172,7 +168,6 @@ describe("runServerWizard", () => {
     const w = world();
     vi.stubGlobal("fetch", w.fetch);
     script({
-      "Ship finished sessions through the server instead of to Dosu?": true,
       "Let Dosu read the bucket and learn from the sessions in it?": true,
       "Keys Dosu reads the bucket with": "enter",
       "Read-only keys: access key id": "AKIAREAD",
@@ -215,7 +210,6 @@ describe("runServerWizard", () => {
       "Read-only keys: access key id",
       "Read-only keys: secret access key",
       "Keys Dosu reads the bucket with",
-      "Ship finished sessions through the server instead of to Dosu?",
       "Let Dosu read the bucket and learn from the sessions in it?",
     ]);
   });
@@ -227,14 +221,14 @@ describe("runServerWizard", () => {
       Token: ["sdb_wrong", TOKEN],
       "What now?": "token",
       "Name for this target": "server",
-      "Ship finished sessions through the server instead of to Dosu?": false,
       "Let Dosu read the bucket and learn from the sessions in it?": false,
     });
 
     const result = await runServerWizard(loadConfig(), {}, {}, w.fetch);
 
     expect(result?.target).toMatchObject({ url: SERVER, owner: "acme", token: TOKEN });
-    expect(loadConfig().default_target).toBeUndefined();
+    // The only server is where sessions ship, without asking.
+    expect(loadConfig().default_target).toBe("server");
     expect(asked().filter((m) => m === "Token")).toHaveLength(2);
     expect(result?.source).toBeUndefined();
 
@@ -261,7 +255,6 @@ describe("runServerWizard", () => {
       Token: TOKEN,
       "What now?": ["retry", "url"],
       "Name for this target": "server",
-      "Ship finished sessions through the server instead of to Dosu?": false,
       "Let Dosu read the bucket and learn from the sessions in it?": false,
     });
     const result = await runServerWizard(loadConfig(), {}, {}, flaky);
@@ -311,7 +304,6 @@ describe("runServerWizard", () => {
       "Keys the server writes with: access key id": "minio",
       "Keys the server writes with: secret access key": "minio123",
       "Name for this target": "server",
-      "Ship finished sessions through the server instead of to Dosu?": true,
       "Let Dosu read the bucket and learn from the sessions in it?": false,
     });
     await runServerWizard(loadConfig(), { server: SERVER, token: TOKEN }, {}, w.fetch);
@@ -333,7 +325,6 @@ describe("runServerWizard", () => {
       "Keys the server writes with: access key id": "AKIA",
       "Keys the server writes with: secret access key": "s",
       "Name for this target": "server",
-      "Ship finished sessions through the server instead of to Dosu?": true,
       "Let Dosu read the bucket and learn from the sessions in it?": false,
     });
     await runServerWizard(loadConfig(), { server: SERVER, token: TOKEN }, {}, w2.fetch);
@@ -365,7 +356,6 @@ describe("runServerWizard", () => {
       "Keys the server writes with: secret access key": "writesecret",
       "What now?": "keys",
       "Name for this target": "server",
-      "Ship finished sessions through the server instead of to Dosu?": true,
       "Let Dosu read the bucket and learn from the sessions in it?": true,
       "Keys Dosu reads the bucket with": "enter",
       "Read-only keys: access key id": "AKIAREAD",
@@ -404,7 +394,6 @@ describe("runServerWizard", () => {
     script({
       "Link a bucket on the server now?": false,
       "Name for this target": "server",
-      "Ship finished sessions through the server instead of to Dosu?": true,
     });
     const result = await runServerWizard(
       loadConfig(),
@@ -431,20 +420,11 @@ describe("bucketOfTarget", () => {
       prefix: "dosu",
       account_id: "acct",
     });
-    expect(
-      await bucketOfTarget(
-        { name: "s3", url: "s3://b/p", owner: "acme", region: "eu-west-1" },
-        w.fetch,
-      ),
-    ).toEqual({ url: "s3://b/p", scheme: "s3", bucket: "b", prefix: "p", region: "eu-west-1" });
     await expect(
       bucketOfTarget(
         { name: "team", url: SERVER, owner: "acme", token: TOKEN },
         world({ storage: null }).fetch,
       ),
     ).rejects.toThrow(/no bucket linked/);
-    await expect(
-      bucketOfTarget({ name: "team", url: SERVER, owner: "acme" }, w.fetch),
-    ).rejects.toThrow(/no token/);
   });
 });

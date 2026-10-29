@@ -142,10 +142,10 @@ describe("renderBanner", () => {
   it("shows where sessions ship once setup is complete", () => {
     const row = (banner: string) => banner.split("\n").find((line) => line.includes("storage"));
 
-    expect(row(stripAnsi(renderBanner(makeContext())))).toContain("Dosu");
+    expect(row(stripAnsi(renderBanner(makeContext())))).toContain("no server");
     expect(
-      row(stripAnsi(renderBanner(makeContext({ storage: "r2://session-db-test/dosu" })))),
-    ).toContain("r2://session-db-test/dosu");
+      row(stripAnsi(renderBanner(makeContext({ storage: "https://sessions.example.com" })))),
+    ).toContain("https://sessions.example.com");
 
     // Signed out, expired, or mid-setup, the row would only distract from the next step.
     expect(stripAnsi(renderBanner(makeContext({ signedIn: false })))).not.toContain("storage");

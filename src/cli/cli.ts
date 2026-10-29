@@ -114,7 +114,7 @@ export function createProgram(): Command {
   program
     .name("dosu")
     .description(
-      "Dosu CLI - capture your coding-agent sessions into Dosu memory or your own bucket",
+      "Dosu CLI - capture your coding-agent sessions for Dosu memory through your sessiondb server",
     )
     .version(getVersionString(), "-v, --version")
     .helpCommand("help [command]", "Show help for a command")
@@ -463,7 +463,7 @@ export function createProgram(): Command {
     .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
     .option(
       "--storage",
-      "Ask again where finished sessions are stored: with Dosu, or in your own S3 / R2 bucket",
+      "Ask again which sessiondb server finished sessions ship to",
     )
     .action(async (opts: { deployment?: string; mode?: string; storage?: boolean }) => {
       const { runSetup } = await import("../setup/flow");

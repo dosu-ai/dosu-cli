@@ -16,6 +16,7 @@ import { logger } from "../debug/logger";
 import type { IncognitoSwitch } from "../mcp/call-session";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { createShipStep } from "../shipper/runner";
+import type { Target } from "../shipper/target";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import type { LedgerEntry } from "../sync/state";
 import { contextHookOutput, outsideIncognitoSession } from "./context-hook";
@@ -181,18 +182,17 @@ describe("contextHookOutput", () => {
           )
           .join("\n"),
       );
-      const ingest = respond(202, { task_id: "t" });
-      const ship = createShipStep({
-        apiKey: "k",
-        deploymentId: "dep-1",
-        backendUrl: "https://api.test",
-        fetchImpl: ingest,
-      });
+      const send = vi.fn<Target["send"]>(async () => ({
+        status: "shipped" as const,
+        taskId: "stored:h",
+        shipped: { records: 1, prefix_sha256: "a".repeat(64) },
+      }));
+      const ship = createShipStep({ target: { name: "t", url: "u", send } });
       await ship([
         { id: "sess-77", harness: "claude", path: transcript, updated: "2026-10-02T00:00:00Z" },
       ]);
 
-      expect(sentBody(ingest).metadata).toMatchObject({ project: "poc-gamma", repo: "poc-gamma" });
+      expect(send.mock.calls[0]?.[0]).toMatchObject({ project: "poc-gamma" });
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

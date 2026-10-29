@@ -11,8 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { contextHookOutput } from "../memory/context-hook";
+import { fakeSessiondb, type Upload } from "../shipper/fake-sessiondb.test-utils";
 import { loadSyncState } from "../sync/state";
 import { knowledgeCommand } from "./knowledge";
+
+type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 /** The detached re-spawn is a process boundary: record its argv instead of starting a process. */
 const mockSpawn = vi.hoisted(() => vi.fn(() => ({ unref: () => {} })));
@@ -22,8 +25,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 let home: string;
-type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
+let server: ReturnType<typeof fakeSessiondb>;
+let fetchImpl: ReturnType<typeof fakeSessiondb>["fetchImpl"];
+
+/** The sessiondb server every run ships to. */
+const SERVER = { name: "team", url: "https://sessions.test", owner: "james", token: "sdb_t" };
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-knowledge-sync-pi-")));
@@ -37,18 +43,19 @@ beforeEach(() => {
   vi.stubEnv("DOSU_DEV", undefined);
   vi.stubEnv("DOSU_PROJECT", undefined);
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
-  saveConfig(
-    makeTestConfig({
+  saveConfig({
+    ...makeTestConfig({
       access_token: "t",
       refresh_token: "r",
       expires_at: 0,
       api_key: "sk_test",
       deployment_id: "dep1",
     }),
-  );
-  fetchImpl = vi.fn<Fetch>(
-    async () => new Response(JSON.stringify({ task_id: "task" }), { status: 202 }),
-  );
+    targets: [SERVER],
+    default_target: "team",
+  });
+  server = fakeSessiondb();
+  fetchImpl = server.fetchImpl;
   vi.stubGlobal("fetch", fetchImpl);
 });
 
@@ -66,13 +73,9 @@ async function dosu(...args: string[]): Promise<void> {
   await cmd.parseAsync(["node", "dosu", ...args]);
 }
 
-interface Posted {
-  records: { role: string; content?: unknown }[];
-  metadata: Record<string, unknown>;
-}
-
-function posted(): Posted[] {
-  return fetchImpl.mock.calls.map(([, init]) => JSON.parse(init?.body as string));
+/** What the fake server received, upload by upload. */
+function posted(): Upload[] {
+  return server.uploads;
 }
 
 /** A git checkout under the temporary home with one commit, and an origin when given one. */
@@ -197,21 +200,14 @@ describe("knowledge sync of pi sessions", () => {
     await dosu("sync");
 
     const [shipped] = posted();
-    expect(shipped.metadata).toMatchObject({
+    expect(shipped).toMatchObject({
       agent: "pi",
       session_id: "01a0fdc5-a112",
       project: "github.com/acme/widget",
-      repo: "github.com/acme/widget",
+      format: "jsonl",
     });
-    expect(shipped.metadata.parent_session_id).toBeUndefined();
-    expect(shipped.records.map((r) => r.role)).toEqual([
-      "meta",
-      "user",
-      "assistant",
-      "assistant",
-      "tool",
-      "assistant",
-    ]);
+    expect(shipped?.parent_session_id).toBeUndefined();
+    expect(shipped?.transcript).toContain("question 1");
     expect(loadSyncState().sessions["pi/01a0fdc5-a112"]?.outcome).toBe("shipped");
   });
 
@@ -227,25 +223,15 @@ describe("knowledge sync of pi sessions", () => {
 
     await dosu("sync");
 
-    const shipped = Object.fromEntries(posted().map((p) => [String(p.metadata.session_id), p]));
+    const shipped = Object.fromEntries(posted().map((p) => [String(p.session_id), p]));
     expect(Object.keys(shipped).sort()).toEqual(["01a0fdc5-a112", "01a0fdc7-6bbf"]);
-    expect(shipped["01a0fdc5-a112"].records).toHaveLength(11);
+    // The fork names the parent twice: as its parent, and as the history it copied, which
+    // the server subtracts (sessiondb's own tests cover that) so only its own work is written.
     const fork = shipped["01a0fdc7-6bbf"];
-    expect(fork.metadata.parent_session_id).toBe("01a0fdc5-a112");
-    expect(fork.metadata.continuation).toMatchObject({ from_record: 6 });
-    // The meta record, then the fork's own exchange only.
-    expect(fork.records.map((r) => r.content ?? r.role)).toEqual([
-      "meta",
-      "question 2",
-      "Reading calc.py for 2.",
-      expect.any(String),
-      "def add(a, b):\n    return a + b\n",
-      expect.stringMatching(/^answer 2: /),
-    ]);
-    expect(loadSyncState().sessions["pi/01a0fdc7-6bbf"]).toMatchObject({
-      outcome: "shipped",
-      records: 11,
-    });
+    expect(fork?.parent_session_id).toBe("01a0fdc5-a112");
+    expect(fork?.fork_of).toBe("01a0fdc5-a112");
+    expect(fork?.transcript).toContain("question 2");
+    expect(loadSyncState().sessions["pi/01a0fdc7-6bbf"]?.outcome).toBe("shipped");
   });
 
   it("keys a clone with no origin by its root commit", async () => {
@@ -254,7 +240,7 @@ describe("knowledge sync of pi sessions", () => {
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.project)).toEqual([`git:${rootCommit(clone)}`]);
+    expect(posted().map((p) => p.project)).toEqual([`git:${rootCommit(clone)}`]);
   });
 
   it("keeps out a session where the user ran /dosu-incognito, and only such a session", async () => {
@@ -294,7 +280,7 @@ describe("knowledge sync of pi sessions", () => {
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata.session_id)).toEqual(["quoting"]);
+    expect(posted().map((p) => p.session_id)).toEqual(["quoting"]);
     const ledger = loadSyncState().sessions;
     expect([ledger["pi/incognito"]?.outcome, ledger["pi/legacy"]?.outcome]).toEqual([
       "incognito",
@@ -361,7 +347,7 @@ describe("knowledge sync of a pi session's branch", () => {
 
     await dosu("sync");
 
-    expect(posted().map((p) => p.metadata)).toEqual([
+    expect(posted()).toEqual([
       expect.objectContaining({ agent: "pi", session_id: "01a0fdc5-b001", branch: "feat/calc" }),
     ]);
   });
@@ -389,7 +375,7 @@ describe("knowledge sync of a pi session's branch", () => {
 
     const served = context.mock.calls.map(([, init]) => JSON.parse(init?.body as string).branch);
     expect(served).toEqual(["feat/calc", "feat/calc"]);
-    expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/calc"]);
+    expect(posted().map((p) => p.branch)).toEqual(["feat/calc"]);
   });
 
   it("a session the prompt hook first serves partway through keeps the branch it began on", async () => {
@@ -425,7 +411,7 @@ describe("knowledge sync of a pi session's branch", () => {
 
     const [[, init]] = context.mock.calls;
     expect(JSON.parse(init?.body as string).branch).toBe("feat/res");
-    expect(posted().map((p) => p.metadata.branch)).toEqual(["feat/res"]);
+    expect(posted().map((p) => p.branch)).toEqual(["feat/res"]);
   });
 });
 
@@ -442,7 +428,7 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
     expect(child).toEqual(["sync", "--quiet", "--ended", `pi:01a0fdc5-a112=${ended}`]);
 
     await dosu(...child);
-    expect(posted().map((p) => p.metadata.session_id)).toEqual(["01a0fdc5-a112"]);
+    expect(posted().map((p) => p.session_id)).toEqual(["01a0fdc5-a112"]);
   });
 
   it("ships at once a session run under a --session-id pi accepts, dots included", async () => {
@@ -455,7 +441,7 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
     expect(child).toEqual(["sync", "--quiet", "--ended", `pi:rv.task.2=${ended}`]);
 
     await dosu(...child);
-    expect(posted().map((p) => p.metadata.session_id)).toEqual(["rv.task.2"]);
+    expect(posted().map((p) => p.session_id)).toEqual(["rv.task.2"]);
   });
 
   it("ships at once, and keeps finding, a session at an explicit `pi --session <path>`", async () => {
@@ -479,11 +465,11 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
     utimesSync(ended, later, later);
     await dosu("sync");
 
-    expect(posted().map((p) => [p.metadata.session_id, p.metadata.project])).toEqual([
+    expect(posted().map((p) => [p.session_id, p.project])).toEqual([
       ["01a0ff60-263a", "github.com/acme/widget"],
       ["01a0ff60-263a", "github.com/acme/widget"],
     ]);
-    expect(posted()[1].metadata.continuation).toMatchObject({ from_record: 6 });
+    expect(posted()[1]?.shipped).toMatchObject({ records: expect.any(Number) });
   });
 
   it("/fork ends the old session alone; the fork ships its own work when it ends", async () => {
@@ -497,7 +483,7 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
     hookStdin(shutdownPayload("01a0fdc5-a112", parent, widget, "fork"));
     await dosu("sync", "--quiet", "--detach");
     await dosu(...respawnedArgs());
-    expect(posted().map((p) => p.metadata.session_id)).toEqual(["01a0fdc5-a112"]);
+    expect(posted().map((p) => p.session_id)).toEqual(["01a0fdc5-a112"]);
 
     forkEntries([...exchange(1), ...exchange(2)]);
     hookStdin(shutdownPayload("01a0fdc7-6bbf", fork, widget));
@@ -505,13 +491,12 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
     await dosu(...respawnedArgs());
 
     const [, forked] = posted();
-    expect(forked.metadata).toMatchObject({
+    expect(forked).toMatchObject({
       session_id: "01a0fdc7-6bbf",
       parent_session_id: "01a0fdc5-a112",
+      fork_of: "01a0fdc5-a112",
     });
-    expect(forked.records.filter((r) => r.role === "user").map((r) => r.content)).toEqual([
-      "question 2",
-    ]);
+    expect(forked?.transcript).toContain("question 2");
   });
 
   it("a reload names no session: the extension comes back on the same one", async () => {
@@ -540,8 +525,9 @@ describe("knowledge sync from the Dosu pi extension's session_shutdown", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
     await dosu("sync");
 
-    expect(posted().map((p) => [p.metadata.session_id, p.metadata.project])).toEqual([
-      ["01a0fdc5-a112", "github.com/acme/widget"],
+    // Two tries reached the server; only the second one got through.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(posted().map((p) => [p.session_id, p.project])).toEqual([
       ["01a0fdc5-a112", "github.com/acme/widget"],
     ]);
     expect(loadSyncState().sessions["pi/01a0fdc5-a112"]?.outcome).toBe("shipped");

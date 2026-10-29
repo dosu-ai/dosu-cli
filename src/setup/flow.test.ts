@@ -43,8 +43,8 @@ vi.mock("../auth/flow", () => ({
   startOAuthFlow: vi.fn(),
 }));
 
-vi.mock("../sources/wizard", () => ({
-  runBucketWizard: vi.fn(),
+vi.mock("../sources/server-wizard", () => ({
+  runServerWizard: vi.fn(),
 }));
 
 vi.mock("../debug/logger", () => ({
@@ -177,7 +177,7 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
-import { runBucketWizard } from "../sources/wizard";
+import { runServerWizard } from "../sources/server-wizard";
 import {
   loadSyncState,
   saveSyncState,
@@ -2842,9 +2842,14 @@ describe("stepOfferInitialSync", () => {
     return { status: "backlog", readySessions, inFlightSessions: 0, sessions };
   }
 
-  it("does nothing without an API key or deployment", async () => {
-    await stepOfferInitialSync(makeCfg({ api_key: undefined }));
-    await stepOfferInitialSync(makeCfg({ deployment_id: undefined }));
+  /** A login with a sessiondb server to ship to. */
+  const SERVER = { name: "team", url: "https://sessions.example.com", owner: "me", token: "sdb" };
+  function withServer(overrides: Partial<FlatTestConfig> = {}): Config {
+    return { ...makeCfg(overrides), targets: [SERVER], default_target: "team" };
+  }
+
+  it("does nothing without a server to ship to", async () => {
+    await stepOfferInitialSync(makeCfg());
 
     expect(mockRunKnowledgeSync).not.toHaveBeenCalled();
     expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
@@ -2853,7 +2858,7 @@ describe("stepOfferInitialSync", () => {
   it("does nothing once the user opted out of shipping", async () => {
     setShipTranscripts(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(mockRunKnowledgeSync).not.toHaveBeenCalled();
     expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
@@ -2863,14 +2868,14 @@ describe("stepOfferInitialSync", () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
     // What the tools step left: Cursor's hooks, its incognito command with them.
-    stepConfigureTools(makeCfg(), { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
+    stepConfigureTools(withServer(), { toInstall: [CursorProvider()], toRemove: [], skipped: [] });
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     // wrapLog breaks lines to the terminal width; compare on flattened whitespace.
     const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
-    expect(said).toContain("uploaded");
-    expect(said).toContain("redacted on this machine");
+    expect(said).toContain("uploaded to your sessiondb server https://sessions.example.com");
+    expect(said).toContain("redacts secrets before anything is stored");
     expect(said).toContain("Run /dosu-incognito (Cursor) in a session to keep it out");
     expect(said).toContain("dosu knowledge transcripts disable");
     expect(said).not.toContain("stay on this machine");
@@ -2880,7 +2885,7 @@ describe("stepOfferInitialSync", () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
     expect(said).not.toContain("incognito");
@@ -2891,7 +2896,7 @@ describe("stepOfferInitialSync", () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(mockRunKnowledgeSync.mock.calls[0][0]?.deps?.ship).toBeUndefined();
   });
@@ -2904,7 +2909,7 @@ describe("stepOfferInitialSync", () => {
       sessions: [],
     });
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
@@ -2915,7 +2920,7 @@ describe("stepOfferInitialSync", () => {
     vi.mocked(p.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     mockSpawnDetachedSelf.mockReturnValue(true);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(vi.mocked(p.log.success).mock.calls.join(" ")).toContain("Shipping 1 session in");
   });
@@ -2924,7 +2929,7 @@ describe("stepOfferInitialSync", () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
     // Otherwise the next session-end hook would ship the same 30 days anyway.
@@ -2952,7 +2957,7 @@ describe("stepOfferInitialSync", () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
     expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 2 agent sessions"));
@@ -2972,7 +2977,7 @@ describe("stepOfferInitialSync", () => {
     });
     vi.mocked(p.confirm).mockResolvedValue(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
     expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 1 agent session "));
@@ -2994,7 +2999,7 @@ describe("stepOfferInitialSync", () => {
     });
     vi.mocked(p.confirm).mockResolvedValue(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
     expect(spinner?.stop).toHaveBeenCalledWith(expect.stringContaining("Found 2 agent sessions"));
@@ -3007,7 +3012,7 @@ describe("stepOfferInitialSync", () => {
     setAgentsIncognito(["claude"], true);
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(2));
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(vi.mocked(p.confirm)).not.toHaveBeenCalled();
     const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
@@ -3019,7 +3024,7 @@ describe("stepOfferInitialSync", () => {
     vi.mocked(p.confirm).mockResolvedValue(Symbol("cancel"));
     vi.mocked(p.isCancel).mockReturnValue(true);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(mockSpawnDetachedSelf).not.toHaveBeenCalled();
     expect(Object.values(loadSyncState().sessions).map((e) => e.outcome)).toEqual([
@@ -3033,7 +3038,7 @@ describe("stepOfferInitialSync", () => {
     vi.mocked(p.confirm).mockResolvedValue(true);
     mockSpawnDetachedSelf.mockReturnValue(false);
 
-    await stepOfferInitialSync(makeCfg());
+    await stepOfferInitialSync(withServer());
 
     expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("Could not start");
   });
@@ -3324,74 +3329,71 @@ describe("stepChooseSessionStorage", () => {
   });
   afterEach(teardownTempEnv);
 
-  const bucket = {
-    name: "s3",
-    url: "s3://acme/dosu",
+  const server = {
+    name: "team",
+    url: "https://sessions.example.com",
     owner: "james",
-    region: "us-east-1",
-    credentials: "env" as const,
+    token: "sdb_t",
   };
 
-  it("keeps Dosu when chosen, without touching config", async () => {
-    vi.mocked(p.select).mockResolvedValueOnce("dosu");
+  it("ships nowhere when the user has no server yet, and says how to add one", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("none");
     const cfg = makeCfg();
     saveConfig(cfg);
 
-    expect(await stepChooseSessionStorage(cfg)).toBe("dosu");
-
-    expect(runBucketWizard).not.toHaveBeenCalled();
-    expect(loadConfig().default_target).toBeUndefined();
+    expect(await stepChooseSessionStorage(cfg)).toBe("none");
+    expect(runServerWizard).not.toHaveBeenCalled();
+    expect(loadConfig().targets).toBeUndefined();
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("dosu sources setup --server");
   });
 
-  it("runs the bucket wizard when the user wants their own bucket", async () => {
-    vi.mocked(p.select).mockResolvedValueOnce("bucket");
-    vi.mocked(runBucketWizard).mockResolvedValueOnce({ target: bucket });
+  it("runs the server wizard when the user has a URL and token", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("server");
+    vi.mocked(runServerWizard).mockResolvedValueOnce({ target: server });
     const cfg = makeCfg();
 
-    expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
-
-    expect(runBucketWizard).toHaveBeenCalledWith(cfg);
+    expect(await stepChooseSessionStorage(cfg)).toBe("server");
+    expect(runServerWizard).toHaveBeenCalledWith(cfg);
   });
 
-  it("stops setup where the user cancelled the wizard", async () => {
-    vi.mocked(p.select).mockResolvedValueOnce("bucket");
-    vi.mocked(runBucketWizard).mockResolvedValueOnce(null);
+  it("stops setup when the wizard was cancelled", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("server");
+    vi.mocked(runServerWizard).mockResolvedValueOnce(null);
 
     expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
-
-    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("dosu sources setup");
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("No server set up");
   });
 
-  it("falls back to Dosu with the reason when the bucket could not be set up", async () => {
-    vi.mocked(p.select).mockResolvedValueOnce("bucket");
-    vi.mocked(runBucketWizard).mockRejectedValueOnce(new CliUsageError("AccessDenied: PutObject"));
+  it("reports a wizard that failed and carries on", async () => {
+    vi.mocked(p.select).mockResolvedValueOnce("server");
+    vi.mocked(runServerWizard).mockRejectedValueOnce(
+      new CliUsageError("the server did not accept that token"),
+    );
 
-    expect(await stepChooseSessionStorage(makeCfg())).toBe("dosu");
-
+    expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
     const warned = vi.mocked(p.log.warn).mock.calls.join(" ");
-    expect(warned).toContain("AccessDenied: PutObject");
-    expect(warned).toContain("Sessions ship to Dosu until then");
+    expect(warned).toContain("did not accept that token");
+    expect(warned).toContain("Nothing ships until a server is set up");
   });
 
-  it("keeps a bucket that is already the default and says so, unless --storage asks again", async () => {
+  it("keeps a server that is already set up and says so, unless --storage asks again", async () => {
     const cfg = {
       ...makeCfg(),
-      targets: [{ ...bucket, source_id: "src-1" }],
-      default_target: "s3",
+      targets: [{ ...server, source_id: "src-1" }],
+      default_target: "team",
     };
     saveConfig(cfg);
 
-    expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
+    expect(await stepChooseSessionStorage(cfg)).toBe("server");
     expect(vi.mocked(p.select)).not.toHaveBeenCalled();
-    const said = vi.mocked(p.log.success).mock.calls.join(" ");
-    expect(said).toContain("s3://acme/dosu");
-    expect(said).toContain("which Dosu reads");
+    const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain("https://sessions.example.com");
+    expect(said).toContain("whose bucket Dosu reads");
     expect(said).toContain("dosu setup --storage");
 
-    vi.mocked(p.select).mockResolvedValueOnce("dosu");
-    expect(await stepChooseSessionStorage(cfg, { storage: true })).toBe("dosu");
-    expect(loadConfig().default_target).toBe("dosu");
-    expect(loadConfig().targets).toHaveLength(1);
-    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("Sessions ship to Dosu again");
+    vi.mocked(p.select).mockResolvedValueOnce("server");
+    vi.mocked(runServerWizard).mockResolvedValueOnce({ target: server });
+    expect(await stepChooseSessionStorage(cfg, { storage: true })).toBe("server");
+    expect(runServerWizard).toHaveBeenCalledTimes(1);
   });
 });

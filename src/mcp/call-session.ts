@@ -34,7 +34,7 @@ import {
   type SessionHarness,
   sessionAtPath,
 } from "../sessions/scan";
-import { trajectorySourceOf } from "../shipper/normalize";
+import { trajectorySourceOf } from "../sessions/start";
 import { isIncognitoSession } from "../sync/incognito";
 import {
   isSessionAgentIncognito,

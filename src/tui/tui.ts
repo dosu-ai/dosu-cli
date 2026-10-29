@@ -52,9 +52,10 @@ async function probeSession(cfg: Config): Promise<SessionState> {
 }
 
 /** The bucket sessions ship to, when the default target is one; Dosu otherwise. */
+/** The server `dosu sync` ships to, for the banner; undefined when none is set up. */
 function sessionStorage(cfg: Config): string | undefined {
-  const target = configuredTargets(cfg).find((t) => t.name === cfg.default_target);
-  return target && /^(s3|r2):\/\//.test(target.url) ? target.url : undefined;
+  const targets = configuredTargets(cfg);
+  return (targets.find((t) => t.name === cfg.default_target) ?? targets[0])?.url;
 }
 
 /** Gather the live machine state the welcome banner shows. */
@@ -325,7 +326,11 @@ async function runSettings(cfg: Config): Promise<void> {
       { label: "switch organization", hint: target?.org_name, value: "switch-org" },
       { label: "switch library", hint: library, value: "switch-library" },
       { label: "sync scope", hint: scope, value: "projects" },
-      { label: "session storage", hint: sessionStorage(cfg) ?? "Dosu", value: "storage" },
+      {
+        label: "session storage",
+        hint: sessionStorage(cfg) ?? "not set up",
+        value: "storage",
+      },
       { label: "run setup", hint: "rerun the setup wizard", value: "setup" },
       { label: "log out", hint: "clear stored credentials", value: "logout" },
       { label: "back", value: "back" },
@@ -336,7 +341,7 @@ async function runSettings(cfg: Config): Promise<void> {
       continue;
     }
     if (action === "storage") {
-      // Setup's storage step alone: it re-asks even when a bucket is already in place.
+      // Setup's storage step alone: it re-asks even when a server is already in place.
       await runSetup({ storage: true });
       reload(cfg);
       continue;
