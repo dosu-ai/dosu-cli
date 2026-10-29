@@ -54,11 +54,6 @@ vi.mock("../sync/state", async (importOriginal) => ({
   setShipTranscripts: (...args: unknown[]) => mockSetShipTranscripts(...args),
 }));
 
-const mockEmitReport = vi.fn();
-vi.mock("../report/generate", () => ({
-  emitKnowledgeReport: (...args: unknown[]) => mockEmitReport(...args),
-}));
-
 interface FakeAgent {
   id: string;
   name: string;
@@ -151,8 +146,6 @@ beforeEach(() => {
   mockListBacklog.mockReset();
   mockLoadSyncState.mockReset();
   mockLoadSyncState.mockReturnValue({ schema_version: 3, sessions: {}, consecutive_failures: 0 });
-  mockEmitReport.mockReset();
-  mockEmitReport.mockResolvedValue("/tmp/dosu-knowledge-report.html");
   mockSetShipTranscripts.mockReset();
   fakeAgents = [];
   enableCalls.length = 0;
@@ -772,117 +765,6 @@ describe("knowledge sync", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("--json --report keeps the outcome on stdout when the report fails", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue(new Error("no notes to render"));
-
-    await run("sync", "--json", "--report");
-
-    expect(JSON.parse(allOutput())).toEqual({
-      status: "nothing-new",
-      readySessions: 0,
-      inFlightSessions: 0,
-      report_error: "no notes to render",
-    });
-    // Studying succeeded; a report failure alone does not fail the command.
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it("--json --report stringifies non-Error report failures", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue("disk full");
-
-    await run("sync", "--json", "--report");
-
-    expect(JSON.parse(allOutput())).toMatchObject({ report_error: "disk full" });
-  });
-
-  it("--report prints the failure and sets the exit code after a foreground sync", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue(new Error("browser missing"));
-
-    await run("sync", "--report");
-
-    expect(allOutput()).toContain("No new finished sessions");
-    expect(allOutput()).not.toContain("Wrote ");
-    expect(errorSpy.mock.calls.join(" ")).toContain("browser missing");
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("--report stringifies non-Error failures", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    mockEmitReport.mockRejectedValue("disk full");
-
-    await run("sync", "--report");
-
-    expect(errorSpy.mock.calls.join(" ")).toContain("disk full");
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("knowledge report --json prints the path and never opens a browser", async () => {
-    await run("report", "--json", "--out", "/tmp/custom-report.html");
-
-    expect(mockEmitReport).toHaveBeenCalledWith({ out: "/tmp/custom-report.html", open: false });
-    expect(JSON.parse(allOutput())).toEqual({ report: "/tmp/dosu-knowledge-report.html" });
-  });
-
-  it("knowledge report opens the browser by default", async () => {
-    await run("report");
-
-    expect(mockEmitReport).toHaveBeenCalledWith({ out: undefined, open: true });
-  });
-
-  it("--report writes and opens the harvest HTML after a foreground sync", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
-    mockRunSync.mockResolvedValue({
-      status: "shipped",
-      readySessions: 2,
-      inFlightSessions: 0,
-      sessions: [],
-      settledSessions: 2,
-      counts: { shipped: 2, incognito: 0, trivial: 0, unsupported: 0, rejected: 0, failed: 0 },
-    });
-
-    await run("sync", "--report", "--out", "/tmp/custom-report.html");
-
-    expect(mockEmitReport).toHaveBeenCalledWith({
-      out: "/tmp/custom-report.html",
-      open: true,
-    });
-    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
-  });
-
-  it("knowledge report writes the HTML without running sync", async () => {
-    mockLoadConfig.mockReturnValue(makeValidConfig({ deployment_id: "dep1" }));
-    await run("report", "--no-open");
-    expect(mockRunSync).not.toHaveBeenCalled();
-    expect(mockEmitReport).toHaveBeenCalledWith({
-      out: undefined,
-      open: false,
-    });
-    expect(allOutput()).toContain("Wrote /tmp/dosu-knowledge-report.html");
-  });
-
-  it("--quiet --report stays silent and does not write HTML", async () => {
-    mockRunSync.mockResolvedValue({ status: "shipped", readySessions: 0, inFlightSessions: 0 });
-    await run("sync", "--quiet", "--report");
-    expect(mockEmitReport).not.toHaveBeenCalled();
-    expect(logSpy).not.toHaveBeenCalled();
-  });
-
-  it("--json --report includes the HTML path and does not open a browser", async () => {
-    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
-    await run("sync", "--json", "--report", "--out", "/tmp/custom-report.html");
-    expect(mockEmitReport).toHaveBeenCalledWith({
-      out: "/tmp/custom-report.html",
-      open: false,
-    });
-    expect(JSON.parse(allOutput())).toMatchObject({
-      status: "nothing-new",
-      report: "/tmp/dosu-knowledge-report.html",
-    });
-  });
-
   it("--detach re-spawns and never runs the pipeline inline", async () => {
     await run("sync", "--quiet", "--detach");
 
@@ -968,19 +850,6 @@ describe("knowledge sync", () => {
 
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync"]);
     expect(mockRunSync).not.toHaveBeenCalled();
-  });
-
-  it("--detach forwards --report and --out to the re-spawned run", async () => {
-    await run("sync", "--detach", "--report", "--out", "/tmp/custom-report.html");
-
-    expect(mockSpawnDetached).toHaveBeenCalledWith([
-      "knowledge",
-      "sync",
-      "--report",
-      "--out",
-      "/tmp/custom-report.html",
-    ]);
-    expect(mockEmitReport).not.toHaveBeenCalled();
   });
 
   /** A run that shipped `settled` of `ready` sessions (5 by default). */

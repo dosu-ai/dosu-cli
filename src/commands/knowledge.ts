@@ -12,7 +12,6 @@ import { disableClaudeContextHook, enableClaudeContextHook } from "../hooks/cont
 import { HookConfigError, hookCommand } from "../hooks/formats";
 import { getIncognitoAgent, installedIncognitoCommands } from "../incognito/agents";
 import { isOnPath } from "../mcp/detect";
-import { emitKnowledgeReport } from "../report/generate";
 import { captureHookSession, endedSessionArgs, parseEndedSessionArgs } from "../sessions/capture";
 import { pinEndedSessionProjects } from "../sessions/project-dir";
 import { displayRepo } from "../sessions/repo";
@@ -319,11 +318,6 @@ export function knowledgeCommand(): Command {
       "--status",
       "Show whether a sync is running now, plus what was settled how and recent activity",
     )
-    .option(
-      "--report",
-      "Write the same HTML harvest report as the log-to-dosu-knowledge skill and open it",
-    )
-    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
     .option("--json", "Output as JSON")
     .action(
       async (opts: {
@@ -335,8 +329,6 @@ export function knowledgeCommand(): Command {
         ended?: string[];
         endedPath?: string[];
         status?: boolean;
-        report?: boolean;
-        out?: string;
         json?: boolean;
       }) => {
         const ended = parseEndedSessionArgs(opts.ended ?? [], opts.endedPath ?? []);
@@ -377,8 +369,6 @@ export function knowledgeCommand(): Command {
             ...(opts.bootstrap ? ["--bootstrap"] : []),
             ...(opts.retryRejected ? ["--retry-rejected"] : []),
             ...[...ended, ...(hookEnded ? [hookEnded] : [])].flatMap(endedSessionArgs),
-            ...(opts.report ? ["--report"] : []),
-            ...(opts.out ? ["--out", opts.out] : []),
           ]);
           // The parent's own event is tagged so it is never mistaken for a pipeline run.
           recordCommandFacets({
@@ -414,52 +404,13 @@ export function knowledgeCommand(): Command {
 
         if (opts.json) {
           if (outcome.status === "error") process.exitCode = 1;
-          if (opts.report) {
-            // The sync outcome must reach stdout even when the report fails:
-            // shipping already happened and callers parse this JSON.
-            try {
-              const report = await emitKnowledgeReport({ out: opts.out, open: false });
-              printResult({ ...outcome, report }, opts);
-            } catch (err) {
-              const report_error = err instanceof Error ? err.message : String(err);
-              printResult({ ...outcome, report_error }, opts);
-            }
-          } else {
-            printResult(outcome, opts);
-          }
+          printResult(outcome, opts);
           return;
         }
 
         printSyncOutcome(outcome);
-        if (opts.report) {
-          try {
-            const report = await emitKnowledgeReport({ out: opts.out, open: true });
-            console.log(`Wrote ${report}`);
-          } catch (err) {
-            console.error(err instanceof Error ? err.message : String(err));
-            process.exitCode = 1;
-          }
-        }
       },
     );
-
-  cmd
-    .command("report")
-    .description("Render the knowledge report from your Dosu notes and the local session logs")
-    .option("--out <path>", "HTML report path (default: tmp/dosu-knowledge-report.html)")
-    .option("--json", "Output the report path as JSON")
-    .option("--no-open", "Write the file without opening a browser")
-    .action(async (opts: { out?: string; json?: boolean; open?: boolean }) => {
-      const path = await emitKnowledgeReport({
-        out: opts.out,
-        open: opts.json ? false : opts.open,
-      });
-      if (opts.json) {
-        printResult({ report: path }, opts);
-        return;
-      }
-      console.log(`Wrote ${path}`);
-    });
 
   cmd.addCommand(hooksCommand());
   cmd.addCommand(incognitoCommand());
