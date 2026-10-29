@@ -394,4 +394,46 @@ describe("config", () => {
     const cfg = loadConfig();
     expect(cfg).toEqual({ schema_version: CONFIG_SCHEMA_VERSION });
   });
+
+  it("loadConfig keeps only server targets, and drops a default that names none of them", () => {
+    const server = {
+      name: "team",
+      url: "https://sessions.example.com/",
+      owner: "acme",
+      token: "sdb_x",
+    };
+    writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        schema_version: CONFIG_SCHEMA_VERSION,
+        targets: [
+          // A bucket target from before servers were the only kind of target.
+          { name: "r2", url: "r2://bucket/prefix", owner: "acme", credentials: {} },
+          server,
+        ],
+        default_target: "r2",
+      }),
+    );
+    const cfg = loadConfig();
+    expect(cfg.targets).toEqual([{ ...server, url: "https://sessions.example.com" }]);
+    expect(cfg.default_target).toBeUndefined();
+  });
+
+  it("loadConfig keeps a default that names a configured server", () => {
+    const server = {
+      name: "team",
+      url: "https://sessions.example.com",
+      owner: "acme",
+      token: "sdb_x",
+    };
+    writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        schema_version: CONFIG_SCHEMA_VERSION,
+        targets: [server],
+        default_target: "team",
+      }),
+    );
+    expect(loadConfig().default_target).toBe("team");
+  });
 });

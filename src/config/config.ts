@@ -227,14 +227,19 @@ function normalizeV2(value: Config): Config {
   };
 }
 
-/** The server targets and default-target name, each kept only when well-formed. */
+/** The server targets and default-target name, each kept only when well-formed. A default
+ * naming no configured server (a bucket target from before servers were the only kind, or a
+ * hand-edited name) is dropped, so the only remaining server stands in rather than every
+ * command failing on a name that no longer exists. */
 function targetsOf(value: Config): Pick<Config, "targets" | "default_target"> {
   const targets = Array.isArray(value.targets)
     ? value.targets.map(normalizeServerTarget).filter((t): t is ServerTarget => t !== undefined)
     : [];
+  const defaultTarget = stringValue(value.default_target);
+  const defaultConfigured = targets.some((target) => target.name === defaultTarget);
   return {
     ...(targets.length > 0 ? { targets } : {}),
-    ...(stringValue(value.default_target) ? { default_target: value.default_target } : {}),
+    ...(defaultConfigured ? { default_target: defaultTarget } : {}),
   };
 }
 
