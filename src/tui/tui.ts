@@ -15,7 +15,6 @@ import {
 import { getWebAppURL } from "../config/constants";
 import { getHookAgent } from "../hooks/agents";
 import { allSetupProviders } from "../mcp/providers";
-import { emitKnowledgeReport } from "../report/generate";
 import { createProjectDirResolver } from "../sessions/project-dir";
 import { displayRepo } from "../sessions/repo";
 import { type AgentSession, scanAgentSessions } from "../sessions/scan";
@@ -237,7 +236,6 @@ async function runMainMenu(): Promise<void> {
         label: studying ? `activity \uD83D\uDCDA ${brand("shipping sessions...")}` : "activity",
         value: "sync",
       },
-      { label: "knowledge report", hint: "(opens in browser)", value: "report" },
       { label: "analytics", value: "analytics" },
       { label: "pages", value: "pages" },
       { label: "settings", value: "settings" },
@@ -272,10 +270,6 @@ async function runMainMenu(): Promise<void> {
         await runActivityView();
         home();
         break;
-      case "report":
-        await runKnowledgeReport();
-        home();
-        break;
       case "analytics":
         await runAnalyticsView();
         home();
@@ -304,19 +298,6 @@ async function runMainMenu(): Promise<void> {
         home();
         break;
     }
-  }
-}
-
-/** Write the harvest HTML from persisted notes and open it, same as `dosu knowledge report`. */
-async function runKnowledgeReport(): Promise<void> {
-  const s = p.spinner();
-  s.start("Writing knowledge report...");
-  try {
-    const path = await emitKnowledgeReport({ open: true });
-    s.stop(`Opened ${path}`);
-  } catch (err) {
-    s.stop("Could not write the report");
-    p.log.error(err instanceof Error ? err.message : String(err));
   }
 }
 
