@@ -23,8 +23,12 @@ agent it detects and names the ones it skipped. Claude Code counts as detected w
 run (which is what creates `~/.claude`); `dosu knowledge transcripts enable` and `dosu setup` detect
 it the same way, and say so when they skip it. The sync scans the last 30 days of agent sessions, keeps the
 ones its ledger has no answer for, applies the repo scope and pause switch from
-`~/.config/dosu-cli/knowledge-sync.json`, and ships them to Dosu memory (secrets redacted locally
-first), which learns from each session server-side. Shipping is on by default;
+`~/.config/dosu-cli/knowledge-sync.json`, and ships each one's raw transcript to the team's
+[sessiondb server](https://github.com/dosu-ai/sessiondb) (`dosu sources setup`; see "Where
+sessions are stored" in the README). The server redacts and normalizes it, decides whether it is
+worth keeping and how much of it is new, and writes it to the bucket; Dosu reads the bucket and
+learns from each session there. This machine holds a token, never a bucket credential, and the
+transcript leaves it unredacted over TLS, so the server is where secrets stop. Shipping is on by default;
 `dosu knowledge transcripts disable` turns it off. This document covers how a sync decides what to
 ship, the project key sessions are scoped by, the repo scope, and the switches layered on top: a
 per-agent incognito setting, a per-session opt-out, and a status-bar indicator. On a machine torn
@@ -85,7 +89,7 @@ The state file keeps a ledger (`sessions`, schema 3) with one entry per session,
 scanned session is **pending** when it has no entry, when its mtime differs from the entry's (it was
 resumed or kept writing), or when it was passed over by a different CLI version (so newer harness
 support or rules get a second look), except a session the per-agent incognito switch settled
-(`by_agent: true`), which is never pending again (see [Per-agent incognito](#per-agent-incognito)). `--retry-rejected` makes sessions the backend refused pending
+(`by_agent: true`), which is never pending again (see [Per-agent incognito](#per-agent-incognito)). `--retry-rejected` makes sessions the server refused pending
 for that run. Nothing is skipped for good by being older than something else, and there is no count
 cap on the scan: listing is metadata only. Claude Code sessions are listed from `~/.claude` and,
 when the variable is set, `CLAUDE_CONFIG_DIR`. Codex sessions are listed from `sessions/` and
@@ -97,16 +101,17 @@ leaves the 30-day window, except those the per-agent incognito switch settled (s
 
 | Outcome | Meaning |
 |---|---|
-| `shipped` | Accepted by the ingest API (202) |
-| `trivial` | No user record, nothing answering it, or under 2,000 characters of content |
+| `shipped` | The server wrote a trace (201), or already had that content (200) |
+| `trivial` | The server judged it too small to learn from: no user record, nothing answering it, or under 2,000 characters of conversation. The raw transcript is stored; no trace is |
 | `incognito` | `/dosu-incognito` (`$dosu-incognito` in Codex) was run in the session, or its agent (or the session it descends from or was branched from) was in incognito (`by_agent: true`, see [Per-agent incognito](#per-agent-incognito)) |
-| `rejected` | The backend refused the payload (HTTP 400, 413, or 422) |
-| `unsupported` | No normalizer for the harness, or the transcript could not be normalized |
+| `rejected` | The server refused the upload for good (422 with a code: `redacted`, `too_large`, `normalize_*`, `invalid`, `unsupported_agent`; or 400, 413), so resending the same bytes cannot succeed |
+| `unsupported` | The CLI has no trajectory source for the harness, or could not read the transcript; nothing is sent |
 | `skipped_by_user` | You declined setup's offer to ship the last 30 days (it offers only sessions the ledger has never settled), or ran `dosu knowledge skip-backlog` |
 
-Only transport errors, auth failures, and 5xx responses are failures: they stop the run, leave the
-session pending, and make hook runs back off (except for a just-ended session, below). `rejected`
-and `unsupported` are answers, so one unreadable session never stalls the rest.
+Only transport errors, auth failures, and 5xx responses (including `502 storage_error`, the
+server's bucket failing) are failures: they stop the run, leave the session pending, and make hook
+runs back off (except for a just-ended session, below). `rejected` and `unsupported` are answers,
+so one unreadable session never stalls the rest.
 `dosu knowledge sync --status` shows counts per outcome and the rejected and unsupported sessions
 grouped by reason; `dosu knowledge sessions --rejected` (or `--unsupported`) lists every one.
 
@@ -129,15 +134,16 @@ screen, and setup's backfill offer count a session's subagents with it and repor
 A background subagent (or background shell command) reports back by injecting a
 `<task-notification>` message, carrying its result, into the session. The trajectory normalizer
 drops those as harness noise, but they are what the model acted on next, the way a foreground
-subagent's result is its tool result. So the CLI keeps each one in place as an `observation`
+subagent's result is its tool result. So the server keeps each one in place as an `observation`
 record (input the agent received that nobody typed): the session's trace stays readable on its own,
 and the subagent's full work ships separately, linked by `parent_session_id`. When the session is
 busy as the notification arrives (the usual case interactively), Claude Code queues it and logs it
-as an `attachment` row (`queued_command`), which the normalizer skips entirely; the CLI turns those
-back into the input they stand for. The same goes for a message the user typed mid-turn, which
-ships as a user record, and one from another agent session, which ships as an observation.
+as an `attachment` row (`queued_command`), which the normalizer skips entirely; the server turns
+those back into the input they stand for. The same goes for a message the user typed mid-turn,
+which becomes a user record, and one from another agent session, which becomes an observation. The
+CLI ships the transcript as the harness wrote it; all of this happens on the server.
 
-**Worthiness** is judged on what would ship: the normalized, redacted trajectory. Text, tool
+**Worthiness** is the server's call, made on the normalized, redacted trajectory. Text, tool
 arguments, and tool results all count toward the 2,000 characters, so a terse run that did its work
 through tools ships; the meta record does not count.
 
@@ -164,28 +170,31 @@ Per-turn events (Cursor's `stop`, Codex's `Stop`, OpenCode's `session.idle`) nev
 (`src/sessions/capture.ts`), except OpenCode's: its plugin passes `--ended` itself. `--flush` lifts
 the quiet period for every session (see [Throwaway machines](#throwaway-machines)).
 
-**Resumed sessions.** For a shipped session the ledger also keeps how many normalized records went
-and a sha256 of them. When the session grows and its records still start with exactly that prefix,
-only the meta record and the new tail ship, with `metadata.continuation =
-{"from_record": n, "prefix_sha256": "..."}`. A new tail too small to learn from is not uploaded and
-the session stays shipped. If the prefix no longer matches, the whole session ships again and the
-server dedupes identical content. A child session's upload carries `parent_session_id`: for a
-Codex subagent (`thread_source: "subagent"` in its rollout's `session_meta`), the parent's rollout
-name, which is the parent's own `session_id`. The report a finished Codex subagent hands its parent,
-a `<subagent_notification>` injected as a user message, ships in the parent's trace in place as an
-`observation` record: what the parent acted on next, not something the user said. A subagent spawned
-with its parent's context starts its rollout with a copy of the parent's history; on 0.160 (whose
-rollouts mark where the subagent's own records begin, `subagent_history_start_ordinal`) only the
-subagent's own records ship, since the parent's trace carries the rest. Older rollouts have no such
-mark and ship whole.
+**Resumed sessions.** For a shipped session the ledger also keeps what the server's answer said:
+how many normalized records the session came to (`records_total`) and a sha256 of them
+(`prefix_sha256`). When the session grows, the CLI sends the whole transcript again with that pair
+as `shipped`; if the session's records still start with exactly that prefix, the server writes only
+the meta record and the new tail, marked as a continuation (`from_record`, `prefix_sha256`), and a
+tail too small to learn from is `trivial` while the session stays shipped. If the prefix no longer
+matches (the harness rewrote history, the normalizer changed), the server writes the whole session
+and dedupes identical content. A child session's upload carries `parent_session_id`: for a Codex
+subagent (`thread_source: "subagent"` in its rollout's `session_meta`), the parent's rollout name,
+which is the parent's own `session_id`. The report a finished Codex subagent hands its parent, a
+`<subagent_notification>` injected as a user message, lands in the parent's trace in place as an
+`observation` record: what the parent acted on next, not something the user said. A subagent
+spawned with its parent's context starts its rollout with a copy of the parent's history; on 0.160
+(whose rollouts mark where the subagent's own records begin, `subagent_history_start_ordinal`) the
+server keeps only the subagent's own records, since the parent's trace carries the rest. Older
+rollouts have no such mark and are kept whole.
 
 **Forks.** A session forked or cloned from another (`AgentSession.forkOf`; pi's `/fork`, `/clone`,
 `--fork`) opens with a verbatim copy of that session's history, which is the parent's to ship.
-Its upload carries `parent_session_id` and only what the fork added: the meta record and the
-records past the leading ones the parent's normalized records hold too, marked with
-`continuation` as a tail is (`from_record` is where the fork's own records start). A fork with
-nothing of its own yet is too small to learn from, and ships once it has more. A fork is not a
-subagent: it outlives the session it came from, so that session's end neither ships nor holds it.
+Its upload carries `parent_session_id` and `fork_of`, and the server, when it holds the parent,
+writes only what the fork added: the meta record and the records past the leading ones the
+parent's normalized records hold too, marked with `continuation` as a tail is (`from_record` is
+where the fork's own records start). A fork with nothing of its own yet is too small to learn
+from, and ships once it has more. A fork is not a subagent: it outlives the session it came from,
+so that session's end neither ships nor holds it.
 
 Upgrading from the watermark state (schema 2, or the learner-era schema 1) seeds the ledger with the
 sessions it shipped. Everything else in the window becomes pending again, including sessions the
@@ -307,10 +316,11 @@ decodes; any other value goes as it is.
 Every upload, and every prompt-time memory request, also carries the branch the session ran on
 (`metadata.branch`, and `branch` on the prompt request), which memory is scoped by beside the
 project. An upload sends the branch its transcript recorded, when it recorded one: Claude Code's
-`gitBranch` and Codex's `session_meta`, as the trajectory's `git_branch` (the value the server
-read before the CLI sent one), verbatim: redaction leaves the branch alone, as it does ids, since
-its entropy pass takes a Jira-style name like `feature/PROJ-4821-AddRetryLogicForPayments` for a
-secret, and a placeholder would scope every such session together. OpenCode, pi and Cursor record
+`gitBranch` and Codex's `session_meta`; the server reads the same value itself as the trajectory's
+`git_branch` and prefers it to the one the CLI sent. It goes verbatim: the server's redaction
+leaves the branch alone, as it does ids, since its entropy pass takes a Jira-style name like
+`feature/PROJ-4821-AddRetryLogicForPayments` for a secret, and a placeholder would scope every
+such session together. OpenCode, pi and Cursor record
 none, so their sessions ship with the branch their prompts were served under, else the one the
 session's directory had checked out at its first prompt, read from the reflog, so a session that
 starts a branch for its change ships with the branch it started from, as Claude Code and Codex
