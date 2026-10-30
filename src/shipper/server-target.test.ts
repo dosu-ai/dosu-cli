@@ -65,11 +65,11 @@ describe("createServerTarget", () => {
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://sessions.example.com/v1/sessions");
     expect(init.method).toBe("POST");
-    expect(init.headers).toMatchObject({
-      Authorization: "Bearer sdb_test",
-      "Content-Encoding": "gzip",
-      "Content-Type": "application/json",
-    });
+    const headers = new Headers(init.headers);
+    expect(headers.get("authorization")).toBe("Bearer sdb_test");
+    expect(headers.get("content-encoding")).toBe("gzip");
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("user-agent")).toMatch(/^dosu-cli\//);
     expect(sentBody(fetchImpl)).toEqual(UPLOAD);
   });
 
@@ -95,6 +95,13 @@ describe("createServerTarget", () => {
       message: "invalid: bad role",
     });
 
+    const tooLarge = vi.fn().mockResolvedValue(refusal(413, "too_large", "over 64 MiB"));
+    expect(await target(tooLarge).send(UPLOAD)).toEqual({
+      status: "rejected",
+      httpStatus: 413,
+      message: "too_large: over 64 MiB",
+    });
+
     const noStorage = vi.fn().mockResolvedValue(refusal(409, "no_storage", "link a bucket"));
     expect(await target(noStorage).send(UPLOAD)).toEqual({
       status: "failed",
@@ -109,13 +116,50 @@ describe("createServerTarget", () => {
 
     const unauthorized = vi.fn().mockResolvedValue(refusal(401, "unauthorized", "bad token"));
     expect((await target(unauthorized).send(UPLOAD)).status).toBe("failed");
+
+    // The server's own bucket being down is a failure that names the server; so is a chunk
+    // the server cannot place (the shipper never sends offsets, so only a server bug gets here).
+    const bucketDown = vi.fn().mockResolvedValue(refusal(502, "storage", "bucket unavailable"));
+    expect(await target(bucketDown).send(UPLOAD)).toEqual({
+      status: "failed",
+      message: "server https://sessions.example.com: bucket unavailable",
+    });
+    const misplaced = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: "offset_mismatch", expected: 10 } }), {
+        status: 409,
+      }),
+    );
+    expect(await target(misplaced).send(UPLOAD)).toEqual({
+      status: "failed",
+      message:
+        "server https://sessions.example.com: offset_mismatch: chunk starts at byte 0; the session's log ends at 10",
+    });
+  });
+
+  it("fails on anything else thrown, as it says", async () => {
+    const odd = vi.fn().mockImplementation(() => {
+      throw "the network stack is on fire";
+    });
+    expect(await target(odd).send(UPLOAD)).toEqual({
+      status: "failed",
+      message: "cannot reach https://sessions.example.com: the network stack is on fire",
+    });
+  });
+
+  it("settles an agent without an adapter as rejected without a request", async () => {
+    const fetchImpl = vi.fn();
+    expect(await target(fetchImpl).send({ ...UPLOAD, agent: "emacs" })).toEqual({
+      status: "rejected",
+      message: "unsupported_source: emacs",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("fails without a reachable server", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
     expect(await target(fetchImpl).send(UPLOAD)).toEqual({
       status: "failed",
-      message: "ECONNREFUSED",
+      message: "cannot reach https://sessions.example.com: ECONNREFUSED",
     });
   });
 });

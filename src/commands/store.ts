@@ -11,7 +11,7 @@ import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import type { ServerTarget } from "../config/schema";
 import { configuredTargets, selectTarget } from "../config/targets";
 import { trajectorySourceOf } from "../sessions/start";
-import { SessiondbClient } from "../sources/server-client";
+import { serverClient } from "../sources/server-client";
 import { confirm, isCancel } from "../tui/prompts";
 import { printResult } from "./output";
 
@@ -106,10 +106,7 @@ async function redactOnServer(
   session: { agent: string; sessionId: string },
 ): Promise<{ summary: string; removed: number }> {
   const target = selectServer(cfg, selection);
-  const result = await new SessiondbClient(target.url, target.token).redact(
-    session.agent,
-    session.sessionId,
-  );
+  const result = await serverClient(target).tombstone(session.agent, session.sessionId);
   if (!result) {
     throw new CliUsageError(
       `session ${session.agent}:${session.sessionId} is not on ${target.name}`,

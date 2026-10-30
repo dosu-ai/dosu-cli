@@ -1,18 +1,25 @@
-/** A sessiondb server, as the ship step sees it: it takes the raw transcript of a session with
- * the owner's bearer token, normalizes and redacts it, decides whether it is worth keeping and
- * how much of it is new, and writes the owner's bucket. Its answer becomes the session's outcome
- * in the sync ledger. */
+/** A sessiondb, as the ship step sees it: it takes the raw transcript of a session, normalizes
+ * and redacts it, decides whether it is worth keeping and how much of it is new, and writes the
+ * owner's bucket. Its answer becomes the session's outcome in the sync ledger.
+ *
+ * The work is `@dosu-ai/sessiondb`'s: `createServerTarget` is its HTTP backend (the server runs
+ * the pipeline against its bucket; this machine holds a token), and `createTarget` wraps any of
+ * its clients, so a target over a bucket this machine writes directly is the same code. */
 
-import { gzipSync } from "node:zlib";
+import {
+  connect,
+  type Fetch,
+  isSource,
+  OffsetMismatch,
+  ServerError,
+  type SessionDB,
+  SessionRejected,
+  type ShippedPrefix,
+} from "@dosu-ai/sessiondb";
+import { describeServerError } from "../sources/server-client";
 import { VERSION } from "../version/version";
 
-/** What a client stores of a session it shipped, from the server's answer: how many normalized
- * records the session had and the sha256 of their canonical JSON. Sent back on the next upload
- * so only the session's tail is written. */
-export interface ShippedPrefix {
-  records: number;
-  prefix_sha256: string;
-}
+export type { ShippedPrefix };
 
 /** What one session's upload came to. `shipped` and `trivial` are settled; `rejected` is
  * settled too (the same bytes can never succeed); `failed` stops the batch, backs off, and is
@@ -47,69 +54,73 @@ export interface Target {
   send(input: TargetSend): Promise<TargetResult>;
 }
 
-/** Statuses where re-sending the same bytes cannot succeed: the session is settled as rejected
- * instead of failing every run behind a poison pill. Everything else — auth, rate limit, 5xx,
- * the owner's bucket down (502) — is a failure that backs off and retries. */
-const REJECTED_STATUSES = new Set([400, 413, 422]);
+/** Server statuses where re-sending the same bytes cannot succeed: the session is settled as
+ * rejected instead of failing every run behind a poison pill. (A 422 arrives as the SDK's
+ * `SessionRejected` already.) Everything else — auth, rate limit, 5xx, the owner's bucket down
+ * (502) — is a failure that backs off and retries. */
+const REJECTED_STATUSES = new Set([400, 413]);
 
 /** Per-request cap; ship runs are already detached from the hook, so patience is cheap. */
 const REQUEST_TIMEOUT_MS = 60_000;
 
-interface ServerAnswer {
-  status: "stored" | "duplicate" | "trivial";
-  content_hash?: string;
-  records_total: number;
-  prefix_sha256: string;
+/** `<code>: <message>`, or the message alone when the server gave no code. */
+function detail(err: ServerError | OffsetMismatch): string {
+  return err.code === "unknown" ? err.message : `${err.code}: ${err.message}`;
 }
 
-interface ServerError {
-  error?: { code?: string; message?: string };
+/** A target over any sessiondb client: a server, or a bucket this machine writes. */
+function createTarget(db: SessionDB, options: { name: string; url: string }): Target {
+  const url = options.url.replace(/\/$/, "");
+  return {
+    name: options.name,
+    url,
+    async send(input) {
+      if (!isSource(input.agent)) {
+        return { status: "rejected", message: `unsupported_source: ${input.agent}` };
+      }
+      try {
+        const answer = await db.ingest({ ...input, agent: input.agent });
+        const shipped = { records: answer.records_total, prefix_sha256: answer.prefix_sha256 };
+        if (answer.status === "trivial") return { status: "trivial", shipped };
+        return { status: "shipped", taskId: `${answer.status}:${answer.content_hash}`, shipped };
+      } catch (err) {
+        if (err instanceof SessionRejected) {
+          return { status: "rejected", httpStatus: 422, message: `${err.code}: ${err.message}` };
+        }
+        if (err instanceof ServerError && REJECTED_STATUSES.has(err.status)) {
+          return { status: "rejected", httpStatus: err.status, message: detail(err) };
+        }
+        if (err instanceof ServerError || err instanceof OffsetMismatch) {
+          return { status: "failed", message: `server ${url}: ${detail(err)}` };
+        }
+        // A StoreError's message already names the server when it was never reached.
+        const message = describeServerError(err);
+        return {
+          status: "failed",
+          message: message.includes(url) ? message : `server ${url}: ${message}`,
+        };
+      }
+    },
+  };
 }
 
 export interface ServerTargetOptions {
   name: string;
   url: string;
   token: string;
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  fetchImpl?: Fetch;
 }
 
+/** A sessiondb server as a target: the raw transcript goes to it with the owner's bearer token,
+ * gzipped whatever its size. */
 export function createServerTarget(options: ServerTargetOptions): Target {
-  const url = options.url.replace(/\/$/, "");
-  const fetchImpl = options.fetchImpl ?? fetch;
-  return {
-    name: options.name,
-    url,
-    async send(input) {
-      const body = gzipSync(Buffer.from(JSON.stringify(input)));
-      try {
-        const response = await fetchImpl(`${url}/v1/sessions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Content-Encoding": "gzip",
-            Authorization: `Bearer ${options.token}`,
-            "User-Agent": `dosu-cli/${VERSION}`,
-          },
-          body: new Uint8Array(body),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        if (response.status === 200 || response.status === 201) {
-          const answer = (await response.json()) as ServerAnswer;
-          const shipped = { records: answer.records_total, prefix_sha256: answer.prefix_sha256 };
-          if (answer.status === "trivial") return { status: "trivial", shipped };
-          return { status: "shipped", taskId: `${answer.status}:${answer.content_hash}`, shipped };
-        }
-        const detail = (await response.json().catch(() => ({}))) as ServerError;
-        const message = detail.error?.message
-          ? `${detail.error.code ?? response.status}: ${detail.error.message}`
-          : `HTTP ${response.status}`;
-        if (REJECTED_STATUSES.has(response.status)) {
-          return { status: "rejected", httpStatus: response.status, message };
-        }
-        return { status: "failed", message: `server ${url}: ${message}` };
-      } catch (err) {
-        return { status: "failed", message: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  };
+  const db = connect({
+    server: options.url,
+    token: options.token,
+    fetch: options.fetchImpl,
+    gzipFrom: 0,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    userAgent: `dosu-cli/${VERSION}`,
+  });
+  return createTarget(db, { name: options.name, url: options.url });
 }
