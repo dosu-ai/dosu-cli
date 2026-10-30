@@ -31,10 +31,15 @@ function prefixHash(lines: string[], n: number): string {
   return sha256(lines.slice(0, n).join("\n"));
 }
 
-/** The upload a request to the server target carries (its body is gzipped JSON). */
+/** The upload a request to the server target carries: JSON bytes, gzipped when the headers say
+ * so. */
 export function uploadOf(init: RequestInit | undefined): Upload {
   const body = init?.body;
-  if (body instanceof Uint8Array) return JSON.parse(gunzipSync(Buffer.from(body)).toString());
+  const gzipped = new Headers(init?.headers).get("content-encoding") === "gzip";
+  if (body instanceof Uint8Array) {
+    const bytes = gzipped ? gunzipSync(Buffer.from(body)) : Buffer.from(body);
+    return JSON.parse(bytes.toString());
+  }
   return JSON.parse(body as string);
 }
 

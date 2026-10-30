@@ -46,7 +46,7 @@ function world(overrides: Partial<World> = {}): World & { fetch: Fetch } {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetch: Fetch = async (url, init) => {
     w.calls.push({ url, init });
-    const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+    const auth = new Headers(init?.headers).get("authorization");
     if (url.startsWith(SERVER)) {
       if (auth !== `Bearer ${TOKEN}`) {
         return json({ error: { code: "unauthorized", message: "nope" } }, 401);
@@ -249,7 +249,7 @@ describe("runServerWizard", () => {
     const result = await runServerWizard(loadConfig(), {}, {}, flaky);
     expect(result?.target).toMatchObject({ url: SERVER, owner: "acme" });
     expect(wrongCalls).toBe(2);
-    expect(logged("error")).toContain("could not reach https://wrong.example.com");
+    expect(logged("error")).toContain("cannot reach https://wrong.example.com");
     expect(logged("error")).toContain("https://wrong.example.com answered HTTP 502");
   });
 

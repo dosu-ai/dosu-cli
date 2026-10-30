@@ -14,7 +14,13 @@ import * as p from "../tui/prompts";
 import { sourcesApi } from "./api";
 import { bucketOfStorage, type ConnectResult, connectBucketToDosu, preflight } from "./connect";
 import { asker, type KeyPair, required, WizardCancelled } from "./prompts";
-import { type Me, serverError } from "./server-client";
+import {
+  describeServerError,
+  isUnauthorized,
+  isUnreachable,
+  type Me,
+  serverClient,
+} from "./server-client";
 
 export interface ServerWizardResult extends ConnectResult {
   target: ServerTarget;
@@ -58,21 +64,13 @@ export async function bucketOfTarget(
   account_id?: string;
   endpoint?: string;
 }> {
-  let response: Response;
+  let storage: Me["storage"];
   try {
-    response = await fetchImpl(`${target.url.replace(/\/$/, "")}/v1/me`, {
-      headers: { Authorization: `Bearer ${target.token}` },
-      signal: AbortSignal.timeout(15_000),
-    });
+    ({ storage } = await serverClient(target, fetchImpl).me());
   } catch (err) {
-    throw new CliUsageError(
-      `could not reach ${target.url}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    if (isUnreachable(err)) throw new CliUsageError(describeServerError(err));
+    throw new CliUsageError(`${target.url} answered ${describeServerError(err)}`);
   }
-  if (!response.ok) {
-    throw new CliUsageError(`${target.url} answered ${await serverError(response)}`);
-  }
-  const { storage } = (await response.json()) as Me;
   const parsed = bucketOfStorage(storage);
   if (!parsed) {
     throw new CliUsageError(`${storage.url} is not a bucket Dosu can read (s3:// or r2://)`);
@@ -94,20 +92,13 @@ async function identity(
   token: string,
 ): Promise<Me | { error: string; unauthorized: boolean }> {
   try {
-    const response = await fetchImpl(`${url}/v1/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (response.status === 401) {
+    return await serverClient({ url, token }, fetchImpl).me();
+  } catch (err) {
+    if (isUnauthorized(err)) {
       return { error: "the server did not accept that token", unauthorized: true };
     }
-    if (!response.ok) {
-      return { error: `${url} answered ${await serverError(response)}`, unauthorized: false };
-    }
-    return (await response.json()) as Me;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: `could not reach ${url}: ${message}`, unauthorized: false };
+    if (isUnreachable(err)) return { error: describeServerError(err), unauthorized: false };
+    return { error: `${url} answered ${describeServerError(err)}`, unauthorized: false };
   }
 }
 

@@ -1,95 +1,55 @@
 /** A sessiondb server's API, as the CLI uses it with an owner token: who the token is and which
- * bucket the server writes (`GET /v1/me`, for setup), and removing a session (`dosu redact`).
- * Shipping itself is shipper/target.ts. The shapes mirror the server's docs/server.md; only the
- * fields the CLI reads are typed. */
+ * bucket the server writes (`me()`, for setup), and removing a session (`dosu redact`). Shipping
+ * itself is shipper/target.ts. Both are `@dosu/sessiondb`'s HTTP backend with the CLI's
+ * timeout and User-Agent. */
 
+import {
+  connect,
+  type Fetch,
+  type Identity,
+  ServerError,
+  type SessionDB,
+  type StorageView,
+  StoreError,
+} from "@dosu/sessiondb";
 import { VERSION } from "../version/version";
 
-export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+export type { Fetch };
 
-class ServerError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "ServerError";
-  }
+/** The bucket the server writes, as `me()` describes it (never its keys). */
+export type LinkedStorage = StorageView;
+
+/** Who a token is: the name sessions are filed under (`owners/<owner>/`) and where. */
+export type Me = Identity;
+
+/** The server behind a target, for the short calls (setup's check, a redaction). */
+export function serverClient(target: { url: string; token: string }, fetchImpl?: Fetch): SessionDB {
+  return connect({
+    server: target.url,
+    token: target.token,
+    fetch: fetchImpl,
+    timeoutMs: 30_000,
+    userAgent: `dosu-cli/${VERSION}`,
+  });
 }
 
-/** `<code>: <message>` from the server's error envelope, else the HTTP status. */
-export async function serverError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string } };
-    if (body?.error?.message) {
-      return body.error.code ? `${body.error.code}: ${body.error.message}` : body.error.message;
-    }
-  } catch {
-    // not JSON
+/** What a failed call comes to in a message: `<code>: <message>` from the server's error
+ * envelope, `HTTP <status>` when it gave none, or why the server could not be reached. */
+export function describeServerError(err: unknown): string {
+  if (err instanceof ServerError) {
+    return err.code === "unknown" ? err.message : `${err.code}: ${err.message}`;
   }
-  return `HTTP ${response.status}`;
+  if (err instanceof StoreError) return err.message;
+  return err instanceof Error ? err.message : String(err);
 }
 
-/** The bucket the server writes, as `GET /v1/me` describes it (never its keys). */
-export interface LinkedStorage {
-  /** `s3://bucket/prefix`, `r2://bucket/prefix` or `file:///path`. */
-  url: string;
-  region?: string;
-  account_id?: string;
-  endpoint?: string;
+/** The server was never reached: DNS, a refused connection, the timeout. (A `StoreError` with
+ * no cause is the server saying its own bucket is down, a 502 it did answer.) */
+export function isUnreachable(err: unknown): boolean {
+  return err instanceof StoreError && err.cause !== undefined;
 }
 
-export interface Me {
-  /** The name sessions are filed under in the bucket (`owners/<owner>/`). */
-  owner: string;
-  storage: LinkedStorage;
-}
-
-export class SessiondbClient {
-  private readonly url: string;
-  private readonly fetchImpl: Fetch;
-
-  constructor(
-    url: string,
-    private readonly token: string,
-    fetchImpl?: Fetch,
-  ) {
-    this.url = url.replace(/\/+$/, "");
-    this.fetchImpl = fetchImpl ?? fetch;
-  }
-
-  private async call<T>(method: string, path: string, options: { notFound?: T } = {}): Promise<T> {
-    const response = await this.fetchImpl(`${this.url}${path}`, {
-      method,
-      headers: { Authorization: `Bearer ${this.token}`, "User-Agent": `dosu-cli/${VERSION}` },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (response.status === 404 && "notFound" in options) return options.notFound as T;
-    if (!response.ok) {
-      const body = (await response
-        .clone()
-        .json()
-        .catch(() => ({}))) as { error?: { code?: string } };
-      throw new ServerError(
-        response.status,
-        body.error?.code ?? "http_error",
-        await serverError(response),
-      );
-    }
-    return (await response.json()) as T;
-  }
-
-  me(): Promise<Me> {
-    return this.call("GET", "/v1/me");
-  }
-
-  /** Tombstone a session; null when the server has no such session. */
-  redact(agent: string, sessionId: string): Promise<{ removed: number } | null> {
-    return this.call(
-      "DELETE",
-      `/v1/sessions/${encodeURIComponent(agent)}/${encodeURIComponent(sessionId)}`,
-      { notFound: null },
-    );
-  }
+/** The 401 a wrong token gets. */
+export function isUnauthorized(err: unknown): boolean {
+  return err instanceof ServerError && err.status === 401;
 }
