@@ -1,4 +1,4 @@
-import { ServerError, StoreError } from "@dosu-ai/sessiondb";
+import { ServerError, StoreError } from "@dosu/sessiondb";
 import { describe, expect, it, vi } from "vitest";
 import { describeServerError, isUnauthorized, isUnreachable, serverClient } from "./server-client";
 

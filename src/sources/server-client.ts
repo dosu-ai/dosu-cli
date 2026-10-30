@@ -1,6 +1,6 @@
 /** A sessiondb server's API, as the CLI uses it with an owner token: who the token is and which
  * bucket the server writes (`me()`, for setup), and removing a session (`dosu redact`). Shipping
- * itself is shipper/target.ts. Both are `@dosu-ai/sessiondb`'s HTTP backend with the CLI's
+ * itself is shipper/target.ts. Both are `@dosu/sessiondb`'s HTTP backend with the CLI's
  * timeout and User-Agent. */
 
 import {
@@ -11,7 +11,7 @@ import {
   type SessionDB,
   type StorageView,
   StoreError,
-} from "@dosu-ai/sessiondb";
+} from "@dosu/sessiondb";
 import { VERSION } from "../version/version";
 
 export type { Fetch };

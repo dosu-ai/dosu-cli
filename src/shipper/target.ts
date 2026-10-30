@@ -2,7 +2,7 @@
  * and redacts it, decides whether it is worth keeping and how much of it is new, and writes the
  * owner's bucket. Its answer becomes the session's outcome in the sync ledger.
  *
- * The work is `@dosu-ai/sessiondb`'s: `createServerTarget` is its HTTP backend (the server runs
+ * The work is `@dosu/sessiondb`'s: `createServerTarget` is its HTTP backend (the server runs
  * the pipeline against its bucket; this machine holds a token), and `createTarget` wraps any of
  * its clients, so a target over a bucket this machine writes directly is the same code. */
 
@@ -15,7 +15,7 @@ import {
   type SessionDB,
   SessionRejected,
   type ShippedPrefix,
-} from "@dosu-ai/sessiondb";
+} from "@dosu/sessiondb";
 import { describeServerError } from "../sources/server-client";
 import { VERSION } from "../version/version";
 
