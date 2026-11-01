@@ -67,11 +67,24 @@ interface SyncQueued {
   workflow_id: string;
 }
 
+/** `POST /hosted`: the login set up on Dosu's own sessiondb. The server to ship to, a token it
+ * accepts as `owner` until `expires_at`, and the source Dosu reads the result through. */
+export interface HostedSource {
+  server_url: string;
+  token: string;
+  owner: string;
+  expires_at: string;
+  source: SourceStatus;
+}
+
 export interface SourcesApi {
   deploymentId: string;
   /** The Dosu this client talks to, for messages that say which one failed. */
   backendUrl: string;
   connect(body: Omit<ConnectSourceRequest, "deployment_id">): Promise<SourceStatus>;
+  /** Set this login up on Dosu's sessiondb; idempotent, and a fresh token each time. 404 on a
+   * Dosu that hosts none. */
+  hosted(): Promise<HostedSource>;
   list(): Promise<SourceStatus[]>;
   get(id: string): Promise<SourceStatus>;
   sync(id: string): Promise<SyncQueued>;
@@ -128,6 +141,7 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
     deploymentId,
     backendUrl: backendUrl.replace(/\/$/, ""),
     connect: (body) => call("POST", "", { deployment_id: deploymentId, ...body }),
+    hosted: () => call("POST", "/hosted", { deployment_id: deploymentId }),
     list: async () =>
       (await call<{ sources: SourceStatus[] }>("GET", `?deployment_id=${deploymentId}`)).sources,
     get: (id) => call("GET", `/${encodeURIComponent(id)}`),

@@ -26,6 +26,8 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
+import { sourcesApi } from "../sources/api";
+import { HostedUnavailable, setupHostedTarget } from "../sources/hosted";
 import { runServerWizard } from "../sources/server-wizard";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -272,46 +274,98 @@ function setupOutroMessage(mcpCompleted: boolean): string {
 }
 
 /** Where finished sessions are kept: a sessiondb server, which normalizes and redacts them and
- * writes a bucket the user owns; Dosu reads that bucket and keeps only what it learns. A server
- * already set up is shown and kept unless `--storage` asks again. Returns null when the user
- * cancelled the flow mid-way (nothing was saved), so setup stops where they did; "none" when
- * they chose to ship nowhere for now. */
+ * writes a bucket; Dosu reads that bucket and keeps only what it learns. Dosu runs one, and
+ * picking it is a single call to the login (nothing to paste); a team that wants the
+ * transcripts in a bucket of its own runs its own server and gives the user a URL and a token.
+ * A target already set up is shown and kept unless `--storage` asks again. Returns null when
+ * the user cancelled the flow mid-way (nothing was saved), so setup stops where they did;
+ * "none" when they chose to ship nowhere for now. */
 export async function stepChooseSessionStorage(
   cfg: Config,
   opts: Pick<SetupOptions, "storage"> = {},
-): Promise<"server" | "none" | null> {
+): Promise<"hosted" | "server" | "none" | null> {
   const targets = configuredTargets(cfg);
   const current = targets.find((t) => t.name === cfg.default_target) ?? targets[0];
   if (current && !opts.storage) {
     p.log.success(
       wrapLog(
-        `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
-          current.source_id ? ", whose bucket Dosu reads" : ""
-        }. ${info("dosu setup --storage")} changes that.`,
+        current.hosted
+          ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${info("dosu setup --storage")} changes that.`
+          : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
+              current.source_id ? ", whose bucket Dosu reads" : ""
+            }. ${info("dosu setup --storage")} changes that.`,
       ),
     );
-    return "server";
+    return current.hosted ? "hosted" : "server";
   }
   logger.info("setup", "Step: choose session storage");
   p.log.message(
     wrapLog(
-      "Dosu memory learns from finished agent sessions. They go to a sessiondb server, which redacts them and writes a bucket you own; Dosu reads that bucket, keeps only what it learns, and loses access the moment you disconnect. Whoever runs the server gives you its URL and a token.",
+      "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed. A session goes to a sessiondb server, which redacts it and stores it in a bucket; Dosu reads the bucket and keeps only what it learns.",
     ),
   );
+  const api = sourcesApi(cfg);
   const choice = await p.select({
-    message: "Set up session storage now?",
+    message: "Where should finished sessions go?",
     options: [
-      { value: "server" as const, label: "Yes, I have a server URL and token" },
-      { value: "none" as const, label: "Not now", hint: "nothing ships until a server is set up" },
+      ...(api
+        ? [
+            {
+              value: "hosted" as const,
+              label: "Dosu's sessiondb (recommended)",
+              hint: "nothing to set up; Dosu stores your sessions and learns from them",
+            },
+          ]
+        : []),
+      {
+        value: "server" as const,
+        label: api ? "My own sessiondb server" : "My sessiondb server",
+        hint: "a URL and a token; the transcripts stay in a bucket you own",
+      },
+      { value: "none" as const, label: "Not now", hint: "nothing ships until one is set up" },
     ],
   });
-  if (p.isCancel(choice) || choice !== "server") {
+  if (p.isCancel(choice) || choice === "none") {
     p.log.info(
       wrapLog(
-        `Nothing ships until then. ${info("dosu sources setup --server <url> --token <token>")} sets it up later.`,
+        `Nothing ships until then. ${info("dosu sources setup")} sets it up later${
+          api ? ` (${info("--hosted")} for Dosu's)` : ""
+        }.`,
       ),
     );
     return "none";
+  }
+  if (choice === "hosted" && api) {
+    const s = p.spinner();
+    s.start("Setting you up on Dosu's sessiondb...");
+    try {
+      const { target } = await setupHostedTarget(cfg, api);
+      s.stop(`Sessions ship to Dosu's sessiondb as ${target.owner}`);
+      p.log.info(
+        wrapLog(
+          "Secrets are redacted before anything is stored, and Dosu learns from a session within a few minutes of its upload. dosu knowledge transcripts disable stops shipping altogether.",
+        ),
+      );
+      return "hosted";
+    } catch (err) {
+      if (!(err instanceof CliUsageError)) throw err;
+      s.stop(
+        err instanceof HostedUnavailable
+          ? "Dosu does not host a sessiondb"
+          : "Dosu could not set it up",
+        1,
+      );
+      p.log.warn(
+        wrapLog(
+          `${err.message}\n${
+            err instanceof HostedUnavailable
+              ? `Your own server works instead: ${info("dosu sources setup --server <url> --token <token>")}.`
+              : `${info("dosu sources setup --hosted")} tries again; nothing ships until then.`
+          }`,
+        ),
+      );
+      return "none";
+    }
   }
   try {
     const result = await runServerWizard(cfg);
@@ -369,7 +423,11 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
     wrapLog(
       [
         "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
-        `Sessions are uploaded to your sessiondb server${server ? ` ${server.url}` : ""}, which redacts secrets before anything is stored. ${
+        `Sessions are uploaded to ${
+          server?.hosted
+            ? "Dosu's sessiondb"
+            : `your sessiondb server${server ? ` ${server.url}` : ""}`
+        }, which redacts secrets before anything is stored. ${
           incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"
         } dosu knowledge transcripts disable to stop shipping altogether.`,
       ].join("\n"),

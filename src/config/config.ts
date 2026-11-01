@@ -256,6 +256,10 @@ function normalizeServerTarget(value: unknown): ServerTarget | undefined {
     owner,
     token,
     ...(stringValue(value.source_id) ? { source_id: value.source_id as string } : {}),
+    ...(value.hosted === true ? { hosted: true } : {}),
+    ...(stringValue(value.token_expires_at)
+      ? { token_expires_at: value.token_expires_at as string }
+      : {}),
   };
 }
 

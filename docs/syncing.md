@@ -23,9 +23,10 @@ agent it detects and names the ones it skipped. Claude Code counts as detected w
 run (which is what creates `~/.claude`); `dosu knowledge transcripts enable` and `dosu setup` detect
 it the same way, and say so when they skip it. The sync scans the last 30 days of agent sessions, keeps the
 ones its ledger has no answer for, applies the repo scope and pause switch from
-`~/.config/dosu-cli/knowledge-sync.json`, and ships each one's raw transcript to the team's
-[sessiondb server](https://github.com/dosu-ai/sessiondb) (`dosu sources setup`; see "Where
-sessions are stored" in the README). The server redacts and normalizes it, decides whether it is
+`~/.config/dosu-cli/knowledge-sync.json`, and ships each one's raw transcript to a
+[sessiondb server](https://github.com/dosu-ai/sessiondb): Dosu's own, or one the team runs
+(`dosu sources setup --hosted` or `--server`; see "Where sessions are stored" in the README).
+The server redacts and normalizes it, decides whether it is
 worth keeping and how much of it is new, and writes it to the bucket; Dosu reads the bucket and
 learns from each session there. This machine holds a token, never a bucket credential, and the
 transcript leaves it unredacted over TLS, so the server is where secrets stop. Shipping is on by default;

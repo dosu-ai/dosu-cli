@@ -17,6 +17,7 @@ import {
   type SourcesApi,
   SourcesApiError,
 } from "../sources/api";
+import { setupHostedTarget } from "../sources/hosted";
 import {
   bucketOfTarget,
   runServerWizard,
@@ -54,7 +55,7 @@ function selectServer(cfg: Config, selection: TargetSelection): ServerTarget {
   }
   if (!target) {
     throw new CliUsageError(
-      "no sessiondb server configured: run 'dosu sources setup --server <url> --token <token>'",
+      "no sessiondb server configured: run 'dosu sources setup --hosted' (Dosu's) or 'dosu sources setup --server <url> --token <token>' (your own)",
     );
   }
   return target;
@@ -109,6 +110,7 @@ async function requireSource(api: SourcesApi, target: ServerTarget): Promise<Sou
 // --- setup -------------------------------------------------------------------
 
 interface SetupOptions {
+  hosted?: boolean;
   server?: string;
   token?: string;
   name?: string;
@@ -147,9 +149,10 @@ function setupCommand(): Command {
   return new Command("setup")
     .alias("add")
     .description(
-      "Point this machine at a sessiondb server: a guided setup that checks the token, makes the server where 'dosu sync' ships, and lets Dosu read its bucket. Every answer can be a flag; --yes never prompts",
+      "Point this machine at a sessiondb server: Dosu's own with --hosted (one call to your login, nothing to paste), or a guided setup for your own server that checks the token, makes it where 'dosu sync' ships, and lets Dosu read its bucket. Every answer can be a flag; --yes never prompts",
     )
-    .option("--server <url>", "The server, https://sessions.example.com")
+    .option("--hosted", "Use Dosu's sessiondb: Dosu stores your sessions and learns from them")
+    .option("--server <url>", "Your own server, https://sessions.example.com")
     .option("--token <token>", "The server token (sdb_…) minted for you")
     .option("--name <name>", "The target's name in config (default: server)")
     .option("--read-access-key-id <id>", "Key Dosu reads the bucket with (read-only is enough)")
@@ -160,6 +163,28 @@ function setupCommand(): Command {
     .option("--json", "Output as JSON")
     .action(async (opts: SetupOptions) => {
       const cfg = loadConfig();
+      if (opts.hosted) {
+        if (opts.server || opts.token || opts.readAccessKeyId || opts.readSecretAccessKey) {
+          throw new CliUsageError(
+            "--hosted is Dosu's server: --server, --token and the read keys are for your own",
+          );
+        }
+        const { target, source } = await setupHostedTarget(cfg, requireSourcesApi(cfg), {
+          ...(opts.name ? { name: opts.name } : {}),
+          ...(opts.default === false ? { makeDefault: false } : {}),
+        });
+        if (opts.json) {
+          printResult({ target: { ...target, token: "***" }, source }, opts);
+          return;
+        }
+        console.log(
+          `${pc.green("✓")} Sessions ship to Dosu's sessiondb as ${target.owner}${
+            cfg.default_target === target.name ? "" : ` ('dosu sync --target ${target.name}')`
+          }.`,
+        );
+        console.log(pc.dim("  Dosu reads new sessions within a few minutes of each upload."));
+        return;
+      }
       const yes = opts.yes || opts.json ? { yes: true } : {};
       const result: ServerWizardResult | null = await runServerWizard(cfg, {
         ...wizardInputFromOptions(opts),

@@ -133,6 +133,104 @@ function savedSourceId(): string | undefined {
   return loadConfig().targets?.find((t) => t.name === "team")?.source_id;
 }
 
+describe("sources setup --hosted", () => {
+  const HOSTED = {
+    server_url: "https://sessiondb.dosu.test/",
+    token: "eyJ.hosted.token",
+    owner: "u-42",
+    expires_at: "2027-01-30T00:00:00.000Z",
+    source: source({
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "Dosu sessiondb",
+      kind: "r2",
+      bucket: "sessiondb-prod",
+      prefix: "sessions",
+      owner: "u-42",
+      url: "r2://sessiondb-prod/sessions",
+      region: null,
+      account_id: "acct",
+    }),
+  };
+
+  it("asks Dosu once and saves what comes back as the default target, nothing pasted", async () => {
+    configure([]);
+    dosuAnswers(async () => json(HOSTED, 201));
+
+    await dosu("setup", "--hosted");
+
+    expect(calls()).toEqual([
+      { method: "POST", path: "/v1/memory/sources/hosted", body: { deployment_id: "dep1" } },
+    ]);
+    const cfg = loadConfig();
+    expect(cfg.targets).toEqual([
+      {
+        name: "dosu",
+        url: "https://sessiondb.dosu.test",
+        owner: "u-42",
+        token: "eyJ.hosted.token",
+        source_id: HOSTED.source.id,
+        hosted: true,
+        token_expires_at: "2027-01-30T00:00:00.000Z",
+      },
+    ]);
+    expect(cfg.default_target).toBe("dosu");
+    expect(out.join("\n")).toContain("Sessions ship to Dosu's sessiondb as u-42");
+    expect(out.join("\n")).not.toContain("--target");
+  });
+
+  it("keeps an existing server as the default unless asked, and replaces an earlier hosted target in place", async () => {
+    configure([SERVER, { ...SERVER, name: "dosu", hosted: true, token: "old" }]);
+    saveConfig({ ...loadConfig(), default_target: "team" });
+    dosuAnswers(async () => json(HOSTED, 201));
+
+    await dosu("setup", "--hosted");
+
+    const cfg = loadConfig();
+    expect(cfg.targets?.map((t) => [t.name, t.token])).toEqual([
+      ["team", "sdb_test"],
+      ["dosu", "eyJ.hosted.token"],
+    ]);
+    expect(cfg.default_target).toBe("team");
+    expect(out.join("\n")).toContain("'dosu sync --target dosu'");
+  });
+
+  it("--json prints the target without its token, and the source", async () => {
+    configure([]);
+    dosuAnswers(async () => json(HOSTED, 201));
+
+    await dosu("setup", "--hosted", "--json");
+
+    const printed = JSON.parse(out.join("\n"));
+    expect(printed.target).toMatchObject({ name: "dosu", token: "***", hosted: true });
+    expect(printed.source.id).toBe(HOSTED.source.id);
+  });
+
+  it("says so when this Dosu hosts no sessiondb, and when it could not set one up", async () => {
+    configure([]);
+    dosuAnswers(async () => json({ detail: "this Dosu has no hosted sessiondb" }, 404));
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(
+      /does not host a sessiondb; sessions need your own server/,
+    );
+    dosuAnswers(async () =>
+      json({ detail: "Dosu's sessiondb is misconfigured: SESSIONDB_TOKEN_SECRET" }, 503),
+    );
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(
+      /could not set up its sessiondb for you: HTTP 503: Dosu's sessiondb is misconfigured/,
+    );
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
+
+  it("needs a login, and is not combined with a server of your own", async () => {
+    configure([], false);
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(/not logged in to Dosu/);
+    configure([]);
+    await expect(dosu("setup", "--hosted", "--server", "https://x.example.com")).rejects.toThrow(
+      /--hosted is Dosu's server/,
+    );
+    expect(apiCalls()).toEqual([]);
+  });
+});
+
 describe("sources connect", () => {
   it("registers the target with the keys given, and keeps the source id on it", async () => {
     dosuAnswers(async (_url, init) =>

@@ -47,6 +47,15 @@ vi.mock("../sources/server-wizard", () => ({
   runServerWizard: vi.fn(),
 }));
 
+vi.mock("../sources/api", () => ({
+  sourcesApi: vi.fn(),
+}));
+
+vi.mock("../sources/hosted", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sources/hosted")>()),
+  setupHostedTarget: vi.fn(),
+}));
+
 vi.mock("../debug/logger", () => ({
   logger: {
     debug: vi.fn(),
@@ -177,6 +186,8 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
+import { sourcesApi } from "../sources/api";
+import { HostedUnavailable, setupHostedTarget } from "../sources/hosted";
 import { runServerWizard } from "../sources/server-wizard";
 import {
   loadSyncState,
@@ -3336,24 +3347,121 @@ describe("stepChooseSessionStorage", () => {
     token: "sdb_t",
   };
 
+  const hosted = {
+    name: "dosu",
+    url: "https://sessiondb.dosu.test",
+    owner: "u-42",
+    token: "eyJ",
+    source_id: "src-1",
+    hosted: true,
+  };
+
+  /** The login can call Dosu: the hosted option is on the menu. */
+  const api = { backendUrl: "https://api.dosu.test" } as unknown as ReturnType<typeof sourcesApi>;
+
+  it("offers Dosu's sessiondb first, your own server, or not now", async () => {
+    vi.mocked(sourcesApi).mockReturnValue(api);
+    vi.mocked(p.select).mockResolvedValueOnce("none");
+
+    await stepChooseSessionStorage(makeCfg());
+
+    const [{ message, options }] = vi.mocked(p.select).mock.calls[0] as unknown as [
+      { message: string; options: Array<{ value: string; label: string }> },
+    ];
+    expect(message).toBe("Where should finished sessions go?");
+    expect(options.map((o) => o.value)).toEqual(["hosted", "server", "none"]);
+    expect(options[0]?.label).toContain("Dosu's sessiondb");
+    expect(options[0]?.label).toContain("recommended");
+  });
+
+  it("without a login, offers only your own server", async () => {
+    vi.mocked(sourcesApi).mockReturnValue(undefined);
+    vi.mocked(p.select).mockResolvedValueOnce("none");
+
+    await stepChooseSessionStorage(makeCfg());
+
+    const [{ options }] = vi.mocked(p.select).mock.calls[0] as unknown as [
+      { options: Array<{ value: string }> },
+    ];
+    expect(options.map((o) => o.value)).toEqual(["server", "none"]);
+  });
+
   it("ships nowhere when the user has no server yet, and says how to add one", async () => {
+    vi.mocked(sourcesApi).mockReturnValue(api);
     vi.mocked(p.select).mockResolvedValueOnce("none");
     const cfg = makeCfg();
     saveConfig(cfg);
 
     expect(await stepChooseSessionStorage(cfg)).toBe("none");
     expect(runServerWizard).not.toHaveBeenCalled();
+    expect(setupHostedTarget).not.toHaveBeenCalled();
     expect(loadConfig().targets).toBeUndefined();
-    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("dosu sources setup --server");
+    const said = vi.mocked(p.log.info).mock.calls.join(" ");
+    expect(said).toContain("dosu sources setup");
+    expect(said).toContain("--hosted");
+  });
+
+  it("sets the user up on Dosu's sessiondb with one call when they pick it", async () => {
+    vi.mocked(sourcesApi).mockReturnValue(api);
+    vi.mocked(p.select).mockResolvedValueOnce("hosted");
+    vi.mocked(setupHostedTarget).mockResolvedValueOnce({
+      target: hosted,
+      source: { id: "src-1" } as never,
+    });
+    const cfg = makeCfg();
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("hosted");
+    expect(setupHostedTarget).toHaveBeenCalledWith(cfg, api);
+    expect(runServerWizard).not.toHaveBeenCalled();
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain(
+      "redacted before anything is stored",
+    );
+  });
+
+  it("points at your own server when Dosu hosts none, and at --hosted when it failed", async () => {
+    vi.mocked(sourcesApi).mockReturnValue(api);
+    vi.mocked(p.select).mockResolvedValueOnce("hosted");
+    vi.mocked(setupHostedTarget).mockRejectedValueOnce(
+      new HostedUnavailable("https://api.dosu.test"),
+    );
+
+    expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
+    let warned = vi.mocked(p.log.warn).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(warned).toContain("does not host a sessiondb");
+    expect(warned).toContain("dosu sources setup --server <url> --token <token>");
+
+    vi.mocked(p.log.warn).mockClear();
+    vi.mocked(p.select).mockResolvedValueOnce("hosted");
+    vi.mocked(setupHostedTarget).mockRejectedValueOnce(
+      new CliUsageError("Dosu could not set up its sessiondb for you: HTTP 503"),
+    );
+
+    expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
+    warned = vi.mocked(p.log.warn).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(warned).toContain("HTTP 503");
+    expect(warned).toContain("dosu sources setup --hosted");
+  });
+
+  it("keeps a hosted target that is already set up and says so", async () => {
+    const cfg = { ...makeCfg(), targets: [hosted], default_target: "dosu" };
+    saveConfig(cfg);
+
+    expect(await stepChooseSessionStorage(cfg)).toBe("hosted");
+    expect(vi.mocked(p.select)).not.toHaveBeenCalled();
+    const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain("Dosu's sessiondb");
+    expect(said).toContain("dosu setup --storage");
   });
 
   it("runs the server wizard when the user has a URL and token", async () => {
+    vi.mocked(sourcesApi).mockReturnValue(api);
     vi.mocked(p.select).mockResolvedValueOnce("server");
     vi.mocked(runServerWizard).mockResolvedValueOnce({ target: server });
     const cfg = makeCfg();
 
     expect(await stepChooseSessionStorage(cfg)).toBe("server");
     expect(runServerWizard).toHaveBeenCalledWith(cfg);
+    expect(setupHostedTarget).not.toHaveBeenCalled();
   });
 
   it("stops setup when the wizard was cancelled", async () => {

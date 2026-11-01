@@ -46,6 +46,11 @@ export interface ServerTarget {
   /** The Dosu source the server's bucket is connected as (`dosu sources connect`); absent when
    * the bucket is only an archive. `dosu sync` nudges it after shipping. */
   source_id?: string;
+  /** Dosu's own sessiondb: the token came from the Dosu login (`POST /v1/memory/sources/hosted`)
+   * rather than a server's `.env`, and is renewed from it before `token_expires_at`. */
+  hosted?: boolean;
+  /** When a hosted token stops working (ISO 8601). */
+  token_expires_at?: string;
 }
 
 /** Runtime and on-disk schema. Account-owned target state cannot exist outside its account. */

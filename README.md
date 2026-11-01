@@ -123,13 +123,17 @@ Run `dosu <command> --help` for subcommands and flags.
 
 ### Where sessions are stored
 
-Finished sessions ship to a [sessiondb server](https://github.com/dosu-ai/sessiondb) your team runs.
-This machine holds only the server's URL and a token (`sdb_…`); the server normalizes, redacts and
-writes the sessions to its bucket in the [sessionstorage layout](https://github.com/dosu-ai/sessiondb/blob/main/docs/layout.md),
-and Dosu reads that bucket (read-only) to learn from them.
+Finished sessions ship to a [sessiondb server](https://github.com/dosu-ai/sessiondb), which
+normalizes and redacts them and writes them to its bucket in the [sessionstorage layout](https://github.com/dosu-ai/sessiondb/blob/main/docs/layout.md);
+Dosu reads that bucket (read-only) to learn from them. `dosu setup` asks once which server
+(`dosu setup --storage` asks again):
 
-`dosu setup` asks for the server once (`dosu setup --storage` asks again). Non-interactively:
-`dosu sources setup --server https://sessions.example.com --token sdb_… --yes`.
+- **Dosu's sessiondb** — nothing to set up. Your login mints a token for your own folder on the
+  server Dosu runs, and Dosu reads that folder. Non-interactively: `dosu sources setup --hosted`.
+- **Your own server** — your team runs one and the transcripts stay in a bucket it owns. This
+  machine holds only the server's URL and a token (`sdb_…`); Dosu gets a read-only key to the
+  bucket. Non-interactively:
+  `dosu sources setup --server https://sessions.example.com --token sdb_… --yes`.
 
 `dosu redact` removes a shipped session through the server's API; everything else about a shipped
 session is read from the bucket, not through this machine.

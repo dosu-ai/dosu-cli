@@ -10,6 +10,7 @@ import { captureHookSession, endedSessionArgs, parseEndedSessionArgs } from "../
 import { pinEndedSessionProjects } from "../sessions/project-dir";
 import { displayRepo } from "../sessions/repo";
 import { selectTarget, type TargetSelection } from "../shipper/select";
+import { hostedTokenNeedsRenewal } from "../sources/hosted";
 import { spawnDetachedSelf } from "../sync/detach";
 import { isShippingEnabled, outcomeCounts, SESSION_OUTCOMES, type SyncState } from "../sync/state";
 import { getSyncStatus, type SyncStatus } from "../sync/status";
@@ -199,14 +200,31 @@ async function nudgeSource(
  * is enforced inside the sync pipeline, against the same state file it already loads. */
 function buildShipper(selection: TargetSelection): Shipper {
   const cfg = loadConfig();
-  const target = selectTarget(cfg, selection);
-  if (!target) return { ship: undefined, destination: "a sessiondb server" };
-  const sourceId = configuredTargets(cfg).find((t) => t.name === target.name)?.source_id;
+  const selected = selectTarget(cfg, selection);
+  if (!selected) return { ship: undefined, destination: "a sessiondb server" };
+  const configured = configuredTargets(cfg).find((t) => t.name === selected.name);
+  const sourceId = configured?.source_id;
   return {
-    destination: `${target.name} (${target.url})`,
+    destination: `${selected.name} (${selected.url})`,
     ...(sourceId ? { sourceId } : {}),
     ship: async (sessions, shipped, hold, settled) => {
       const { createShipStep } = await import("../shipper/runner");
+      // A token Dosu minted is renewed from Dosu before it runs out; the ship goes on with the
+      // old one when Dosu cannot be asked.
+      let target = selected;
+      if (configured && hostedTokenNeedsRenewal(configured)) {
+        const { renewHostedToken } = await import("../sources/hosted");
+        const { sourcesApi } = await import("../sources/api");
+        const { createServerTarget } = await import("../shipper/target");
+        const renewed = await renewHostedToken(cfg, configured, sourcesApi(cfg));
+        if (renewed.token !== configured.token) {
+          target = createServerTarget({
+            name: renewed.name,
+            url: renewed.url,
+            token: renewed.token,
+          });
+        }
+      }
       return createShipStep({ target })(sessions, shipped, hold, settled);
     },
   };
