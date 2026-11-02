@@ -89,11 +89,17 @@ function calls(): Array<{ method: string; path: string; body?: unknown }> {
   }));
 }
 
-/** Dosu answers with `impl`; the sessiondb server always says what bucket it writes. */
+/** What Dosu's own sessiondb answers `GET /v1/me`; a test changes it to refuse the token. */
+let hostedServerAnswers: () => Response = () =>
+  json({ owner: "u-42", storage: { url: "r2://sessiondb-prod/sessions", account_id: "acct" } });
+
+/** Dosu answers with `impl`; the sessiondb servers say what bucket they write. */
 function dosuAnswers(impl: Fetch): void {
-  fetchImpl.mockImplementation(async (url, init) =>
-    url.startsWith(SERVER.url) ? json({ owner: "james", storage }) : impl(url, init),
-  );
+  fetchImpl.mockImplementation(async (url, init) => {
+    if (url.startsWith(SERVER.url)) return json({ owner: "james", storage });
+    if (url.startsWith("https://sessiondb.dosu.test")) return hostedServerAnswers();
+    return impl(url, init);
+  });
 }
 
 beforeEach(() => {
@@ -105,6 +111,8 @@ beforeEach(() => {
   vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", undefined);
   vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", undefined);
   storage = { ...SERVER_STORAGE };
+  hostedServerAnswers = () =>
+    json({ owner: "u-42", storage: { url: "r2://sessiondb-prod/sessions", account_id: "acct" } });
   fetchImpl = vi.fn<Fetch>();
   dosuAnswers(async () => json({ sources: [] }));
   vi.stubGlobal("fetch", fetchImpl);
@@ -152,7 +160,7 @@ describe("sources setup --hosted", () => {
     }),
   };
 
-  it("asks Dosu once and saves what comes back as the default target, nothing pasted", async () => {
+  it("asks Dosu once, tries the token on Dosu's server, and saves the default target; nothing pasted", async () => {
     configure([]);
     dosuAnswers(async () => json(HOSTED, 201));
 
@@ -161,6 +169,12 @@ describe("sources setup --hosted", () => {
     expect(calls()).toEqual([
       { method: "POST", path: "/v1/memory/sources/hosted", body: { deployment_id: "dep1" } },
     ]);
+    // The token went to the server it is for, as a pasted one would.
+    const [serverUrl, serverInit] = fetchImpl.mock.calls.find(([url]) =>
+      url.startsWith("https://sessiondb.dosu.test"),
+    ) as [string, RequestInit];
+    expect(serverUrl).toBe("https://sessiondb.dosu.test/v1/me");
+    expect(new Headers(serverInit.headers).get("authorization")).toBe("Bearer eyJ.hosted.token");
     const cfg = loadConfig();
     expect(cfg.targets).toEqual([
       {
@@ -217,6 +231,23 @@ describe("sources setup --hosted", () => {
     await expect(dosu("setup", "--hosted")).rejects.toThrow(
       /could not set up its sessiondb for you: HTTP 503: Dosu's sessiondb is misconfigured/,
     );
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
+
+  it("saves nothing when Dosu's server refuses the token it was minted, or is down", async () => {
+    configure([]);
+    dosuAnswers(async () => json(HOSTED, 201));
+    hostedServerAnswers = () =>
+      json({ error: { code: "unauthorized", message: "a valid token is required" } }, 401);
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(
+      /did not accept the token Dosu minted; that is Dosu's to fix/,
+    );
+    hostedServerAnswers = () => json({ owner: "u-7", storage: { url: "r2://x" } });
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(/read the token as u-7, not u-42/);
+    hostedServerAnswers = () => {
+      throw new TypeError("fetch failed");
+    };
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(/Nothing was saved; try again later/);
     expect(loadConfig().targets ?? []).toEqual([]);
   });
 

@@ -2,7 +2,8 @@
  * (`POST /v1/memory/sources/hosted`) does what the server wizard does by hand: the backend
  * mints a token for the user's folder on the server it runs, and registers that folder as a
  * source it reads with its own key. This machine gets back a target like any other, named
- * `dosu`; nothing is pasted, and no bucket credential is anywhere near the laptop.
+ * `dosu`, after trying the token against the server as the wizard tries a pasted one; nothing
+ * is pasted, and no bucket credential is anywhere near the laptop.
  *
  * The token expires. The backend renews it on the same call, so `dosu sync` asks again when
  * the expiry is near (`renewHostedToken`); a run that cannot reach Dosu ships with the token
@@ -14,6 +15,7 @@ import type { ServerTarget } from "../config/schema";
 import { configuredTargets } from "../config/targets";
 import { logger } from "../debug/logger";
 import { type HostedSource, type SourcesApi, SourcesApiError } from "./api";
+import { describeServerError, isUnauthorized, isUnreachable, serverClient } from "./server-client";
 
 /** The target's name in config: `dosu sync --target dosu`. */
 export const HOSTED_TARGET_NAME = "dosu";
@@ -64,16 +66,47 @@ function targetOf(hosted: HostedSource, name: string): ServerTarget {
   };
 }
 
-/** Set this login up on Dosu's sessiondb and save it as a target. Saved before anything else
- * can fail, so a second run (another machine, a new token) replaces it in place. */
+/** The token tried against the server it is for (`GET /v1/me`), as the server wizard tries a
+ * pasted one: a token Dosu minted but its server does not accept (the two do not share a
+ * secret yet, or the server is down) would otherwise be saved and fail at every ship. The
+ * fault is on Dosu's side either way, and the message says so. */
+async function checkWithServer(target: ServerTarget, fetchImpl: FetchLike): Promise<void> {
+  let owner: string;
+  try {
+    ({ owner } = await serverClient(target, fetchImpl).me());
+  } catch (err) {
+    if (isUnauthorized(err)) {
+      throw new CliUsageError(
+        `Dosu's sessiondb at ${target.url} did not accept the token Dosu minted; that is Dosu's to fix, not yours. Nothing was saved.`,
+      );
+    }
+    throw new CliUsageError(
+      `Dosu's sessiondb at ${target.url} ${
+        isUnreachable(err) ? describeServerError(err) : `answered ${describeServerError(err)}`
+      }. Nothing was saved; try again later.`,
+    );
+  }
+  if (owner !== target.owner) {
+    throw new CliUsageError(
+      `Dosu's sessiondb at ${target.url} read the token as ${owner}, not ${target.owner}. Nothing was saved.`,
+    );
+  }
+}
+
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** Set this login up on Dosu's sessiondb and save it as a target, once the server has
+ * accepted the token. A second run (another machine, a new token) replaces it in place. */
 export async function setupHostedTarget(
   cfg: Config,
   api: SourcesApi,
   options: HostedSetupOptions = {},
+  fetchImpl: FetchLike = fetch,
 ): Promise<HostedSetupResult> {
   const hosted = await askDosu(api);
   const name = options.name ?? HOSTED_TARGET_NAME;
   const target = targetOf(hosted, name);
+  await checkWithServer(target, fetchImpl);
   const others = configuredTargets(cfg).filter((t) => t.name !== name);
   cfg.targets = [...others, target];
   const makeDefault = options.makeDefault ?? (others.length === 0 || cfg.default_target === name);
