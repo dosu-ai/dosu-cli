@@ -1,3 +1,10 @@
+## [0.68.6](https://github.com/dosu-ai/dosu-cli/compare/v0.68.5...v0.68.6) (2026-11-03)
+
+
+### Bug Fixes
+
+* **auth:** use Dosu's current Supabase publishable key ([#302](https://github.com/dosu-ai/dosu-cli/issues/302)) ([cef7909](https://github.com/dosu-ai/dosu-cli/commit/cef7909b4351e6724342d72191a5e1145252ebf5))
+
 ## [0.68.5](https://github.com/dosu-ai/dosu-cli/compare/v0.68.4...v0.68.5) (2026-10-22)
 
 
