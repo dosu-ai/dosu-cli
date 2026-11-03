@@ -1,3 +1,17 @@
+# [0.67.0-beta.10](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.9...v0.67.0-beta.10) (2026-11-03)
+
+
+### Bug Fixes
+
+* **auth:** use Dosu's current Supabase publishable key (beta) ([#303](https://github.com/dosu-ai/dosu-cli/issues/303)) ([da2a2a3](https://github.com/dosu-ai/dosu-cli/commit/da2a2a38ead99b1e74400a3a1d03145ab6bdc300))
+
+# [0.67.0-beta.9](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.8...v0.67.0-beta.9) (2026-10-28)
+
+
+### Features
+
+* **shipper:** send the session's GitHub repository as metadata.repo ([#296](https://github.com/dosu-ai/dosu-cli/issues/296)) ([b9d5ff6](https://github.com/dosu-ai/dosu-cli/commit/b9d5ff6d475248514fb9ea99c8cac5340b323983))
+
 # [0.67.0-beta.8](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.7...v0.67.0-beta.8) (2026-10-26)
 
 

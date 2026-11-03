@@ -101,3 +101,13 @@ export function headReflogOfDir(
 export function displayRepo(repo: string): string {
   return repo.split("/").slice(1).join("/") || repo;
 }
+
+/** GitHub's own character sets for an account and a repository name. */
+const GITHUB_SLUG = /^github\.com\/([a-z0-9-]+\/[a-z0-9._-]+)$/;
+
+/** `owner/name` of a repo key on GitHub (`github.com/owner/name`); null for any other host, a
+ * path that is not exactly an owner and a name, or no repo. Repo keys come from
+ * normalizeRepoRemote, which already dropped any credentials in the remote. */
+export function githubSlugOfRepo(repo: string | null): string | null {
+  return repo === null ? null : (GITHUB_SLUG.exec(repo)?.[1] ?? null);
+}
