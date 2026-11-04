@@ -18,7 +18,7 @@ import { type HostedSource, type SourcesApi, SourcesApiError } from "./api";
 import { describeServerError, isUnauthorized, isUnreachable, serverClient } from "./server-client";
 
 /** The target's name in config: `dosu sync --target dosu`. */
-export const HOSTED_TARGET_NAME = "dosu";
+const HOSTED_TARGET_NAME = "dosu";
 
 /** Renew this far ahead of the expiry: a laptop closed for a fortnight still ships on reopen. */
 export const RENEW_BEFORE_MS = 14 * 24 * 60 * 60 * 1000;
