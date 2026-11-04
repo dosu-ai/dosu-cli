@@ -229,7 +229,7 @@ interface ReadCredentials {
 /** Where the keys Dosu will read the bucket with come from, in order: flags,
  * `--read-credentials-stdin`, `DOSU_SOURCE_*` environment variables. This machine holds no
  * bucket keys of its own. */
-async function readCredentials(opts: {
+export async function readCredentials(opts: {
   accessKeyId?: string;
   secretAccessKey?: string;
   sessionToken?: string;

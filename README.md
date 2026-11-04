@@ -117,6 +117,7 @@ Dosu also updates itself automatically. When the update check (every six hours) 
 | `dosu memory` | Search Dosu memory, learned from earlier agent sessions, as an agent's MCP tools do |
 | `dosu project` | Show or link the project key Dosu memory scopes a directory's sessions by |
 | `dosu sources` | sessiondb servers this machine ships to, and their buckets connected to Dosu, which pulls the sessions into memory (`setup`, `connect`, `status`, `sync`, `disconnect`) |
+| `dosu imports` | Buckets of raw session files in another format (your agents' own logs, a Datadog Trajectory capture) that Dosu imports into memory for the org (`connect`, `status`, `sync`, `disconnect`) |
 | `dosu redact <session>` | Remove a shipped session from the server |
 
 Run `dosu <command> --help` for subcommands and flags.
@@ -137,6 +138,12 @@ Dosu reads that bucket (read-only) to learn from them. `dosu setup` asks once wh
 
 `dosu redact` removes a shipped session through the server's API; everything else about a shipped
 session is read from the bucket, not through this machine.
+
+Sessions that already sit in a bucket of your own, in an agent's own format rather than the
+sessionstorage layout (a Datadog Trajectory capture, Claude Code or Codex logs synced to S3),
+need no server: `dosu imports connect --agent datadog-trajectory --bucket … --prefix …` gives
+Dosu a read-only key, and Dosu normalizes and redacts each file into a store it keeps for the
+org, importing new or grown files every few minutes. `dosu imports status` shows what it read.
 
 ### Supported AI tools
 

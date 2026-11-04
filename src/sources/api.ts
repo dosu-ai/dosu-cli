@@ -150,6 +150,154 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
   };
 }
 
+// --- imports -----------------------------------------------------------------
+// `/v1/memory/imports`: a bucket of raw session files (an agent's own logs, a Datadog
+// Trajectory capture) that Dosu imports into its own sessiondb store and reads from there.
+// Org-level: the sessions are the org's, under whoever connected the import.
+
+/** The file formats the sessiondb SDK reads; the backend refuses any other. */
+export const IMPORT_AGENTS = [
+  "claude-code",
+  "cursor",
+  "codex",
+  "opencode",
+  "pi",
+  "gemini-cli",
+  "datadog-trajectory",
+] as const;
+export type ImportAgent = (typeof IMPORT_AGENTS)[number];
+
+export interface ConnectImportRequest {
+  deployment_id: string;
+  agent: ImportAgent;
+  kind: SourceKind;
+  bucket: string;
+  prefix: string;
+  region?: string;
+  account_id?: string;
+  endpoint?: string;
+  access_key_id: string;
+  secret_access_key: string;
+  session_token?: string;
+  name?: string;
+  shards?: number;
+  lookback_days?: number;
+}
+
+interface ImportedFile {
+  key: string;
+  session_id: string;
+  size: number;
+  shipped_bytes: number;
+  outcome: "stored" | "duplicate" | "trivial" | "rejected" | "failed";
+  detail: string | null;
+  content_hash: string | null;
+  imported_at: string;
+}
+
+export interface ImportStatus {
+  id: string;
+  name: string;
+  org: string;
+  deployment_id: string;
+  source_id: string;
+  agent: ImportAgent;
+  kind: SourceKind;
+  bucket: string;
+  prefix: string;
+  url: string;
+  region: string | null;
+  account_id: string | null;
+  endpoint: string | null;
+  shards: number;
+  dated_prefix: string | null;
+  lookback_days: number;
+  enabled: boolean;
+  last_imported_at: string | null;
+  last_error: string | null;
+  error_count: number;
+  last_run_listed: number;
+  last_run_imported: number;
+  last_run_remaining: number;
+  created_at: string;
+  files: number;
+  sessions: number;
+  files_found?: number | null;
+  recent?: ImportedFile[];
+}
+
+interface ImportQueued {
+  id: string;
+  status: "queued";
+  workflow_ids: string[];
+}
+
+export interface ImportsApi {
+  deploymentId: string;
+  backendUrl: string;
+  connect(body: Omit<ConnectImportRequest, "deployment_id">): Promise<ImportStatus>;
+  list(): Promise<ImportStatus[]>;
+  get(id: string): Promise<ImportStatus>;
+  sync(id: string): Promise<ImportQueued>;
+  disconnect(id: string): Promise<void>;
+}
+
+/** The imports client for this install's login, under the same conditions as `sourcesApi`. */
+function importsApi(cfg: Config): ImportsApi | undefined {
+  const account = cfg.active_account?.target;
+  const backendUrl = getBackendURL();
+  if (
+    cfg.mode === MODE_OSS ||
+    !account?.api_key ||
+    !account.deployment_id ||
+    !isAbsoluteHttpUrl(backendUrl)
+  ) {
+    return undefined;
+  }
+  const base = `${backendUrl.replace(/\/$/, "")}/v1/memory/imports`;
+  const apiKey = account.api_key;
+  const deploymentId = account.deployment_id;
+
+  async function call<T>(
+    method: "GET" | "POST" | "DELETE",
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    const response = await fetch(`${base}${path}`, {
+      method,
+      headers: {
+        "X-Dosu-API-Key": apiKey,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    if (!response.ok) throw new SourcesApiError(response.status, await errorDetail(response));
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
+  }
+
+  return {
+    deploymentId,
+    backendUrl: backendUrl.replace(/\/$/, ""),
+    connect: (body) => call("POST", "", { deployment_id: deploymentId, ...body }),
+    list: async () =>
+      (await call<{ imports: ImportStatus[] }>("GET", `?deployment_id=${deploymentId}`)).imports,
+    get: (id) => call("GET", `/${encodeURIComponent(id)}`),
+    sync: (id) => call("POST", `/${encodeURIComponent(id)}/sync`),
+    disconnect: (id) => call("DELETE", `/${encodeURIComponent(id)}`),
+  };
+}
+
+export function requireImportsApi(cfg: Config): ImportsApi {
+  const api = importsApi(cfg);
+  if (!api) {
+    throw new CliUsageError(
+      "not logged in to Dosu: run 'dosu setup' (an import is a bucket Dosu reads for you, so it needs your login)",
+    );
+  }
+  return api;
+}
+
 /** The client, or the usage error that says why there is none. */
 export function requireSourcesApi(cfg: Config): SourcesApi {
   const api = sourcesApi(cfg);
