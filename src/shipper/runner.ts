@@ -39,7 +39,7 @@ interface IngestAccepted {
 /** Who the sessions go to Dosu as: a signed-in user's deployment, through the CLI's route with
  * their API key, or an organization's write-only ingest key, through the ingest route, from a
  * machine nobody signs in on (`dosu sessions push`). */
-export type ShipAuth =
+type ShipAuth =
   | { apiKey: string; deploymentId: string; ingestKey?: never }
   | { ingestKey: string; apiKey?: never; deploymentId?: never };
 
