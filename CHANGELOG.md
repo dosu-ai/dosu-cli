@@ -1,3 +1,10 @@
+# [0.67.0-beta.11](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.10...v0.67.0-beta.11) (2026-11-05)
+
+
+### Features
+
+* **sessions:** push session files with an ingest key ([#304](https://github.com/dosu-ai/dosu-cli/issues/304)) ([c66cb58](https://github.com/dosu-ai/dosu-cli/commit/c66cb58df2f69e17cd875e3acf786895a03fec07))
+
 # [0.67.0-beta.10](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.9...v0.67.0-beta.10) (2026-11-03)
 
 
