@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Workflows pin every action to a commit SHA with its release as a trailing
+  # comment; Dependabot bumps both. If you add a composite action, list its
+  # directory here too (scripts/action-pins.test.ts enforces this).
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
