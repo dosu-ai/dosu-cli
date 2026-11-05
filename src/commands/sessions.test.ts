@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError } from "../cli/command-error";
 import { sessionsCommand } from "./sessions";
@@ -76,8 +77,11 @@ async function run(...args: string[]): Promise<void> {
   await sessionsCommand().parseAsync(["node", "sessions", ...args]);
 }
 
+/** What the command printed, without the colors CI forces on. */
 function printed(spy: ReturnType<typeof vi.spyOn>): string {
-  return spy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+  return stripVTControlCharacters(
+    spy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n"),
+  );
 }
 
 interface Sent {
