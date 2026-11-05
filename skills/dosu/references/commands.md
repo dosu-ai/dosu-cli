@@ -108,6 +108,7 @@ dosu ask <question> [--session <id>] [--timeout <seconds>] [--json]
 dosu knowledge search <query> [--limit <positive-int>] [--json]   # default 10
 dosu knowledge list [--json]
 dosu sessions push <file...>   # DOSU_INGEST_KEY, no login
+dosu sessions push --since <time>  # every session since then
 dosu knowledge sync [--flush] [--json]
 dosu knowledge sync --status [--json]
 
@@ -131,7 +132,7 @@ dosu docs sync-back <id> [--json]
 - Import platforms: `github`, `gitlab`, `azure_devops`, `confluence`, `notion`, `coda`.
 - Publish platforms: the same six. Target flags are `--repo-id`, `--project-id`, `--parent-page-id`, `--doc-id`, `--directory`, and `--data-source-id`; Azure DevOps requires `--data-source-id`. Other target validation may occur in the backend.
 - Import, publish, and sync operations may be asynchronous. Use the returned task/status identifiers rather than assuming completion.
-- `sessions push` sends Claude Code, Codex, or Cursor session files with an organization's ingest key in `DOSU_INGEST_KEY`, for a machine nobody signs in on (a runner, CI). Sessions are redacted before they leave.
+- `sessions push` sends Claude Code, Codex, or Cursor session files, or with `--since <time>` every agent session on the machine since then, with an organization's ingest key in `DOSU_INGEST_KEY`, for a machine nobody signs in on (a runner, CI). Sessions are redacted before they leave; ones too short to learn from are skipped.
 
 ## Review
 
