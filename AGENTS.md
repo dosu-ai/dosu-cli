@@ -105,15 +105,18 @@ Scopes are optional: `fix(config): handle empty file without crash`
 
 ## Release Channels
 
-semantic-release publishes on every push to a release branch. Three channels are configured (`release.config.js`):
+semantic-release publishes on every push to a release branch. Four channels are configured (`release.config.js`):
 
 | Branch | npm dist-tag | Version shape | Install with |
 |---|---|---|---|
 | `main` | `latest` | `0.11.0` | `npx @dosu/cli setup` |
 | `beta` | `beta` | `0.11.0-beta.1` | `npx @dosu/cli@beta setup` |
 | `alpha` | `alpha` | `0.11.0-alpha.1` | `npx @dosu/cli@alpha setup` |
+| `sessions` | `sessions` | `0.11.0-sessions.1` | `npx @dosu/cli@sessions setup` |
 
 An install stays on the channel it came from: update checks, auto-update and `dosu upgrade` read and install the running version's own dist-tag (`releaseTag()` in `src/version/version.ts`), so a beta install moves to the next beta rather than to `latest`. Leaving a prerelease channel means reinstalling from `latest`.
+
+The `sessions` channel is for sessiondb testers. Its dist-tag is public like every other, so it does not decide who can use sessiondb: every memory and sources route needs the org's `ENABLE_AGENT_MEMORY` flag, and that flag is the gate.
 
 The `alpha` channel is for **internal pre-release / dogfooding**. Workflow:
 

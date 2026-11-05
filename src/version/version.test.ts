@@ -27,6 +27,7 @@ describe("version", () => {
     expect(releaseTag("0.63.0-beta.1")).toBe("beta");
     expect(releaseTag("0.63.0-beta.12")).toBe("beta");
     expect(releaseTag("0.11.0-alpha.3")).toBe("alpha");
+    expect(releaseTag("0.69.0-sessions.2")).toBe("sessions");
     expect(releaseTag("0.62.1")).toBe("latest");
     // Only the channels release.config.js publishes; anything else follows latest.
     expect(releaseTag("1.0.0-rc.1")).toBe("latest");

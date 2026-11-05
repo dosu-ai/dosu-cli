@@ -12,13 +12,13 @@ function readPackageVersion(): string {
 export const VERSION = process.env.DOSU_VERSION ?? readPackageVersion();
 
 /** An npm dist-tag Dosu publishes under (release.config.js). */
-export type ReleaseTag = "latest" | "alpha" | "beta";
+export type ReleaseTag = "latest" | "alpha" | "beta" | "sessions";
 
 /** The dist-tag `version` was published under. A prerelease build keeps following its own
  * channel -- update checks and `dosu upgrade` read and install that tag -- so a beta install is
  * never silently moved onto `latest`, and everything else follows `latest`. */
 export function releaseTag(version: string = VERSION): ReleaseTag {
-  const match = /^\d+\.\d+\.\d+-(alpha|beta)(?:\.|$)/.exec(version);
+  const match = /^\d+\.\d+\.\d+-(alpha|beta|sessions)(?:\.|$)/.exec(version);
   return match ? (match[1] as ReleaseTag) : "latest";
 }
 

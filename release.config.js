@@ -2,12 +2,15 @@
 export default {
   branches: [
     "main",
-    // Internal pre-release channels: commits to `alpha`/`beta` publish to npm
-    // under the matching dist-tag, e.g. `0.11.0-alpha.1` / `0.11.0-beta.1`.
-    // Users opt in via `npx @dosu/cli@alpha setup` (or `@beta`). Homebrew is
-    // skipped for these (ci.yml — `update-homebrew` filters versions with `-`).
+    // Internal pre-release channels: commits to `alpha`/`beta`/`sessions` publish
+    // to npm under the matching dist-tag, e.g. `0.11.0-alpha.1` / `0.11.0-beta.1`.
+    // Users opt in via `npx @dosu/cli@alpha setup` (or `@beta`, `@sessions`).
+    // Homebrew is skipped for these (ci.yml — `update-homebrew` filters versions
+    // with `-`). `sessions` is the sessiondb testers' channel; the tag is public,
+    // so who can use it is the backend's agent-memory flag, not the tag.
     { name: "alpha", prerelease: true },
     { name: "beta", prerelease: true },
+    { name: "sessions", prerelease: true },
   ],
   plugins: [
     "@semantic-release/commit-analyzer",

@@ -232,6 +232,8 @@ Releases are fully automated with [semantic-release](https://github.com/semantic
 |---|---|---|
 | `main` | `latest` | `0.20.1` |
 | `alpha` | `alpha` | `0.20.1-alpha.1` |
+| `beta` | `beta` | `0.20.1-beta.1` |
+| `sessions` | `sessions` | `0.20.1-sessions.1` |
 
 On a qualifying push, the CI pipeline bumps the version, builds binaries for all platforms, creates a GitHub release with the archives, publishes to npm, and (for stable releases only) updates the Homebrew formula.
 
