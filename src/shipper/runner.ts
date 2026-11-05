@@ -1,8 +1,9 @@
-/** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
- * opt-out, normalize the raw log to redacted trajectory-v1 records, judge whether they are worth
- * learning from, and POST them to the Dosu memory ingest API, with the session's token usage when
- * its journal records any. Fire-and-forget: the accepted task is never polled; the task id and the
- * shareable session_url are returned for the sync ledger and the report to surface. */
+/** Transcript shipper — the sync pipeline's `ship` step, and `dosu sessions push`'s. Per session:
+ * honor the incognito opt-out, normalize the raw log to redacted trajectory-v1 records, judge
+ * whether they are worth learning from, and POST them to the Dosu memory ingest API, with the
+ * session's token usage when its journal records any. Fire-and-forget: the accepted task is never
+ * polled; the task id and the shareable session_url are returned for the sync ledger and the report
+ * to surface. */
 
 import type { NormalizedRecord } from "@letta-ai/trajectory";
 import { getBackendURL } from "../config/constants";
@@ -28,13 +29,21 @@ const REJECTED_STATUSES = new Set([400, 413, 422]);
 const REQUEST_TIMEOUT_MS = 60_000;
 
 interface IngestAccepted {
+  /** The CLI route's ingest task. */
   task_id?: string;
+  /** The ingest key route's trace. */
+  trace_id?: string;
   session_url?: string | null;
 }
 
-export interface ShipStepOptions {
-  apiKey: string;
-  deploymentId: string;
+/** Who the sessions go to Dosu as: a signed-in user's deployment, through the CLI's route with
+ * their API key, or an organization's write-only ingest key, through the ingest route, from a
+ * machine nobody signs in on (`dosu sessions push`). */
+export type ShipAuth =
+  | { apiKey: string; deploymentId: string; ingestKey?: never }
+  | { ingestKey: string; apiKey?: never; deploymentId?: never };
+
+export type ShipStepOptions = ShipAuth & {
   /** Defaults to getBackendURL(). */
   backendUrl?: string;
   /** Injectable boundaries, for tests. Narrower than `typeof fetch` on purpose: the step only
@@ -48,7 +57,11 @@ export interface ShipStepOptions {
   resolveBranch?: (session: AgentSession, at?: string) => string | null;
   /** The normalized origin repo (`host/owner/name`) of the session's working directory. */
   resolveRepo?: (session: AgentSession) => string | null;
-}
+  /** The environment the sessions' agents ran in, when the caller's is theirs (a runner pushing
+   * its own task's sessions): DOSU_PROJECT there names their project. A sync started from some
+   * agent's hook knows no such thing, so it passes none. */
+  agentEnv?: NodeJS.ProcessEnv;
+};
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
  * failure, per the SyncDeps contract; the pipeline owns all ledger bookkeeping and says, per
@@ -60,6 +73,18 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
   const isIncognito = options.isIncognito ?? isIncognitoSession;
   const normalize = options.normalize ?? normalizeSessionRecords;
   const readUsage = options.readUsage ?? readSessionUsage;
+  const route: { path: string; headers: Record<string, string>; metadata: object } =
+    options.ingestKey !== undefined
+      ? {
+          path: "/v1/memory/ingest",
+          headers: { Authorization: `Bearer ${options.ingestKey}` },
+          metadata: {},
+        }
+      : {
+          path: "/v1/memory/ingest/async",
+          headers: { "X-Dosu-API-Key": options.apiKey },
+          metadata: { deployment_id: options.deploymentId },
+        };
 
   /** One session's result, or null when shipping was turned off before it was sent. */
   async function shipOne(
@@ -109,7 +134,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     const body = JSON.stringify({
       records: plan.records,
       metadata: {
-        deployment_id: options.deploymentId,
+        ...route.metadata,
         project,
         ...(repo ? { repo } : {}),
         agent: trajectorySourceOf(session.harness) ?? session.harness,
@@ -125,12 +150,9 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
     if (late === "stop") return null;
     if (late === "agent") return { session, outcome: "incognito", byAgent: true };
     try {
-      const response = await fetchImpl(`${backendUrl}/v1/memory/ingest/async`, {
+      const response = await fetchImpl(`${backendUrl}${route.path}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Dosu-API-Key": options.apiKey,
-        },
+        headers: { "Content-Type": "application/json", ...route.headers },
         body,
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
@@ -139,7 +161,7 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
         return {
           session,
           outcome: "shipped",
-          taskId: accepted.task_id ?? "unknown",
+          taskId: accepted.task_id ?? accepted.trace_id ?? "unknown",
           ...(typeof accepted.session_url === "string" ? { sessionUrl: accepted.session_url } : {}),
           project,
           // Everything up to here has now shipped, whether this upload was all of it or a tail.
@@ -169,7 +191,8 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
         : createProjectDirResolver();
     const resolve = {
       resolveProject:
-        options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null),
+        options.resolveProject ??
+        ((session) => resolver?.resolveProject(session, options.agentEnv) ?? null),
       resolveBranch:
         options.resolveBranch ?? ((session, at) => resolver?.resolveBranch(session, at) ?? null),
       resolveRepo: options.resolveRepo ?? ((session) => resolver?.resolveRepo(session) ?? null),
