@@ -95,6 +95,15 @@ session it was on; while it runs it keeps the sync lock fresh. Entries are prune
 leaves the 30-day window, except those the per-agent incognito switch settled (see
 [Per-agent incognito](#per-agent-incognito)).
 
+`--age <days>` changes how far back a run ships from: `dosu knowledge sync --flush --age 0` ships
+every pending session on the machine, however old, and `--age 90` the last 90 days. Each shipped
+session is a server-side ingest that bills credits, so a wide backfill is opt-in: hooks and setup's
+backfill keep the 30-day default, and `dosu knowledge sessions --queued --age <days>` lists what it
+would ship first. A run wider than the default records how far back it went (`lookback_since` in the
+state file), and from then on entries are kept back to there, so a later run that wide finds the
+sessions it already settled instead of shipping them again. A narrower `--age` ships less but scans
+and prunes as a default run does.
+
 | Outcome | Meaning |
 |---|---|
 | `shipped` | Accepted by the ingest API (202) |
