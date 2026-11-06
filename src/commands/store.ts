@@ -8,9 +8,10 @@ import pc from "picocolors";
 import { CliUsageError } from "../cli/errors";
 import { type Config, loadConfig, MODE_OSS } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
-import type { ServerTarget } from "../config/schema";
+import type { BucketTarget, ServerTarget } from "../config/schema";
 import { configuredTargets, selectTarget } from "../config/targets";
 import { trajectorySourceOf } from "../sessions/start";
+import { bucketClientOf } from "../shipper/select";
 import { envServer } from "../sources/env-server";
 import { serverClient } from "../sources/server-client";
 import { confirm, isCancel } from "../tui/prompts";
@@ -26,10 +27,11 @@ interface StoreSelection {
   target?: string;
 }
 
-/** A server `redact` can reach: a configured target, or the one the environment names. */
-type RedactServer = Pick<ServerTarget, "name" | "url" | "token">;
+/** What `redact` can reach: a configured server or bucket, or the server the environment
+ * names. */
+type RedactServer = Pick<ServerTarget, "kind" | "name" | "url" | "token"> | BucketTarget;
 
-/** The server `redact` works against: `--target`, else DOSU_SESSIONDB_URL with
+/** The target `redact` works against: `--target`, else DOSU_SESSIONDB_URL with
  * DOSU_SESSIONDB_TOKEN (as `sessions push` ships to), else the default, else the only one;
  * undefined when there is none. */
 function selectServer(cfg: Config, selection: StoreSelection): RedactServer | undefined {
@@ -108,7 +110,8 @@ async function redactOnServer(
   target: RedactServer,
   session: { agent: string; sessionId: string },
 ): Promise<{ summary: string; removed: number }> {
-  const result = await serverClient(target).tombstone(session.agent, session.sessionId);
+  const client = target.kind === "bucket" ? bucketClientOf(target) : serverClient(target);
+  const result = await client.tombstone(session.agent, session.sessionId);
   if (!result) {
     throw new CliUsageError(
       `session ${session.agent}:${session.sessionId} is not on ${target.name}`,

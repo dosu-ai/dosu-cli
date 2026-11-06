@@ -1,6 +1,6 @@
 {
   "name": "@dosu/cli",
-  "version": "0.67.0-sessions.2",
+  "version": "0.67.0-sessions.3",
   "type": "module",
   "description": "Dosu CLI - Set up Dosu MCP for AI tools and work with Dosu Libraries, docs, and reviews",
   "license": "MIT",
@@ -39,7 +39,7 @@
   "dependencies": {},
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
-    "@dosu/sessiondb": "^0.2.0",
+    "@dosu/sessiondb": "^0.4.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",

@@ -4,8 +4,8 @@
 import { CliUsageError } from "../cli/errors";
 import * as p from "../tui/prompts";
 
-/** A static key pair for a bucket. Never saved on this machine: the server holds the write
- * keys, Dosu the read keys. */
+/** A static key pair for a bucket. Dosu's read keys are never saved on this machine; write
+ * keys are, only for a bucket target (no server holds them). */
 export interface KeyPair {
   access_key_id: string;
   secret_access_key: string;
@@ -17,7 +17,9 @@ export function required(label: string): (value: string) => string | undefined {
 }
 
 /** Static keys from the ambient environment, when it has a full pair. */
-export function envCredentials(prefix: "AWS" | "R2" | "DOSU_SOURCE"): KeyPair | undefined {
+export function envCredentials(
+  prefix: "AWS" | "R2" | "DOSU_SOURCE" | "DOSU_BUCKET",
+): KeyPair | undefined {
   const id = process.env[`${prefix}_ACCESS_KEY_ID`];
   const secret = process.env[`${prefix}_SECRET_ACCESS_KEY`];
   if (!id || !secret) return undefined;

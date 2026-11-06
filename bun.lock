@@ -6,7 +6,7 @@
       "name": "@dosu/cli",
       "devDependencies": {
         "@biomejs/biome": "^2.5.0",
-        "@dosu/sessiondb": "^0.2.0",
+        "@dosu/sessiondb": "^0.4.0",
         "@semantic-release/changelog": "^6.0.3",
         "@semantic-release/exec": "^7.1.0",
         "@semantic-release/git": "^10.0.1",
@@ -68,7 +68,7 @@
 
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
 
-    "@dosu/sessiondb": ["@dosu/sessiondb@0.2.0", "", { "dependencies": { "@letta-ai/trajectory": "^0.3.0" } }, "sha512-KjoZhdaSAurOevALgkzdDZDjEjujvbvTrb3gPWl0hAD/C/V6Uc02N0wDzb4Ll+v5aEywUrH7eQ7fdbGhp1naLA=="],
+    "@dosu/sessiondb": ["@dosu/sessiondb@0.4.0", "", { "dependencies": { "@letta-ai/trajectory": "^0.3.0" } }, "sha512-0opCENVN7x6QMdkYsLYFCZ0XBtYogMP7vIYrvJt/RQfeqpEQYr99irzEOq9Sdwg3OmFW3mI6fjYo/XujoiuS2g=="],
 
     "@emnapi/core": ["@emnapi/core@1.11.2", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-TC8MkTuZUtcTSiFeuC0ksCh9QIJ5+F21MvZ4Wn4ORfYaFJ/0dsiudv5tVkejgwZlwQ39jL9WWDe2lz8x0WglOA=="],
 

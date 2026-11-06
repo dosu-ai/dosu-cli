@@ -22,13 +22,13 @@ describe("selectTarget", () => {
 
   it("has nothing to ship to without a server, and will not guess between several", () => {
     expect(selectTarget(config())).toBeUndefined();
-    expect(() => selectTarget(config({ targets: [LAB, TEAM] }))).toThrow(/several servers/);
+    expect(() => selectTarget(config({ targets: [LAB, TEAM] }))).toThrow(/several targets/);
   });
 
   it("explains an unknown --target", () => {
     expect(() => selectTarget(config({ targets: [TEAM] }), { target: "nope" })).toThrow(
       /unknown target 'nope' \(configured: team\)/,
     );
-    expect(() => selectTarget(config(), { target: "nope" })).toThrow(/no server configured/);
+    expect(() => selectTarget(config(), { target: "nope" })).toThrow(/no target configured/);
   });
 });

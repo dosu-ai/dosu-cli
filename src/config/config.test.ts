@@ -419,6 +419,34 @@ describe("config", () => {
     expect(cfg.default_target).toBeUndefined();
   });
 
+  it("loadConfig keeps a bucket target with its keys, and drops one missing a key", () => {
+    const bucket = {
+      kind: "bucket",
+      name: "mine",
+      url: "r2://acme/sessions/",
+      owner: "james",
+      account_id: "acct",
+      access_key_id: "AKID",
+      secret_access_key: "secret",
+      source_id: "src-1",
+    };
+    writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        schema_version: CONFIG_SCHEMA_VERSION,
+        targets: [
+          bucket,
+          { ...bucket, name: "nokey", secret_access_key: "" },
+          { ...bucket, name: "notbucket", url: "https://example.com" },
+        ],
+        default_target: "mine",
+      }),
+    );
+    const cfg = loadConfig();
+    expect(cfg.targets).toEqual([{ ...bucket, url: "r2://acme/sessions" }]);
+    expect(cfg.default_target).toBe("mine");
+  });
+
   it("loadConfig keeps a default that names a configured server", () => {
     const server = {
       name: "team",

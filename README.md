@@ -116,7 +116,7 @@ Dosu also updates itself automatically. When the update check (every six hours) 
 | `dosu knowledge` | Capture finished agent sessions: `sync`, `hooks`, `incognito`, `scope`, `statusline`, `transcripts` |
 | `dosu memory` | Search Dosu memory, learned from earlier agent sessions, as an agent's MCP tools do |
 | `dosu project` | Show or link the project key Dosu memory scopes a directory's sessions by |
-| `dosu sources` | sessiondb servers this machine ships to, and their buckets connected to Dosu, which pulls the sessions into memory (`setup`, `connect`, `status`, `sync`, `disconnect`) |
+| `dosu sources` | sessiondb servers or buckets this machine ships to, and their buckets connected to Dosu, which pulls the sessions into memory (`setup`, `connect`, `status`, `sync`, `disconnect`) |
 | `dosu sessions push <files...>` | Ship the session files named to a sessiondb server without signing in (`DOSU_SESSIONDB_URL` + `DOSU_SESSIONDB_TOKEN`, or `--target`), for a cloud agent's runner or CI |
 | `dosu imports` | Buckets of raw session files in another format (your agents' own logs, a Datadog Trajectory capture) that Dosu imports into memory for the org (`connect`, `status`, `sync`, `disconnect`) |
 | `dosu redact <session>` | Remove a shipped session from the server (the configured one, or `DOSU_SESSIONDB_URL` + `DOSU_SESSIONDB_TOKEN` as `sessions push` uses) |
@@ -125,9 +125,9 @@ Run `dosu <command> --help` for subcommands and flags.
 
 ### Where sessions are stored
 
-Finished sessions ship to a [sessiondb server](https://github.com/dosu-ai/sessiondb), which
-normalizes and redacts them and writes them to its bucket in the [sessionstorage layout](https://github.com/dosu-ai/sessiondb/blob/main/docs/layout.md);
-Dosu reads that bucket (read-only) to learn from them. `dosu setup` asks once which server
+Finished sessions are normalized, redacted and written to a bucket in the [sessionstorage layout](https://github.com/dosu-ai/sessiondb/blob/main/docs/layout.md),
+either by a [sessiondb server](https://github.com/dosu-ai/sessiondb) or by this machine itself;
+Dosu reads that bucket (read-only) to learn from them. `dosu setup` asks once where they go
 (`dosu setup --storage` asks again):
 
 - **Dosu's sessiondb** — nothing to set up. Your login mints a token for your own folder on the
@@ -136,9 +136,16 @@ Dosu reads that bucket (read-only) to learn from them. `dosu setup` asks once wh
   machine holds only the server's URL and a token (`sdb_…`); Dosu gets a read-only key to the
   bucket. Non-interactively:
   `dosu sources setup --server https://sessions.example.com --token sdb_… --yes`.
+- **Your own bucket (S3 or R2)** — no server to run. This machine redacts and normalizes each
+  session itself and writes it under its own folder (the *owner*) with a write key you give it;
+  Dosu gets a separate read-only key. Any S3-compatible store works with `--endpoint`.
+  Non-interactively, with the write key in `DOSU_BUCKET_ACCESS_KEY_ID` and
+  `DOSU_BUCKET_SECRET_ACCESS_KEY`:
+  `dosu sources setup --bucket r2://sessions --account-id <cloudflare-account> --owner alice --yes`
+  (or `--bucket s3://sessions --region us-east-1`).
 
-`dosu redact` removes a shipped session through the server's API; everything else about a shipped
-session is read from the bucket, not through this machine.
+`dosu redact` removes a shipped session through the server's API, or in the bucket itself for a
+bucket target; everything else about a shipped session is read from the bucket, not through this machine.
 
 Sessions that already sit in a bucket of your own, in an agent's own format rather than the
 sessionstorage layout (a Datadog Trajectory capture, Claude Code or Codex logs synced to S3),
