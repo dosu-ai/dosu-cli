@@ -119,7 +119,7 @@ Dosu also updates itself automatically. When the update check (every six hours) 
 | `dosu sources` | sessiondb servers this machine ships to, and their buckets connected to Dosu, which pulls the sessions into memory (`setup`, `connect`, `status`, `sync`, `disconnect`) |
 | `dosu sessions push <files...>` | Ship the session files named to a sessiondb server without signing in (`DOSU_SESSIONDB_URL` + `DOSU_SESSIONDB_TOKEN`, or `--target`), for a cloud agent's runner or CI |
 | `dosu imports` | Buckets of raw session files in another format (your agents' own logs, a Datadog Trajectory capture) that Dosu imports into memory for the org (`connect`, `status`, `sync`, `disconnect`) |
-| `dosu redact <session>` | Remove a shipped session from the server |
+| `dosu redact <session>` | Remove a shipped session from the server (the configured one, or `DOSU_SESSIONDB_URL` + `DOSU_SESSIONDB_TOKEN` as `sessions push` uses) |
 
 Run `dosu <command> --help` for subcommands and flags.
 

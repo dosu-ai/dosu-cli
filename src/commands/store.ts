@@ -11,6 +11,7 @@ import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import type { ServerTarget } from "../config/schema";
 import { configuredTargets, selectTarget } from "../config/targets";
 import { trajectorySourceOf } from "../sessions/start";
+import { envServer } from "../sources/env-server";
 import { serverClient } from "../sources/server-client";
 import { confirm, isCancel } from "../tui/prompts";
 import { printResult } from "./output";
@@ -25,8 +26,14 @@ interface StoreSelection {
   target?: string;
 }
 
-/** The server `redact` works against: `--target`, else the default, else the only one. */
-function selectServer(cfg: Config, selection: StoreSelection): ServerTarget {
+/** A server `redact` can reach: a configured target, or the one the environment names. */
+type RedactServer = Pick<ServerTarget, "name" | "url" | "token">;
+
+/** The server `redact` works against: `--target`, else DOSU_SESSIONDB_URL with
+ * DOSU_SESSIONDB_TOKEN (as `sessions push` ships to), else the default, else the only one. */
+function selectServer(cfg: Config, selection: StoreSelection): RedactServer {
+  const env = selection.target === undefined ? envServer(process.env) : undefined;
+  if (env) return { name: "env", ...env };
   let target: ServerTarget | undefined;
   try {
     target = selectTarget(cfg, selection.target);
@@ -35,7 +42,7 @@ function selectServer(cfg: Config, selection: StoreSelection): ServerTarget {
   }
   if (!target) {
     throw new CliUsageError(
-      "no sessiondb server configured: run 'dosu setup' or 'dosu sources setup --server <url> --token <token>'",
+      "no sessiondb server configured: run 'dosu setup' or 'dosu sources setup --server <url> --token <token>', or set DOSU_SESSIONDB_URL and DOSU_SESSIONDB_TOKEN",
     );
   }
   return target;
@@ -75,7 +82,10 @@ function redactCommand(): Command {
       ) => {
         const cfg = loadConfig();
         const { sessionId, agent } = parseSessionRef(ref);
-        const toDosu = opts.dosu === true || configuredTargets(cfg).length === 0;
+        const toDosu =
+          opts.dosu === true ||
+          (configuredTargets(cfg).length === 0 &&
+            (opts.target !== undefined || envServer(process.env) === undefined));
         const where = toDosu ? "Dosu" : selectServer(cfg, opts).name;
         if (!opts.yes) {
           const ok = await confirm({
