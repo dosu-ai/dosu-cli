@@ -353,6 +353,14 @@ describe("dosu imports connect, the rest of it", () => {
     expect(text).toContain("2 shards");
   });
 
+  it("says file, not files, when Dosu found one", async () => {
+    fetchImpl.mockImplementation(async () =>
+      json(imported({ agent: "claude-code", files_found: 1 })),
+    );
+    await dosu(...connectArgs());
+    expect(out.join("\n")).toContain("1 claude-code file on the first page");
+  });
+
   it("prints Dosu's answer as JSON with --json", async () => {
     fetchImpl.mockImplementation(async () => json(imported()));
     await dosu(...connectArgs("--json"));
@@ -447,6 +455,24 @@ describe("dosu imports status, the rest of it", () => {
     expect(text).toContain("Disabled by Dosu");
     expect(text).toContain("Last error: AccessDenied (2 in a row)");
     expect(text).toContain("not a claude-code transcript");
+  });
+
+  it("shows an enabled import that is erroring, sharded, with no recent files", async () => {
+    const erroring = imported({
+      shards: 3,
+      last_error: "SlowDown",
+      error_count: 1,
+      last_run_remaining: 5,
+    });
+    fetchImpl.mockImplementation(async (url) =>
+      url.endsWith("?deployment_id=dep1") ? json({ imports: [erroring] }) : json(erroring),
+    );
+    await dosu("status");
+    const text = out.join("\n");
+    expect(text).toContain("5 files · 3 shards · last 3 days of sessions/");
+    expect(text).toContain("Last error: SlowDown (1 in a row)");
+    expect(text).not.toContain("Disabled by Dosu");
+    expect(text).not.toContain("Recent:");
   });
 
   it("says which import it could not find, or that there are none", async () => {
