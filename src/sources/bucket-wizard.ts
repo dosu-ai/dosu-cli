@@ -5,7 +5,6 @@
  * Dosu to read the bucket with its own read-only keys. */
 
 import { userInfo } from "node:os";
-import { StoreSessionDB } from "@dosu/sessiondb";
 import { CliUsageError } from "../cli/errors";
 import { type Config, saveConfig } from "../config/config";
 import type { BucketTarget } from "../config/schema";
@@ -92,13 +91,15 @@ async function checkWrite(
     ...(fetchImpl ? { fetchImpl } : {}),
   });
   try {
-    if (db instanceof StoreSessionDB) await db.check();
+    await db.check();
     return undefined;
   } catch (err) {
-    const cause = (err as { cause?: unknown }).cause;
-    const detail =
-      cause instanceof Error ? (cause.cause instanceof Error ? cause.cause : cause) : undefined;
-    return detail ? `${describeServerError(err)}: ${detail.message}` : describeServerError(err);
+    // The bucket's own answer is the innermost cause: StoreError > write error > S3HttpError.
+    let detail = err as Error;
+    while (detail.cause instanceof Error) detail = detail.cause;
+    return detail === err
+      ? describeServerError(err)
+      : `${describeServerError(err)}: ${detail.message}`;
   }
 }
 
@@ -312,8 +313,10 @@ async function wizard(
   );
 
   // --- let Dosu read the bucket ------------------------------------------------
-  const parsed = bucketOfStorage({ url, ...(endpoint ? { endpoint } : {}) });
-  if (!parsed) return { target };
+  // The URL matched BUCKET_URL_RE, which bucketOfStorage parses.
+  const parsed = bucketOfStorage({ url, ...(endpoint ? { endpoint } : {}) }) as NonNullable<
+    ReturnType<typeof bucketOfStorage>
+  >;
   const api = sourcesApi(cfg);
   let dosuUnavailable: string | undefined;
   if (api && input.connect !== false) {

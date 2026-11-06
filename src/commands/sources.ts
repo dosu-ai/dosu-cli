@@ -261,44 +261,14 @@ function setupCommand(): Command {
         return;
       }
       const yes = opts.yes || opts.json ? { yes: true } : {};
-      if (opts.bucket) {
-        if (opts.server || opts.token) {
-          throw new CliUsageError(
-            "--bucket is written from this machine: --server and --token are for a server",
-          );
-        }
-        const result: BucketWizardResult | null = await runBucketWizard(cfg, {
-          ...bucketInputFromOptions(opts),
-          ...yes,
-        });
-        if (!result) {
-          console.log("Cancelled; nothing saved.");
-          return;
-        }
-        if (opts.json) {
-          printResult(
-            {
-              target: { ...result.target, secret_access_key: "***" },
-              ...(result.source ? { source: result.source } : {}),
-              ...(result.connectError ? { connect_error: result.connectError } : {}),
-            },
-            opts,
-          );
-          return;
-        }
-        if (result.source) {
-          try {
-            await requireSourcesApi(loadConfig()).sync(result.source.id);
-          } catch {
-            // The scheduled read covers it.
-          }
-        }
-        return;
+      if (opts.bucket && (opts.server || opts.token)) {
+        throw new CliUsageError(
+          "--bucket is written from this machine: --server and --token are for a server",
+        );
       }
-      const result: ServerWizardResult | null = await runServerWizard(cfg, {
-        ...wizardInputFromOptions(opts),
-        ...yes,
-      });
+      const result: BucketWizardResult | ServerWizardResult | null = opts.bucket
+        ? await runBucketWizard(cfg, { ...bucketInputFromOptions(opts), ...yes })
+        : await runServerWizard(cfg, { ...wizardInputFromOptions(opts), ...yes });
       if (!result) {
         console.log("Cancelled; nothing saved.");
         return;
@@ -306,7 +276,9 @@ function setupCommand(): Command {
       if (opts.json) {
         printResult(
           {
-            target: { ...result.target, token: "***" },
+            target: isBucketTarget(result.target)
+              ? { ...result.target, secret_access_key: "***" }
+              : { ...result.target, token: "***" },
             ...(result.source ? { source: result.source } : {}),
             ...(result.connectError ? { connect_error: result.connectError } : {}),
           },

@@ -322,6 +322,96 @@ describe("runBucketWizard", () => {
     expect(w.posts).toEqual([]);
   });
 
+  it("validates what is typed: the URL, the owner and the target's name", async () => {
+    const s3 = fakeS3(ENDPOINT, "acme");
+    const w = world(s3);
+    script({
+      "Bucket URL": "s3://acme",
+      "AWS region": "us-east-1",
+      "S3-compatible endpoint (blank for AWS)": ENDPOINT,
+      "Write keys (this machine): access key id": "AKIDWRITE",
+      "Write keys (this machine): secret access key": "writesecret",
+      "Your folder in the bucket (owner)": "james",
+      "Name for this target": "mine",
+    });
+
+    await runBucketWizard(loadConfig(), { connect: false }, {}, w.fetch);
+
+    const validator = (message: string) =>
+      vi
+        .mocked(p.text)
+        .mock.calls.map(([opts]) => opts)
+        .find((opts) => opts.message === message)?.validate as (v: string) => string | undefined;
+    expect(validator("Bucket URL")("https://acme")).toMatch(/s3:\/\/bucket/);
+    expect(validator("Bucket URL")("r2://acme/x")).toBeUndefined();
+    expect(validator("Your folder in the bucket (owner)")("a/b")).toMatch(/one path segment/);
+    expect(validator("Your folder in the bucket (owner)")("james")).toBeUndefined();
+    expect(validator("Name for this target")("-x")).toMatch(/letters/);
+    expect(validator("Name for this target")("mine")).toBeUndefined();
+  });
+
+  it("an r2:// bucket with its own endpoint asks for no account id", async () => {
+    const s3 = fakeS3(ENDPOINT, "acme");
+    const w = world(s3);
+
+    const result = await runBucketWizard(
+      loadConfig(),
+      {
+        bucket: "r2://acme",
+        endpoint: ENDPOINT,
+        write: WRITE,
+        owner: "james",
+        connect: false,
+        yes: true,
+      },
+      {},
+      w.fetch,
+    );
+
+    expect(result?.target).toMatchObject({ url: "r2://acme", endpoint: ENDPOINT });
+    expect(result?.target.account_id).toBeUndefined();
+    expect(asked()).toEqual([]);
+  });
+
+  it("tries the same answers again after a refusal, and keeps a replaced target's source", async () => {
+    const s3 = fakeS3(ENDPOINT, "acme");
+    s3.deny = true;
+    const w = world(s3);
+    saveConfig({
+      ...loadConfig(),
+      targets: [
+        {
+          kind: "bucket",
+          name: "mine",
+          url: "s3://old",
+          owner: "james",
+          access_key_id: "old",
+          secret_access_key: "old",
+          source_id: "src-old",
+        },
+      ],
+    });
+    script({
+      "S3-compatible endpoint (blank for AWS)": ENDPOINT,
+      "What now?": "retry",
+      "Name for this target": "mine",
+    });
+    vi.mocked(p.select).mockImplementation((async () => {
+      s3.deny = false;
+      return "retry";
+    }) as typeof p.select);
+
+    const result = await runBucketWizard(
+      loadConfig(),
+      { bucket: "s3://acme", region: "us-east-1", write: WRITE, owner: "james", connect: false },
+      {},
+      w.fetch,
+    );
+
+    expect(result?.target).toMatchObject({ url: "s3://acme", source_id: "src-old" });
+    expect(asked().filter((m) => m === "S3-compatible endpoint (blank for AWS)")).toHaveLength(1);
+  });
+
   it("refuses an owner that is not one path segment", async () => {
     const s3 = fakeS3(ENDPOINT, "acme");
     const w = world(s3);

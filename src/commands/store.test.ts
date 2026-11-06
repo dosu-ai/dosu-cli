@@ -80,4 +80,27 @@ describe("redact on a bucket target", () => {
     );
     await expect(dosu("claude:other", "--yes")).rejects.toThrow(/is not on mine/);
   });
+
+  it("a server target still redacts through the server's API", async () => {
+    const team = {
+      name: "team",
+      url: "https://sessions.example.com",
+      owner: "james",
+      token: "sdb",
+    };
+    saveConfig({
+      ...makeTestConfig({ access_token: "", refresh_token: "", expires_at: 0 }),
+      targets: [BUCKET, team],
+      default_target: "mine",
+    });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ removed: 3 })));
+    vi.stubGlobal("fetch", fetch);
+
+    await dosu("claude:sess1", "--yes", "--target", "team");
+
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
+      "https://sessions.example.com/v1/sessions/claude-code/sess1",
+    );
+    expect(out.join("\n")).toContain("Redacted claude:sess1 from team: 3 objects removed");
+  });
 });

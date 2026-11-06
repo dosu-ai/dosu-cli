@@ -3550,6 +3550,10 @@ describe("stepChooseSessionStorage", () => {
       "Nothing ships until a bucket is set up",
     );
 
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockRejectedValueOnce(new Error("disk full"));
+    await expect(stepChooseSessionStorage(makeCfg())).rejects.toThrow("disk full");
+
     const saved = {
       ...makeCfg(),
       targets: [{ ...bucket, source_id: "src-1" }],

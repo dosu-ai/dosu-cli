@@ -15,6 +15,7 @@ import {
   type SessionDB,
   SessionRejected,
   type ShippedPrefix,
+  type StoreSessionDB,
 } from "@dosu/sessiondb";
 import { describeServerError } from "../sources/server-client";
 import { VERSION } from "../version/version";
@@ -128,7 +129,8 @@ export interface BucketTargetOptions {
 }
 
 /** The SDK's client over a bucket this machine writes: redaction and normalization run here. */
-export function bucketClient(options: Omit<BucketTargetOptions, "name">): SessionDB {
+export function bucketClient(options: Omit<BucketTargetOptions, "name">): StoreSessionDB {
+  // A store URL always opens a StoreSessionDB.
   return connect({
     store: options.url,
     owner: options.owner,
@@ -139,7 +141,7 @@ export function bucketClient(options: Omit<BucketTargetOptions, "name">): Sessio
     ...(options.endpoint ? { endpoint: options.endpoint } : {}),
     ...(options.fetchImpl ? { fetch: options.fetchImpl } : {}),
     env: {},
-  });
+  }) as StoreSessionDB;
 }
 
 /** A bucket as a target: the session is redacted, normalized and written to `owners/<owner>/`
