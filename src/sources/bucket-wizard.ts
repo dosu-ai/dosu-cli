@@ -95,11 +95,9 @@ async function checkWrite(
     return undefined;
   } catch (err) {
     // The bucket's own answer is the innermost cause: StoreError > write error > S3HttpError.
-    let detail = err as Error;
-    while (detail.cause instanceof Error) detail = detail.cause;
-    return detail === err
-      ? describeServerError(err)
-      : `${describeServerError(err)}: ${detail.message}`;
+    const causes: string[] = [];
+    for (let e = err as Error; e.cause instanceof Error; e = e.cause) causes.push(e.cause.message);
+    return [describeServerError(err), ...causes.slice(-1)].join(": ");
   }
 }
 
@@ -181,19 +179,16 @@ async function wizard(
           input.region,
         )
       ).trim();
-      if (endpoint === undefined) {
-        const given = (
-          await ask.text(
-            {
-              message: "S3-compatible endpoint (blank for AWS)",
-              placeholder: "https://minio.internal:9000",
-              initialValue: "",
-            },
-            input.endpoint,
-          )
-        ).trim();
-        endpoint = given;
-      }
+      endpoint ??= (
+        await ask.text(
+          {
+            message: "S3-compatible endpoint (blank for AWS)",
+            placeholder: "https://minio.internal:9000",
+            initialValue: "",
+          },
+          input.endpoint,
+        )
+      ).trim();
     }
 
     write ??=

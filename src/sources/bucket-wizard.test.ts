@@ -2,7 +2,7 @@
  * it, and Dosu is asked to read the bucket with its own, separate keys. */
 
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliUsageError } from "../cli/errors";
@@ -11,6 +11,11 @@ import { makeTestConfig } from "../config/config.test-utils";
 import { type FakeS3, fakeS3 } from "../shipper/fake-s3.test-utils";
 import * as p from "../tui/prompts";
 import { defaultOwner, normalizeBucketUrl, runBucketWizard } from "./bucket-wizard";
+
+vi.mock("node:os", async (importOriginal) => {
+  const os = await importOriginal<typeof import("node:os")>();
+  return { ...os, userInfo: vi.fn(os.userInfo) };
+});
 
 vi.mock("../tui/prompts", () => ({
   text: vi.fn(),
@@ -109,6 +114,15 @@ describe("helpers", () => {
     expect(normalizeBucketUrl("r2://acme")).toBe("r2://acme");
     expect(normalizeBucketUrl("https://acme.s3.amazonaws.com")).toBeUndefined();
     expect(normalizeBucketUrl("s3://")).toBeUndefined();
+  });
+
+  it("falls back to 'me' for a user name with nothing usable, or none at all", () => {
+    vi.mocked(userInfo).mockReturnValueOnce({ username: "@@@" } as ReturnType<typeof userInfo>);
+    expect(defaultOwner()).toBe("me");
+    vi.mocked(userInfo).mockImplementationOnce(() => {
+      throw new Error("no passwd entry");
+    });
+    expect(defaultOwner()).toBe("me");
   });
 
   it("makes an owner out of the user name", () => {
@@ -408,6 +422,7 @@ describe("runBucketWizard", () => {
       w.fetch,
     );
 
+    expect(vi.mocked(p.select)).toHaveBeenCalledTimes(1);
     expect(result?.target).toMatchObject({ url: "s3://acme", source_id: "src-old" });
     expect(asked().filter((m) => m === "S3-compatible endpoint (blank for AWS)")).toHaveLength(1);
   });

@@ -2908,7 +2908,8 @@ describe("stepOfferInitialSync", () => {
       secret_access_key: "secret",
     };
 
-    await stepOfferInitialSync({ ...makeCfg(), targets: [bucket], default_target: "mine" });
+    // No default named: the only target is the one meant.
+    await stepOfferInitialSync({ ...makeCfg(), targets: [bucket] });
 
     const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
     expect(said).toContain(

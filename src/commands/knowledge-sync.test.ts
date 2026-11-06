@@ -21,6 +21,7 @@ import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { contextHookOutput } from "../memory/context-hook";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
+import { fakeS3 } from "../shipper/fake-s3.test-utils";
 import { type Fetch, fakeSessiondb, type Upload } from "../shipper/fake-sessiondb.test-utils";
 import { INCOGNITO_MARKER } from "../sync/incognito";
 import { lockPath } from "../sync/lock";
@@ -980,6 +981,57 @@ describe("knowledge sync --status", () => {
     expect(out).toContain("+9 more");
     expect(out).toContain("dosu knowledge sessions --unsupported");
     expect(out.split("\n").filter((line) => line.includes("opencode/ses_"))).toHaveLength(1);
+  });
+});
+
+describe("knowledge sync to Dosu's hosted sessiondb", () => {
+  it("tries to renew a token near expiry, and ships with the old one when Dosu cannot renew it", async () => {
+    saveConfig({
+      ...makeTestConfig({ access_token: "t", refresh_token: "r", expires_at: 0 }),
+      targets: [{ ...SERVER, hosted: true }],
+      default_target: "team",
+    });
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 30);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await dosu("sync");
+
+    const [upload] = fetchImpl.mock.calls.filter(([url]) => url === `${SERVER.url}/v1/sessions`);
+    expect(new Headers(upload?.[1]?.headers).get("authorization")).toBe(`Bearer ${SERVER.token}`);
+  });
+});
+
+describe("knowledge sync to a bucket target", () => {
+  it("writes the session to the bucket from this machine, asking no server or Dosu token", async () => {
+    const s3 = fakeS3("http://s3.test:9000", "acme");
+    vi.stubGlobal("fetch", s3.fetch);
+    saveConfig({
+      ...makeTestConfig({ access_token: "t", refresh_token: "r", expires_at: 0 }),
+      targets: [
+        {
+          kind: "bucket",
+          name: "mine",
+          url: "s3://acme/sessions",
+          owner: "james",
+          region: "us-east-1",
+          endpoint: "http://s3.test:9000",
+          access_key_id: "AKIDWRITE",
+          secret_access_key: "writesecret",
+        },
+      ],
+      default_target: "mine",
+    });
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 30);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await dosu("sync");
+
+    expect(
+      [...s3.objects.keys()].some((k) => k.startsWith("sessions/owners/james/sessions/")),
+    ).toBe(true);
+    expect(s3.requests.every((r) => r.url.startsWith("http://s3.test:9000/acme/"))).toBe(true);
   });
 });
 
