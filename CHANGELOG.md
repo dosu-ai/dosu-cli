@@ -1,3 +1,10 @@
+# [0.67.0-sessions.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.1...v0.67.0-sessions.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* https-only servers, timeouts on Dosu's API, and setup/disconnect edge cases ([e4685ba](https://github.com/dosu-ai/dosu-cli/commit/e4685baad4748b9d6b0cd6c28ba7a5fa970211ea))
+
 # [0.67.0-sessions.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0-sessions.1) (2026-11-06)
 
 
