@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError } from "../cli/command-error";
 import { sessionsCommand } from "./sessions";
@@ -9,6 +10,8 @@ import { sessionsCommand } from "./sessions";
 const BACKEND = "https://api.dosu.test";
 const KEY = "dxi_live_0123456789abcdefghijklmnopqrstuv";
 const GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz012345";
+/** A reply long enough to learn from: the shipper skips shorter sessions (shipper/worthiness.ts). */
+const REPLY = `It expired. ${"Tokens are revoked after ninety days. ".repeat(60)}`;
 
 let dir: string;
 let repo: string;
@@ -20,14 +23,14 @@ function queued(): Response {
   return new Response(JSON.stringify({ status: "queued" }), { status: 202 });
 }
 
-function jsonl(name: string, rows: unknown[]): string {
-  const path = join(dir, name);
+function jsonl(name: string, rows: unknown[], folder = dir): string {
+  const path = join(folder, name);
   writeFileSync(path, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`);
   return path;
 }
 
 /** A Claude Code session in the `widget` checkout: a token in the prompt, and a reply. */
-function claudeFile(name = "sess1.jsonl", rows = 2): string {
+function claudeFile(name = "sess1.jsonl", rows = 2, folder = dir): string {
   const turns = [
     {
       type: "user",
@@ -42,10 +45,10 @@ function claudeFile(name = "sess1.jsonl", rows = 2): string {
       uuid: "a1",
       timestamp: "2026-11-04T00:00:05.000Z",
       sessionId: "sess1",
-      message: { role: "assistant", content: [{ type: "text", text: "It expired." }] },
+      message: { role: "assistant", content: [{ type: "text", text: REPLY }] },
     },
   ];
-  return jsonl(name, turns.slice(0, rows));
+  return jsonl(name, turns.slice(0, rows), folder);
 }
 
 function codexFile(): string {
@@ -58,7 +61,7 @@ function codexFile(): string {
   return jsonl("rollout-2026-11-04T00-00-00-01a0ff74.jsonl", [
     { timestamp: at, type: "session_meta", payload: { id: "01a0ff74", timestamp: at, cwd: repo } },
     message("user", "input_text", "Run the tests"),
-    message("assistant", "output_text", "They pass."),
+    message("assistant", "output_text", REPLY),
   ]);
 }
 
@@ -66,7 +69,7 @@ function codexFile(): string {
 function cursorFile(): string {
   return jsonl("cursor1.jsonl", [
     { role: "user", message: { content: [{ type: "text", text: "<user_query>hi</user_query>" }] } },
-    { role: "assistant", message: { content: [{ type: "text", text: "hello" }] } },
+    { role: "assistant", message: { content: [{ type: "text", text: REPLY }] } },
   ]);
 }
 
@@ -74,8 +77,11 @@ async function run(...args: string[]): Promise<void> {
   await sessionsCommand().parseAsync(["node", "sessions", ...args]);
 }
 
+/** What the command printed, without the colors CI forces on. */
 function printed(spy: ReturnType<typeof vi.spyOn>): string {
-  return spy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+  return stripVTControlCharacters(
+    spy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n"),
+  );
 }
 
 interface Sent {
@@ -159,22 +165,26 @@ describe("dosu sessions push", () => {
     const notes = jsonl("notes.jsonl", [{ note: "not a session" }]);
     const unanswered = claudeFile("unanswered.jsonl", 1);
     const refused = claudeFile("refused.jsonl");
+    const unauthorized = claudeFile("unauthorized.jsonl");
     const offline = claudeFile("offline.jsonl");
     const pushed = claudeFile("pushed.jsonl");
     fetchMock
+      .mockResolvedValueOnce(new Response("{}", { status: 422 }))
       .mockResolvedValueOnce(new Response("{}", { status: 401 }))
       .mockRejectedValueOnce(new Error("getaddrinfo ENOTFOUND"));
 
-    await run("push", missing, notes, unanswered, refused, offline, pushed);
+    await run("push", missing, notes, unanswered, refused, unauthorized, offline, pushed);
 
     const errors = printed(errorSpy);
     expect(errors).toContain(`${missing}: cannot read the file (ENOENT)`);
     expect(errors).toContain(`${notes}: not a Claude Code, Codex, or Cursor session file`);
-    expect(errors).toContain(`${unanswered}: no conversation Dosu can read in it`);
-    expect(errors).toContain(`${refused}: Dosu refused the session (HTTP 401)`);
-    expect(errors).toContain(`${offline}: could not reach Dosu: getaddrinfo ENOTFOUND`);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(printed(logSpy)).toContain(pushed);
+    expect(errors).toContain(`${refused}: Dosu refused the session (HTTP 422)`);
+    expect(errors).toContain(`${unauthorized}: not sent: ingest failed: HTTP 401`);
+    expect(errors).toContain(`${offline}: not sent: getaddrinfo ENOTFOUND`);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const lines = printed(logSpy);
+    expect(lines).toContain(`${unanswered}: skipped: too short to learn from`);
+    expect(lines).toContain(`✓ ${pushed}`);
     expect(process.exitCode).toBe(1);
   });
 
@@ -189,5 +199,41 @@ describe("dosu sessions push", () => {
       message: "DOSU_INGEST_KEY is not set",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("dosu sessions push from a runner's task", () => {
+  it("pushes the files of the task's own agent directory, under DOSU_PROJECT", async () => {
+    // A runner gives each task its own Claude Code directory and clones through its own gateway,
+    // so the origin names no repository on GitHub.
+    execFileSync("git", [
+      "-C",
+      repo,
+      "remote",
+      "set-url",
+      "origin",
+      "http://git.internal/acme/widget.git",
+    ]);
+    vi.stubEnv("DOSU_PROJECT", "github.com/acme/widget");
+    const project = join(dir, "work", "attempt-1", "claude", "projects", "-widget");
+    mkdirSync(join(project, "task", "subagents"), { recursive: true });
+    const main = claudeFile("task.jsonl", 2, project);
+    const subagent = claudeFile("agent-a1.jsonl", 2, join(project, "task", "subagents"));
+
+    await run("push", main, subagent);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sent(0).body.metadata).toMatchObject({
+      project: "github.com/acme/widget",
+      agent: "claude-code",
+      session_id: "task",
+    });
+    expect(sent(0).body.metadata.repo).toBeUndefined();
+    expect(sent(1).body.metadata).toMatchObject({
+      project: "github.com/acme/widget",
+      session_id: "agent-a1",
+      parent_session_id: "task",
+    });
+    expect(process.exitCode).toBeUndefined();
   });
 });

@@ -1,23 +1,21 @@
-/** `dosu sessions push`: send agent session files to Dosu with an organization ingest key, from a
- * machine nobody signs in on (a cloud agent's runner, CI). Each file is normalized and redacted as
- * the signed-in shipper does it (shipper/normalize.ts). */
+/** `dosu sessions push`: send the agent session files named to Dosu with an organization ingest
+ * key, from a machine nobody signs in on (a cloud agent's runner, CI). It sends only what it is
+ * handed, never what it finds on the machine: the key files sessions under the organization, past
+ * the sync's scope and incognito settings, so choosing them is the caller's (a runner gives each
+ * task its own agent directory and names what is in it). Each one goes through the shipper a
+ * signed-in sync uses (shipper/runner.ts), so it is normalized, redacted, and judged the same way;
+ * only the credential differs. */
 
 import { readFileSync } from "node:fs";
-import { basename, isAbsolute } from "node:path";
-import type { MetaRecord } from "@letta-ai/trajectory";
+import { basename } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { CommandError } from "../cli/command-error";
-import { getBackendURL } from "../config/constants";
-import { resolveProjectOfDir } from "../sessions/project";
-import { githubSlugOfRepo, originRepoOfDir } from "../sessions/repo";
-import type { AgentSession } from "../sessions/scan";
-import { normalizeSessionRecords, trajectorySourceOf } from "../shipper/normalize";
+import { type AgentSession, type SessionHarness, sessionAtPath } from "../sessions/scan";
+import { createShipStep } from "../shipper/runner";
+import type { ShipSessionResult } from "../sync/sync";
 
-/** The ingest API only queues work, but a long session is a large body. */
-const REQUEST_TIMEOUT_MS = 60_000;
-
-type FileHarness = "claude" | "codex" | "cursor";
+type FileHarness = Extract<SessionHarness, "claude" | "codex" | "cursor">;
 
 function rowOf(line: string): Record<string, unknown> | null {
   try {
@@ -46,8 +44,8 @@ function harnessOf(transcript: string): FileHarness | null {
   return null;
 }
 
-/** Push one session file; the reason it was not pushed, or null. */
-async function pushFile(path: string, key: string, backend: string): Promise<string | null> {
+/** The session in a file the caller named, or why it is not one. */
+function sessionOfFile(path: string): AgentSession | string {
   let transcript: string;
   try {
     transcript = readFileSync(path, "utf8");
@@ -56,37 +54,32 @@ async function pushFile(path: string, key: string, backend: string): Promise<str
   }
   const harness = harnessOf(transcript);
   if (!harness) return "not a Claude Code, Codex, or Cursor session file";
-  // Session files are named by their session id, as the scanner names them.
-  const id = basename(path).replace(/\.jsonl$/, "");
-  const session: AgentSession = { id, harness, path, updated: new Date().toISOString() };
-  const records = await normalizeSessionRecords(session);
-  if (!records?.length) return "no conversation Dosu can read in it";
-  // The meta record comes first: its working directory gives the session the same project key
-  // and repository a signed-in sync would (sessions/project.ts).
-  const cwd = (records[0] as MetaRecord).cwd;
-  const dir = cwd && isAbsolute(cwd) ? cwd : null;
-  const project = (dir && resolveProjectOfDir(dir)?.project) ?? "unknown";
-  const repo = githubSlugOfRepo(dir && originRepoOfDir(dir));
-  const body = JSON.stringify({
-    records,
-    metadata: {
-      project,
-      ...(repo ? { repo } : {}),
-      agent: trajectorySourceOf(harness),
-      session_id: id,
-    },
-  });
-  try {
-    const response = await fetch(`${backend}/v1/memory/ingest`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    return response.ok ? null : `Dosu refused the session (HTTP ${response.status})`;
-  } catch (err) {
-    return `could not reach Dosu: ${err instanceof Error ? err.message : err}`;
+  // Session files are named by their session id, as the scanner names them; a Claude Code file
+  // in its agent's layout is read as the scan reads it (a subagent's names its session).
+  const session = sessionAtPath(harness, basename(path).replace(/\.jsonl$/, ""), path);
+  return session ?? "cannot read the file";
+}
+
+/** One line for a session the shipper settled without sending, or null for one it sent or could
+ * not send. */
+function skippedLine(result: ShipSessionResult): string | null {
+  switch (result.outcome) {
+    case "trivial":
+      return "skipped: too short to learn from";
+    case "incognito":
+      return "skipped: incognito";
+    case "unsupported":
+      return `skipped: ${result.message ?? "Dosu cannot read this session yet"}`;
+    default:
+      return null;
   }
+}
+
+/** Why Dosu did not take a session it was sent. */
+function failureOf(result: ShipSessionResult): string {
+  return result.outcome === "rejected"
+    ? `Dosu refused the session (HTTP ${result.httpStatus})`
+    : `not sent: ${result.message ?? "unknown error"}`;
 }
 
 export function sessionsCommand(): Command {
@@ -94,12 +87,15 @@ export function sessionsCommand(): Command {
 
   cmd
     .command("push")
-    .description("Push agent session files to Dosu with an ingest key (no sign-in)")
+    .description("Push agent sessions to Dosu with an ingest key (no sign-in)")
     .argument("<files...>", "Claude Code, Codex, or Cursor session files (.jsonl)")
     .addHelpText(
       "after",
-      "\nEnvironment:\n  DOSU_INGEST_KEY  Dosu ingest key (dxi_live_...); required\n\n" +
-        "Each session is redacted before it is sent.",
+      "\nEnvironment:\n  DOSU_INGEST_KEY  Dosu ingest key (dxi_live_...); required\n" +
+        "  DOSU_PROJECT     the project the sessions belong to, when their checkout's origin\n" +
+        "                   doesn't name it\n\n" +
+        "Each session is redacted before it is sent. Sessions too short to learn from, and those\n" +
+        "taken off the record with /dosu-incognito, are skipped.",
     )
     .action(async (files: string[]) => {
       const key = process.env.DOSU_INGEST_KEY?.trim();
@@ -108,14 +104,31 @@ export function sessionsCommand(): Command {
           "Set it to a Dosu ingest key (dxi_live_...) and run the command again.",
         ]);
       }
-      const backend = getBackendURL().replace(/\/+$/, "");
+      const sessions: AgentSession[] = [];
       for (const file of files) {
-        const failure = await pushFile(file, key, backend);
-        if (failure) {
-          console.error(pc.red(`✗ ${file}: ${failure}`));
+        const session = sessionOfFile(file);
+        if (typeof session === "string") {
+          console.error(pc.red(`✗ ${file}: ${session}`));
           process.exitCode = 1;
         } else {
-          console.log(`${pc.green("✓")} ${file}`);
+          sessions.push(session);
+        }
+      }
+      // The pusher's environment is its agents' (a runner gives both the same one), so the
+      // DOSU_PROJECT it sets names their project.
+      const ship = createShipStep({ ingestKey: key, agentEnv: process.env });
+      // One session at a time: one that can't reach Dosu doesn't keep the rest from trying.
+      for (const session of sessions) {
+        const [result] = await ship([session]);
+        if (!result) continue;
+        const skipped = skippedLine(result);
+        if (result.outcome === "shipped") {
+          console.log(`${pc.green("✓")} ${session.path}`);
+        } else if (skipped) {
+          console.log(`${pc.dim("-")} ${session.path}: ${skipped}`);
+        } else {
+          console.error(pc.red(`✗ ${session.path}: ${failureOf(result)}`));
+          process.exitCode = 1;
         }
       }
     });
