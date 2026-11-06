@@ -34,7 +34,7 @@ bun run check                   # Biome lint + format check (used in CI)
 Running `dosu` with no args launches the interactive TUI (`src/tui/tui.ts`). Two broad families of subcommands are registered in `src/cli/cli.ts`:
 
 - **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|refresh|list`, `logs`, `telemetry`.
-- **Ingest key** — `sessions push <files...>` sends session files, and `sessions push --since <time>` every session the machine's agents kept since then (a runner's last step before teardown), with `DOSU_INGEST_KEY` (an organization's write-only key) instead of a sign-in, for machines nobody signs in on (a cloud agent's runner, CI); each goes through the sync's own ship step (`src/shipper/runner.ts`, its ingest-key route), and `DOSU_PROJECT` in the pusher's environment names the sessions' project.
+- **Ingest key** — `sessions push <files...>` sends the session files it is named with `DOSU_INGEST_KEY` (an organization's write-only key) instead of a sign-in, for machines nobody signs in on (a cloud agent's runner, CI); each goes through the sync's own ship step (`src/shipper/runner.ts`, its ingest-key route), and `DOSU_PROJECT` in the pusher's environment names the sessions' project. It never looks for sessions on the machine itself: what it sends skips the sync's scope and incognito settings, so the caller chooses the files (a runner names what its task's own agent directory holds).
 - **Dosu platform** (require an authenticated deployment) — `ask`, `knowledge`, `docs`, `threads`, `review`, `sources`, `integrations`, `topics`, `members`, `org`, `deployments`, `analytics`, `skill`. Each lives in `src/commands/<name>.ts` and talks to the backend via `src/client/`.
 
 Key modules:
