@@ -16,7 +16,7 @@ import { type AgentSession, type SessionHarness, sessionAtPath } from "../sessio
 import { createShipStep } from "../shipper/runner";
 import { selectTarget } from "../shipper/select";
 import { createServerTarget, type Target } from "../shipper/target";
-import { normalizeServerUrl } from "../sources/server-wizard";
+import { envServer } from "../sources/env-server";
 import type { ShipSessionResult } from "../sync/sync";
 
 type FileHarness = Extract<SessionHarness, "claude" | "codex" | "cursor">;
@@ -67,22 +67,8 @@ function sessionOfFile(path: string): AgentSession | string {
 /** The server the environment names, else the configured one `--target` (or the default)
  * names. Throws when neither gives one. */
 function pushTarget(env: NodeJS.ProcessEnv, name: string | undefined): Target {
-  const url = env.DOSU_SESSIONDB_URL?.trim();
-  const token = env.DOSU_SESSIONDB_TOKEN?.trim();
-  if (name === undefined && (url || token)) {
-    if (!url || !token) {
-      throw new CliUsageError(
-        "DOSU_SESSIONDB_URL and DOSU_SESSIONDB_TOKEN go together; set both, or neither to use a configured server",
-      );
-    }
-    const server = normalizeServerUrl(url);
-    if (!server) {
-      throw new CliUsageError(
-        `DOSU_SESSIONDB_URL must be an https:// URL (http:// only to localhost), got '${url}'`,
-      );
-    }
-    return createServerTarget({ name: "env", url: server, token });
-  }
+  const server = name === undefined ? envServer(env) : undefined;
+  if (server) return createServerTarget({ name: "env", ...server });
   const target = selectTarget(loadConfig(), { target: name });
   if (!target) {
     throw new CliUsageError(

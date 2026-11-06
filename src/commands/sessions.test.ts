@@ -192,6 +192,19 @@ describe("dosu sessions push", () => {
     expect(server.fetchImpl.mock.calls[0]?.[0]).toBe("https://team.test/v1/sessions");
   });
 
+  it("pushes to the configured server --target names, whatever the environment says", async () => {
+    saveConfig({
+      ...makeTestConfig({ access_token: "t", refresh_token: "r", expires_at: 0 }),
+      targets: [{ name: "team", url: "https://team.test", owner: "ci", token: "sdb_team" }],
+    });
+
+    await run("push", "--target", "team", claudeFile());
+
+    const [url, init] = server.fetchImpl.mock.calls[0] ?? [];
+    expect(url).toBe("https://team.test/v1/sessions");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sdb_team");
+  });
+
   it("refuses to run with only one of DOSU_SESSIONDB_URL and DOSU_SESSIONDB_TOKEN", async () => {
     vi.stubEnv("DOSU_SESSIONDB_TOKEN", " ");
 

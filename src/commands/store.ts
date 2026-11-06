@@ -9,9 +9,10 @@ import { CliUsageError } from "../cli/errors";
 import { type Config, loadConfig, MODE_OSS } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 import type { BucketTarget, ServerTarget } from "../config/schema";
-import { configuredTargets, isBucketTarget, selectTarget } from "../config/targets";
+import { configuredTargets, selectTarget } from "../config/targets";
 import { trajectorySourceOf } from "../sessions/start";
 import { bucketClientOf } from "../shipper/select";
+import { envServer } from "../sources/env-server";
 import { serverClient } from "../sources/server-client";
 import { confirm, isCancel } from "../tui/prompts";
 import { printResult } from "./output";
@@ -26,23 +27,21 @@ interface StoreSelection {
   target?: string;
 }
 
-/** What `redact` can reach: a configured server or bucket. */
-type RedactServer = ServerTarget | BucketTarget;
+/** What `redact` can reach: a configured server or bucket, or the server the environment
+ * names. */
+type RedactServer = Pick<ServerTarget, "kind" | "name" | "url" | "token"> | BucketTarget;
 
-/** The target `redact` works against: `--target`, else the default, else the only one. */
-function selectServer(cfg: Config, selection: StoreSelection): RedactServer {
-  let target: RedactServer | undefined;
+/** The target `redact` works against: `--target`, else DOSU_SESSIONDB_URL with
+ * DOSU_SESSIONDB_TOKEN (as `sessions push` ships to), else the default, else the only one;
+ * undefined when there is none. */
+function selectServer(cfg: Config, selection: StoreSelection): RedactServer | undefined {
+  const env = selection.target === undefined ? envServer(process.env) : undefined;
+  if (env) return { name: "env", ...env };
   try {
-    target = selectTarget(cfg, selection.target);
+    return selectTarget(cfg, selection.target);
   } catch (err) {
     throw new CliUsageError(err instanceof Error ? err.message : String(err));
   }
-  if (!target) {
-    throw new CliUsageError(
-      "no sessiondb target configured: run 'dosu setup' or 'dosu sources setup'",
-    );
-  }
-  return target;
 }
 
 /** `<harness>:<id>` → the agent the server keys by, and the session id. */
@@ -79,8 +78,11 @@ function redactCommand(): Command {
       ) => {
         const cfg = loadConfig();
         const { sessionId, agent } = parseSessionRef(ref);
-        const toDosu = opts.dosu === true || configuredTargets(cfg).length === 0;
-        const where = toDosu ? "Dosu" : selectServer(cfg, opts).name;
+        const server =
+          opts.dosu === true || (configuredTargets(cfg).length === 0 && opts.target !== undefined)
+            ? undefined
+            : selectServer(cfg, opts);
+        const where = server ? server.name : "Dosu";
         if (!opts.yes) {
           const ok = await confirm({
             message: `Redact ${ref} from ${where}? This cannot be undone.`,
@@ -91,9 +93,9 @@ function redactCommand(): Command {
             return;
           }
         }
-        const result = toDosu
-          ? await redactFromDosu(cfg, sessionId)
-          : await redactOnServer(cfg, opts, { agent, sessionId });
+        const result = server
+          ? await redactOnServer(server, { agent, sessionId })
+          : await redactFromDosu(cfg, sessionId);
         if (opts.json) {
           printResult({ session: ref, target: where, ...result }, opts);
           return;
@@ -105,12 +107,10 @@ function redactCommand(): Command {
 }
 
 async function redactOnServer(
-  cfg: Config,
-  selection: StoreSelection,
+  target: RedactServer,
   session: { agent: string; sessionId: string },
 ): Promise<{ summary: string; removed: number }> {
-  const target = selectServer(cfg, selection);
-  const client = isBucketTarget(target) ? bucketClientOf(target) : serverClient(target);
+  const client = target.kind === "bucket" ? bucketClientOf(target) : serverClient(target);
   const result = await client.tombstone(session.agent, session.sessionId);
   if (!result) {
     throw new CliUsageError(
