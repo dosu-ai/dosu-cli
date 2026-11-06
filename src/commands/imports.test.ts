@@ -8,7 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import type { ImportStatus } from "../sources/api";
+import { confirm } from "../tui/prompts";
 import { importsCommand } from "./imports";
+
+vi.mock("../tui/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tui/prompts")>()),
+  confirm: vi.fn(),
+}));
 
 let home: string;
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -79,6 +85,7 @@ beforeEach(() => {
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
   vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", undefined);
   vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", undefined);
+  vi.mocked(confirm).mockReset();
   fetchImpl = vi.fn<Fetch>(async () => json({ imports: [] }));
   vi.stubGlobal("fetch", fetchImpl);
   out = [];
@@ -287,5 +294,213 @@ describe("dosu imports status / sync / disconnect", () => {
     await dosu("disconnect", "--yes");
     expect(calls()[1]).toEqual({ method: "DELETE", path: `/v1/memory/imports/${imported().id}` });
     expect(out.join("\n")).toContain('"acme datadog" disconnected');
+  });
+});
+
+/** `connect` with a bucket and keys, plus whatever else a test adds. */
+function connectArgs(...extra: string[]): string[] {
+  return [
+    "connect",
+    "--agent",
+    "claude-code",
+    "--bucket",
+    "b",
+    "--access-key-id",
+    "a",
+    "--secret-access-key",
+    "s",
+    ...extra,
+  ];
+}
+
+describe("dosu imports connect, the rest of it", () => {
+  it.each([
+    [["--kind", "gcs"], /--kind must be s3 or r2, got 'gcs'/],
+    [["--kind", "r2"], /an r2 bucket needs --account-id or --endpoint/],
+    [["--shards", "0"], /--shards must be a whole number from 1 to 64, got '0'/],
+    [["--shards", "many"], /--shards must be a whole number from 1 to 64/],
+    [["--lookback-days", "4000"], /--lookback-days must be a whole number from 1 to 3650/],
+  ])("refuses %j before calling Dosu", async (extra, message) => {
+    await expect(dosu(...connectArgs(...extra))).rejects.toThrow(message);
+    expect(calls()).toEqual([]);
+  });
+
+  it("sends an r2 bucket's account, endpoint and lookback", async () => {
+    fetchImpl.mockImplementation(async () =>
+      json(imported({ kind: "r2", shards: 2, dated_prefix: null, files_found: null })),
+    );
+    await dosu(
+      ...connectArgs(
+        "--kind",
+        "r2",
+        "--account-id",
+        "acct",
+        "--endpoint",
+        "https://r2.example.com",
+        "--lookback-days",
+        "7",
+      ),
+    );
+    expect(calls()[0]?.body).toMatchObject({
+      kind: "r2",
+      account_id: "acct",
+      endpoint: "https://r2.example.com",
+      lookback_days: 7,
+    });
+    const text = out.join("\n");
+    expect(text).toContain("0 datadog-trajectory files on the first page.");
+    expect(text).not.toContain("laid out by day");
+    expect(text).toContain("2 shards");
+  });
+
+  it("prints Dosu's answer as JSON with --json", async () => {
+    fetchImpl.mockImplementation(async () => json(imported()));
+    await dosu(...connectArgs("--json"));
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ id: imported().id });
+  });
+
+  it.each([
+    [400, { detail: "NoSuchBucket" }, /could not import s3:\/\/b with the flags keys: HTTP 400/],
+    [409, { detail: "exists" }, /s3:\/\/b is already connected/],
+    [404, {}, /https:\/\/api\.dosu\.test does not import session stores: HTTP 404/],
+  ])("turns Dosu's %i into a usage error", async (status, body, message) => {
+    fetchImpl.mockImplementation(async () => json(body, status));
+    await expect(dosu(...connectArgs())).rejects.toThrow(message);
+  });
+
+  it("lets any other failure through as it is", async () => {
+    fetchImpl.mockImplementation(async () => new Response("down", { status: 500 }));
+    await expect(dosu(...connectArgs())).rejects.toThrow(/^HTTP 500$/);
+  });
+});
+
+describe("dosu imports status, the rest of it", () => {
+  it("says there is nothing to show when the org has no imports", async () => {
+    await dosu("status", "--all");
+    expect(out.join("\n")).toContain("No imports connected.");
+  });
+
+  it("lists every import as JSON, each one's state named", async () => {
+    fetchImpl.mockImplementation(async () =>
+      json({ imports: [imported(), imported({ enabled: false })] }),
+    );
+    await dosu("status", "--all", "--json");
+    expect(JSON.parse(out.join("\n")).imports).toHaveLength(2);
+  });
+
+  it("names each import's state in the table", async () => {
+    fetchImpl.mockImplementation(async () =>
+      json({
+        imports: [
+          imported({ name: "off", enabled: false }),
+          imported({ name: "broken", last_error: "AccessDenied", error_count: 3 }),
+          imported({ name: "fine", last_imported_at: "2026-11-03T00:00:00.000Z" }),
+        ],
+      }),
+    );
+    await dosu("status", "--all");
+    const text = out.join("\n");
+    expect(text).toContain("disabled");
+    expect(text).toContain("error ×3");
+    expect(text).toContain("ok");
+  });
+
+  it("shows one import as JSON with --json", async () => {
+    fetchImpl.mockImplementation(async (url) =>
+      url.endsWith("?deployment_id=dep1") ? json({ imports: [imported()] }) : json(imported()),
+    );
+    await dosu("status", "--json");
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ id: imported().id });
+  });
+
+  it("shows a disabled import's last error and a failed file's detail", async () => {
+    const broken = imported({
+      enabled: false,
+      files: 1,
+      sessions: 1,
+      shards: 1,
+      dated_prefix: null,
+      last_error: "AccessDenied",
+      error_count: 2,
+      last_run_remaining: 1,
+      recent: [
+        {
+          key: "sessions/bad.jsonl",
+          session_id: "bad",
+          size: 1,
+          shipped_bytes: 0,
+          outcome: "rejected",
+          detail: "not a claude-code transcript",
+          content_hash: null,
+          imported_at: "2026-11-03T00:00:00.000Z",
+        },
+      ],
+    });
+    fetchImpl.mockImplementation(async (url) =>
+      url.endsWith("?deployment_id=dep1") ? json({ imports: [broken] }) : json(broken),
+    );
+    await dosu("status");
+    const text = out.join("\n");
+    expect(text).toContain("1 session from 1 file");
+    expect(text).toContain("Last run:   not yet");
+    expect(text).toContain("1 file · 1 shard");
+    expect(text).toContain("Disabled by Dosu");
+    expect(text).toContain("Last error: AccessDenied (2 in a row)");
+    expect(text).toContain("not a claude-code transcript");
+  });
+
+  it("says which import it could not find, or that there are none", async () => {
+    fetchImpl.mockImplementation(async () => json({ imports: [imported()] }));
+    await expect(dosu("status", "--import", "nope")).rejects.toThrow(/no import 'nope'/);
+    fetchImpl.mockImplementation(async () => json({ imports: [] }));
+    await expect(dosu("status")).rejects.toThrow(/no imports connected/);
+  });
+});
+
+describe("dosu imports sync and disconnect, the rest of it", () => {
+  function oneImport(): void {
+    fetchImpl.mockImplementation(async (_url, init) => {
+      if (init?.method === "POST") {
+        return json({ id: imported().id, status: "queued", workflow_ids: ["a"] });
+      }
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return json({ imports: [imported()] });
+    });
+  }
+
+  it("prints the queued run as JSON with --json", async () => {
+    oneImport();
+    await dosu("sync", "--json");
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ workflow_ids: ["a"] });
+  });
+
+  it("says one shard for a one-shard run", async () => {
+    oneImport();
+    await dosu("sync");
+    expect(out.join("\n")).toContain("1 shard;");
+  });
+
+  it("asks before disconnecting, and does nothing when the answer is no", async () => {
+    oneImport();
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    await dosu("disconnect");
+    expect(calls().map((c) => c.method)).toEqual(["GET"]);
+    expect(out.join("\n")).toContain("Cancelled.");
+  });
+
+  it("disconnects once the user says yes", async () => {
+    oneImport();
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+    await dosu("disconnect");
+    expect(calls().at(-1)?.method).toBe("DELETE");
+  });
+
+  it("will not disconnect from --json without --yes, and prints JSON with both", async () => {
+    oneImport();
+    await expect(dosu("disconnect", "--json")).rejects.toThrow(/pass --yes/);
+    expect(calls()).toEqual([]);
+    await dosu("disconnect", "--json", "--yes");
+    expect(JSON.parse(out.join("\n"))).toEqual({ id: imported().id, disconnected: true });
+    expect(confirm).not.toHaveBeenCalled();
   });
 });
