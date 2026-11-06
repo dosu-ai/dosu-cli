@@ -16,7 +16,8 @@ import {
   saveConfig,
   updateTarget,
 } from "../config/config";
-import { configuredTargets } from "../config/targets";
+import type { SessionTarget } from "../config/schema";
+import { configuredTargets, isBucketTarget } from "../config/targets";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
 import { getHookAgent } from "../hooks/agents";
@@ -27,6 +28,7 @@ import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
 import { sourcesApi } from "../sources/api";
+import { runBucketWizard } from "../sources/bucket-wizard";
 import { HostedUnavailable, setupHostedTarget } from "../sources/hosted";
 import { runServerWizard } from "../sources/server-wizard";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
@@ -273,35 +275,42 @@ function setupOutroMessage(mcpCompleted: boolean): string {
   return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
 }
 
-/** Where finished sessions are kept: a sessiondb server, which normalizes and redacts them and
- * writes a bucket; Dosu reads that bucket and keeps only what it learns. Dosu runs one, and
- * picking it is a single call to the login (nothing to paste); a team that wants the
- * transcripts in a bucket of its own runs its own server and gives the user a URL and a token.
+/** Where finished sessions are kept: a bucket, written by a sessiondb server (which redacts and
+ * normalizes them) or by this machine itself; Dosu reads that bucket and keeps only what it
+ * learns. Dosu runs a server, and picking it is a single call to the login (nothing to paste);
+ * a team that wants the transcripts in a bucket of its own runs its own server and gives the
+ * user a URL and a token, or gives each person a key to write the bucket directly.
  * A target already set up is shown and kept unless `--storage` asks again. Returns null when
  * the user cancelled the flow mid-way (nothing was saved), so setup stops where they did;
  * "none" when they chose to ship nowhere for now. */
 export async function stepChooseSessionStorage(
   cfg: Config,
   opts: Pick<SetupOptions, "storage"> = {},
-): Promise<"hosted" | "server" | "none" | null> {
+): Promise<"hosted" | "server" | "bucket" | "none" | null> {
   const targets = configuredTargets(cfg);
   const current = targets.find((t) => t.name === cfg.default_target) ?? targets[0];
   if (current && !opts.storage) {
+    const change = `${info("dosu setup --storage")} changes that.`;
     p.log.success(
       wrapLog(
-        current.hosted
-          ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${info("dosu setup --storage")} changes that.`
-          : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
-              current.source_id ? ", whose bucket Dosu reads" : ""
-            }. ${info("dosu setup --storage")} changes that.`,
+        isBucketTarget(current)
+          ? `Sessions are redacted here and written to your bucket ${current.url} (owner ${current.owner})${
+              current.source_id ? ", which Dosu reads" : ""
+            }. ${change}`
+          : current.hosted
+            ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${change}`
+            : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
+                current.source_id ? ", whose bucket Dosu reads" : ""
+              }. ${change}`,
       ),
     );
+    if (isBucketTarget(current)) return "bucket";
     return current.hosted ? "hosted" : "server";
   }
   logger.info("setup", "Step: choose session storage");
   p.log.message(
     wrapLog(
-      "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed. A session goes to a sessiondb server, which redacts it and stores it in a bucket; Dosu reads the bucket and keeps only what it learns.",
+      "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed. A session is redacted (by a sessiondb server, or on this machine) and stored in a bucket; Dosu reads the bucket and keeps only what it learns.",
     ),
   );
   const api = sourcesApi(cfg);
@@ -321,6 +330,11 @@ export async function stepChooseSessionStorage(
         value: "server" as const,
         label: api ? "My own sessiondb server" : "My sessiondb server",
         hint: "a URL and a token; the transcripts stay in a bucket you own",
+      },
+      {
+        value: "bucket" as const,
+        label: "My bucket (S3 / R2)",
+        hint: "a bucket URL and a write key; redacted on this machine, no server to run",
       },
       { value: "none" as const, label: "Not now", hint: "nothing ships until one is set up" },
     ],
@@ -365,6 +379,24 @@ export async function stepChooseSessionStorage(
           }`,
         ),
       );
+      return "none";
+    }
+  }
+  if (choice === "bucket") {
+    try {
+      const result = await runBucketWizard(cfg);
+      if (!result) {
+        p.log.info(
+          wrapLog(
+            `No bucket set up; nothing ships until then. ${info("dosu sources setup --bucket <url>")} tries again.`,
+          ),
+        );
+        return null;
+      }
+      return "bucket";
+    } catch (err) {
+      if (!(err instanceof CliUsageError)) throw err;
+      p.log.warn(wrapLog(`${err.message}\nNothing ships until a bucket is set up.`));
       return "none";
     }
   }
@@ -419,16 +451,19 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   // What happens to the sessions, why it's worth it, and how to keep something out.
   const incognito = installedIncognitoCommands();
   const targets = configuredTargets(cfg);
-  const server = targets.find((t) => t.name === cfg.default_target) ?? targets[0];
+  const server = (targets.find((t) => t.name === cfg.default_target) ??
+    targets[0]) as SessionTarget;
   p.log.message(
     wrapLog(
       [
         "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
-        `Sessions are uploaded to ${
-          server?.hosted
-            ? "Dosu's sessiondb"
-            : `your sessiondb server${server ? ` ${server.url}` : ""}`
-        }, which redacts secrets before anything is stored. ${
+        `${
+          isBucketTarget(server)
+            ? `Sessions are redacted on this machine and written to your bucket ${server.url}`
+            : `Sessions are uploaded to ${
+                server.hosted ? "Dosu's sessiondb" : `your sessiondb server ${server.url}`
+              }, which redacts secrets before anything is stored`
+        }. ${
           incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"
         } dosu knowledge transcripts disable to stop shipping altogether.`,
       ].join("\n"),

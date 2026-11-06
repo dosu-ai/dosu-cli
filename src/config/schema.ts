@@ -35,6 +35,8 @@ interface ActiveAccount {
  * holds a token from the server's `.env`. Several can be configured; `default_target` names the one
  * `dosu sync` uses without `--target`. */
 export interface ServerTarget {
+  /** Absent in config: a target with no `kind` is a server. */
+  kind?: "server";
   /** How the target is named on the command line (`--target team`). */
   name: string;
   /** `https://host`, no trailing slash. */
@@ -53,13 +55,38 @@ export interface ServerTarget {
   token_expires_at?: string;
 }
 
+/** A bucket this machine writes itself, with no server: `@dosu/sessiondb` redacts and
+ * normalizes each session here and writes it under `owners/<owner>/` with this machine's key.
+ * The key should be scoped to that folder by the bucket's policy; the config file is 0600. */
+export interface BucketTarget {
+  kind: "bucket";
+  name: string;
+  /** `s3://bucket/prefix` or `r2://bucket/prefix`. */
+  url: string;
+  owner: string;
+  /** AWS region (`s3://`). */
+  region?: string;
+  /** Cloudflare account id (`r2://`). */
+  account_id?: string;
+  /** S3-compatible endpoint (MinIO, Backblaze, an R2 endpoint given in full). */
+  endpoint?: string;
+  access_key_id: string;
+  secret_access_key: string;
+  session_token?: string;
+  /** The Dosu source the bucket is connected as; absent when it is only an archive. */
+  source_id?: string;
+}
+
+/** Where sessions ship: a sessiondb server, or a bucket written directly. */
+export type SessionTarget = ServerTarget | BucketTarget;
+
 /** Runtime and on-disk schema. Account-owned target state cannot exist outside its account. */
 export interface Config {
   schema_version: typeof CONFIG_SCHEMA_VERSION;
   mode?: SetupMode;
   active_account?: ActiveAccount;
-  /** The sessiondb servers sessions can ship to. */
-  targets?: ServerTarget[];
+  /** Where sessions can ship: sessiondb servers and buckets. */
+  targets?: SessionTarget[];
   /** The target `sync` ships to without `--target`. Unset: the only configured target. */
   default_target?: string;
 }

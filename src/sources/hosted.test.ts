@@ -122,7 +122,9 @@ describe("renewHostedToken", () => {
       throw new TypeError("fetch failed");
     });
     expect(await renewHostedToken(loadConfig(), due, offline, NOW)).toBe(due);
-    expect(loadConfig().targets?.find((t) => t.name === "dosu")?.token).toBe("old");
+    expect((loadConfig().targets?.find((t) => t.name === "dosu") as ServerTarget).token).toBe(
+      "old",
+    );
   });
 
   it("keeps the old token when Dosu's server does not accept the new one", async () => {
@@ -139,7 +141,9 @@ describe("renewHostedToken", () => {
 
     expect(kept).toBe(due);
     expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(loadConfig().targets?.find((t) => t.name === "dosu")?.token).toBe("old");
+    expect((loadConfig().targets?.find((t) => t.name === "dosu") as ServerTarget).token).toBe(
+      "old",
+    );
   });
 });
 

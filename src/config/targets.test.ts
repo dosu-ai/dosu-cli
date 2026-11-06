@@ -29,10 +29,10 @@ describe("selectTarget", () => {
 
   it("explains what it could not resolve", () => {
     expect(() => selectTarget(config({ targets: [TEAM] }), "lab")).toThrow(
-      "unknown target 'lab' (configured: team); run 'dosu setup' or 'dosu sources setup --server <url> --token <token>'",
+      "unknown target 'lab' (configured: team); run 'dosu setup' or 'dosu sources setup'",
     );
     expect(() => selectTarget(config({ targets: [LAB, TEAM] }))).toThrow(
-      "several servers are configured (lab, team): pass --target <name> or set default_target",
+      "several targets are configured (lab, team): pass --target <name> or set default_target",
     );
     // A default that was removed from the targets is a configuration error, not silence.
     expect(() => selectTarget(config({ targets: [TEAM], default_target: "gone" }))).toThrow(

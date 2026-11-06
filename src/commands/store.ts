@@ -8,9 +8,10 @@ import pc from "picocolors";
 import { CliUsageError } from "../cli/errors";
 import { type Config, loadConfig, MODE_OSS } from "../config/config";
 import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
-import type { ServerTarget } from "../config/schema";
-import { configuredTargets, selectTarget } from "../config/targets";
+import type { BucketTarget, ServerTarget } from "../config/schema";
+import { configuredTargets, isBucketTarget, selectTarget } from "../config/targets";
 import { trajectorySourceOf } from "../sessions/start";
+import { bucketClientOf } from "../shipper/select";
 import { serverClient } from "../sources/server-client";
 import { confirm, isCancel } from "../tui/prompts";
 import { printResult } from "./output";
@@ -25,9 +26,12 @@ interface StoreSelection {
   target?: string;
 }
 
-/** The server `redact` works against: `--target`, else the default, else the only one. */
-function selectServer(cfg: Config, selection: StoreSelection): ServerTarget {
-  let target: ServerTarget | undefined;
+/** What `redact` can reach: a configured server or bucket. */
+type RedactServer = ServerTarget | BucketTarget;
+
+/** The target `redact` works against: `--target`, else the default, else the only one. */
+function selectServer(cfg: Config, selection: StoreSelection): RedactServer {
+  let target: RedactServer | undefined;
   try {
     target = selectTarget(cfg, selection.target);
   } catch (err) {
@@ -35,7 +39,7 @@ function selectServer(cfg: Config, selection: StoreSelection): ServerTarget {
   }
   if (!target) {
     throw new CliUsageError(
-      "no sessiondb server configured: run 'dosu setup' or 'dosu sources setup --server <url> --token <token>'",
+      "no sessiondb target configured: run 'dosu setup' or 'dosu sources setup'",
     );
   }
   return target;
@@ -106,7 +110,8 @@ async function redactOnServer(
   session: { agent: string; sessionId: string },
 ): Promise<{ summary: string; removed: number }> {
   const target = selectServer(cfg, selection);
-  const result = await serverClient(target).tombstone(session.agent, session.sessionId);
+  const client = isBucketTarget(target) ? bucketClientOf(target) : serverClient(target);
+  const result = await client.tombstone(session.agent, session.sessionId);
   if (!result) {
     throw new CliUsageError(
       `session ${session.agent}:${session.sessionId} is not on ${target.name}`,

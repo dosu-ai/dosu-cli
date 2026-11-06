@@ -9,7 +9,8 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
-import type { ServerTarget } from "../config/schema";
+import type { BucketTarget, ServerTarget, SessionTarget } from "../config/schema";
+import { fakeS3 } from "../shipper/fake-s3.test-utils";
 import type { SourceStatus } from "../sources/api";
 import { parseStdinCredentials, sourcesCommand, wizardInputFromOptions } from "./sources";
 
@@ -60,7 +61,7 @@ function source(extra: Partial<SourceStatus> = {}): SourceStatus {
   };
 }
 
-function configure(targets: ServerTarget[] = [SERVER], loggedIn = true): void {
+function configure(targets: SessionTarget[] = [SERVER], loggedIn = true): void {
   saveConfig({
     ...makeTestConfig({
       access_token: "t",
@@ -200,7 +201,7 @@ describe("sources setup --hosted", () => {
     await dosu("setup", "--hosted");
 
     const cfg = loadConfig();
-    expect(cfg.targets?.map((t) => [t.name, t.token])).toEqual([
+    expect(cfg.targets?.map((t) => [t.name, (t as ServerTarget).token])).toEqual([
       ["team", "sdb_test"],
       ["dosu", "eyJ.hosted.token"],
     ]);
@@ -259,6 +260,176 @@ describe("sources setup --hosted", () => {
       /--hosted is Dosu's server/,
     );
     expect(apiCalls()).toEqual([]);
+  });
+});
+
+describe("sources setup --bucket", () => {
+  const ENDPOINT = "http://s3.test:9000";
+  const BUCKET: BucketTarget = {
+    kind: "bucket",
+    name: "mine",
+    url: "s3://acme-sessions/agents",
+    owner: "james",
+    region: "us-east-1",
+    endpoint: ENDPOINT,
+    access_key_id: "AKIDWRITE",
+    secret_access_key: "writesecret",
+  };
+
+  /** The bucket answers its own requests; Dosu answers the rest with `impl`. */
+  function bucketAnswers(impl: Fetch) {
+    const s3 = fakeS3(ENDPOINT, "acme-sessions");
+    fetchImpl.mockImplementation(async (url, init) =>
+      url.startsWith(ENDPOINT) ? s3.fetch(url, init) : impl(url, init),
+    );
+    return s3;
+  }
+
+  it("checks the write key against the bucket, saves the target, and connects it with Dosu's own keys", async () => {
+    configure([]);
+    const s3 = bucketAnswers(async (_url, init) =>
+      init?.method === "POST" ? json(source({ endpoint: ENDPOINT }), 201) : json({ sources: [] }),
+    );
+
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--endpoint",
+      ENDPOINT,
+      "--owner",
+      "james",
+      "--write-access-key-id",
+      "AKIDWRITE",
+      "--write-secret-access-key",
+      "writesecret",
+      "--read-access-key-id",
+      "AKIDREAD",
+      "--read-secret-access-key",
+      "readsecret",
+      "--name",
+      "mine",
+      "--json",
+    );
+
+    expect([...s3.objects.keys()]).toContain("agents/owners/james/.probe");
+    const cfg = loadConfig();
+    expect(cfg.targets).toEqual([{ ...BUCKET, source_id: source().id }]);
+    expect(cfg.default_target).toBe("mine");
+    const posts = calls().filter((c) => c.method === "POST");
+    expect(posts).toEqual([
+      {
+        method: "POST",
+        path: "/v1/memory/sources",
+        body: expect.objectContaining({
+          kind: "s3",
+          bucket: "acme-sessions",
+          prefix: "agents",
+          owner: "james",
+          endpoint: ENDPOINT,
+          access_key_id: "AKIDREAD",
+          secret_access_key: "readsecret",
+        }),
+      },
+    ]);
+    const printed = out.join("\n");
+    expect(printed).toContain('"secret_access_key": "***"');
+    expect(printed).not.toContain("writesecret");
+  });
+
+  it("connect on a bucket target tells Dosu about that bucket, asking no server", async () => {
+    configure([BUCKET]);
+    bucketAnswers(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
+
+    await dosu("connect", "--access-key-id", "AKIDREAD", "--secret-access-key", "readsecret");
+
+    expect(calls().find((c) => c.method === "POST")?.body).toMatchObject({
+      kind: "s3",
+      bucket: "acme-sessions",
+      prefix: "agents",
+      owner: "james",
+      region: "us-east-1",
+      endpoint: ENDPOINT,
+      access_key_id: "AKIDREAD",
+    });
+    expect(fetchImpl.mock.calls.some(([url]) => url.startsWith(SERVER.url))).toBe(false);
+    expect(loadConfig().targets?.[0]?.source_id).toBe(source().id);
+  });
+
+  it("status finds a bucket target's source by its own URL and owner", async () => {
+    configure([BUCKET]);
+    bucketAnswers(async () => json({ sources: [source()] }));
+
+    await dosu("status");
+
+    expect(out.join("\n")).toContain("mine → s3://acme-sessions/agents");
+  });
+
+  it("--server prints its target with the token masked, as --bucket masks the write secret", async () => {
+    configure([]);
+    dosuAnswers(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
+
+    await dosu(
+      "setup",
+      "--server",
+      SERVER.url,
+      "--token",
+      "sdb_secret",
+      "--read-access-key-id",
+      "AKIDREAD",
+      "--read-secret-access-key",
+      "readsecret",
+      "--json",
+    );
+
+    const printed = out.join("\n");
+    expect(printed).toContain('"token": "***"');
+    expect(printed).not.toContain("sdb_secret");
+  });
+
+  it("without --json, starts Dosu's first read of the new bucket source", async () => {
+    configure([]);
+    vi.stubEnv("DOSU_BUCKET_ACCESS_KEY_ID", "AKIDWRITE");
+    vi.stubEnv("DOSU_BUCKET_SECRET_ACCESS_KEY", "writesecret");
+    bucketAnswers(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
+
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--region",
+      "us-east-1",
+      "--endpoint",
+      ENDPOINT,
+      "--owner",
+      "james",
+      "--read-access-key-id",
+      "AKIDREAD",
+      "--read-secret-access-key",
+      "readsecret",
+      "--yes",
+    );
+
+    expect(loadConfig().targets?.[0]).toMatchObject({ ...BUCKET, name: "bucket" });
+    expect(calls().map((c) => `${c.method} ${c.path}`)).toContain(
+      `POST /v1/memory/sources/${source().id}/sync`,
+    );
+  });
+
+  it("refuses --bucket with a server's flags, with --hosted, or half a write key", async () => {
+    await expect(dosu("setup", "--bucket", "s3://a", "--server", SERVER.url)).rejects.toThrow(
+      /--server and --token are for a server/,
+    );
+    await expect(dosu("setup", "--hosted", "--bucket", "s3://a")).rejects.toThrow(/--bucket/);
+    await expect(
+      dosu("setup", "--bucket", "s3://a", "--write-access-key-id", "AKID"),
+    ).rejects.toThrow(/go together/);
   });
 });
 
@@ -392,7 +563,7 @@ describe("sources connect", () => {
 
   it("asks for --target when several are configured", async () => {
     configure([SERVER, { ...SERVER, name: "other", url: "https://other.example.com" }]);
-    await expect(dosu("connect")).rejects.toThrow(/several servers are configured \(team, other\)/);
+    await expect(dosu("connect")).rejects.toThrow(/several targets are configured \(team, other\)/);
   });
 });
 
