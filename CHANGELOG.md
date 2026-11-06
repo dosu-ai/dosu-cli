@@ -1,3 +1,10 @@
+# [0.67.0-sessions.4](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.3...v0.67.0-sessions.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* **sessions:** no auto-update on sessions push; redact reads DOSU_SESSIONDB_URL ([#310](https://github.com/dosu-ai/dosu-cli/issues/310)) ([0a4b3d3](https://github.com/dosu-ai/dosu-cli/commit/0a4b3d3c08fb18816a26f7ce6d86d322ffe78c0d))
+
 # [0.67.0-sessions.3](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.2...v0.67.0-sessions.3) (2026-11-06)
 
 
