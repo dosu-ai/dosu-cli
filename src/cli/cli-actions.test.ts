@@ -307,6 +307,21 @@ describe("CLI actions", () => {
       errorSpy.mockRestore();
     });
 
+    it("prints a non-Error OAuth rejection as a string", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const originalExitCode = process.exitCode;
+      mockStartOAuthFlow.mockRejectedValue("socket closed");
+
+      await run("login");
+
+      expect(errorSpy).toHaveBeenCalledWith("socket closed");
+      expect(process.exitCode).toBe(1);
+      expect(loadConfig().active_account).toBeUndefined();
+
+      process.exitCode = originalExitCode;
+      errorSpy.mockRestore();
+    });
+
     it("uses device flow and saves token when --no-browser is passed", async () => {
       mockStartDeviceFlow.mockResolvedValue({
         access_token: "dev_tok",
