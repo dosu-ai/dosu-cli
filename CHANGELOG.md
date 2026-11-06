@@ -1,3 +1,10 @@
+# [0.67.0-beta.12](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.11...v0.67.0-beta.12) (2026-11-06)
+
+
+### Features
+
+* **sessions:** push session files through the sync's shipper, under DOSU_PROJECT ([#308](https://github.com/dosu-ai/dosu-cli/issues/308)) ([67b93dc](https://github.com/dosu-ai/dosu-cli/commit/67b93dce5103921188773390b94cbd5412312d8d))
+
 # [0.67.0-beta.11](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.10...v0.67.0-beta.11) (2026-11-05)
 
 
