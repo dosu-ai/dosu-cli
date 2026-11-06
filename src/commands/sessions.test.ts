@@ -201,6 +201,16 @@ describe("dosu sessions push", () => {
     expect(server.fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("refuses a plain http:// server that is not this machine", async () => {
+    vi.stubEnv("DOSU_SESSIONDB_URL", "http://sessions.example.com");
+
+    const error = await run("push", claudeFile()).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect(String(error)).toContain("https://");
+    expect(server.fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("refuses to run with no server to push to", async () => {
     vi.stubEnv("DOSU_SESSIONDB_URL", undefined);
     vi.stubEnv("DOSU_SESSIONDB_TOKEN", undefined);

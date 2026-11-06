@@ -3386,6 +3386,19 @@ describe("stepChooseSessionStorage", () => {
     expect(options.map((o) => o.value)).toEqual(["server", "none"]);
   });
 
+  it("stops setup when the user cancels the question, saving nothing", async () => {
+    vi.mocked(sourcesApi).mockReturnValue(api);
+    vi.mocked(p.select).mockResolvedValueOnce(Symbol("cancel"));
+    vi.mocked(p.isCancel).mockReturnValueOnce(true);
+    const cfg = makeCfg();
+    saveConfig(cfg);
+
+    expect(await stepChooseSessionStorage(cfg)).toBeNull();
+    expect(runServerWizard).not.toHaveBeenCalled();
+    expect(setupHostedTarget).not.toHaveBeenCalled();
+    expect(loadConfig().targets).toBeUndefined();
+  });
+
   it("ships nowhere when the user has no server yet, and says how to add one", async () => {
     vi.mocked(sourcesApi).mockReturnValue(api);
     vi.mocked(p.select).mockResolvedValueOnce("none");

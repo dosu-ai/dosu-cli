@@ -125,14 +125,16 @@ export function hostedTokenNeedsRenewal(target: ServerTarget, now: Date = new Da
   return Number.isNaN(expires) || expires - now.getTime() < RENEW_BEFORE_MS;
 }
 
-/** A fresh token for a hosted target whose expiry is near, saved in place; the target as it
- * was when Dosu cannot be asked (not logged in, offline, or an error), so the run goes on
- * with what it has. Never throws. */
+/** A fresh token for a hosted target whose expiry is near, saved in place once the server has
+ * accepted it; the target as it was when Dosu cannot be asked (not logged in, offline, or an
+ * error) or its server refuses the new token, so the run goes on with what it has. Never
+ * throws. */
 export async function renewHostedToken(
   cfg: Config,
   target: ServerTarget,
   api: SourcesApi | undefined,
   now: Date = new Date(),
+  fetchImpl: FetchLike = fetch,
 ): Promise<ServerTarget> {
   if (!hostedTokenNeedsRenewal(target, now)) return target;
   if (!api) {
@@ -142,6 +144,7 @@ export async function renewHostedToken(
   try {
     const hosted = await api.hosted();
     const renewed = { ...target, ...targetOf(hosted, target.name) };
+    await checkWithServer(renewed, fetchImpl);
     cfg.targets = configuredTargets(cfg).map((t) => (t.name === target.name ? renewed : t));
     saveConfig(cfg);
     logger.info("sources", `hosted token for ${target.name} renewed until ${hosted.expires_at}`);

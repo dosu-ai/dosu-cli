@@ -97,7 +97,7 @@ describe("renewHostedToken", () => {
     const cfg = { ...loadConfig(), targets: [OWN, due] };
     const dosu = api(async () => renewal());
 
-    const renewed = await renewHostedToken(cfg, due, dosu, NOW);
+    const renewed = await renewHostedToken(cfg, due, dosu, NOW, server(200));
 
     expect(renewed).toMatchObject({ name: "dosu", token: "new", hosted: true, source_id: "src-1" });
     expect(renewed.token_expires_at).toBe(renewal().expires_at);
@@ -124,4 +124,32 @@ describe("renewHostedToken", () => {
     expect(await renewHostedToken(loadConfig(), due, offline, NOW)).toBe(due);
     expect(loadConfig().targets?.find((t) => t.name === "dosu")?.token).toBe("old");
   });
+
+  it("keeps the old token when Dosu's server does not accept the new one", async () => {
+    const due = { ...HOSTED, token_expires_at: new Date(NOW.getTime() + DAY).toISOString() };
+    const fetchImpl = server(401);
+
+    const kept = await renewHostedToken(
+      loadConfig(),
+      due,
+      api(async () => renewal()),
+      NOW,
+      fetchImpl,
+    );
+
+    expect(kept).toBe(due);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(loadConfig().targets?.find((t) => t.name === "dosu")?.token).toBe("old");
+  });
 });
+
+/** Dosu's sessiondb answering `GET /v1/me` for the renewed token with `status`. */
+function server(status: number) {
+  return vi.fn(async (_input: string, _init?: RequestInit) =>
+    status === 200
+      ? new Response(JSON.stringify({ owner: "u-42", storage: { url: "s3://dosu/sessions" } }))
+      : new Response(JSON.stringify({ error: { code: "unauthorized", message: "no" } }), {
+          status,
+        }),
+  );
+}

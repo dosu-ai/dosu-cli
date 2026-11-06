@@ -821,6 +821,18 @@ describe("CLI actions", () => {
         deploymentID: "dep_456",
       });
     });
+
+    it("passes --mode, case-folded, and --storage to setup flow", async () => {
+      mockRunSetup.mockResolvedValue(undefined);
+
+      await run("setup", "--mode", "CLOUD", "--storage");
+
+      expect(mockRunSetup).toHaveBeenCalledWith({
+        deploymentID: undefined,
+        mode: "cloud",
+        storage: true,
+      });
+    });
   });
 
   // ── logs ────────────────────────────────────────────────────────────────

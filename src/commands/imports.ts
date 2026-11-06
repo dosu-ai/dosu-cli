@@ -319,9 +319,12 @@ function disconnectCommand(): Command {
     .option("-y, --yes", "Skip the confirmation")
     .option("--json", "Output as JSON")
     .action(async (opts: { import?: string; yes?: boolean; json?: boolean }) => {
+      if (opts.json && !opts.yes) {
+        throw new CliUsageError("--json never prompts: pass --yes to disconnect without asking");
+      }
       const api = requireImportsApi(loadConfig());
       const chosen = await requireImport(api, opts.import);
-      if (!opts.yes && !opts.json) {
+      if (!opts.yes) {
         const ok = await confirm({
           message: `Disconnect "${chosen.name}" (${chosen.url})? Dosu stops importing it and drops its keys; the bucket itself is untouched.`,
           initialValue: false,
