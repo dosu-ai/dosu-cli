@@ -325,7 +325,8 @@ export async function stepChooseSessionStorage(
       { value: "none" as const, label: "Not now", hint: "nothing ships until one is set up" },
     ],
   });
-  if (p.isCancel(choice) || choice === "none") {
+  if (p.isCancel(choice)) return null;
+  if (choice === "none") {
     p.log.info(
       wrapLog(
         `Nothing ships until then. ${info("dosu sources setup")} sets it up later${

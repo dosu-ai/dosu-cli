@@ -46,9 +46,21 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 const URL_RE = /^https?:\/\/[^\s/]+(?::\d+)?(?:\/[^\s]*)?$/;
 
+/** Hosts a token may reach over plain http: the bearer token rides on every request. */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** An `https://` URL, or `http://` to this machine, without a trailing slash. */
 export function normalizeServerUrl(value: string): string | undefined {
   const url = value.trim().replace(/\/+$/, "");
-  return URL_RE.test(url) ? url : undefined;
+  if (!URL_RE.test(url)) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol === "http:" && !LOOPBACK_HOSTS.has(parsed.hostname)) return undefined;
+  return url;
 }
 
 /** The bucket a server writes (`GET /v1/me`), as Dosu is told about it. */
@@ -143,7 +155,8 @@ async function wizard(
         {
           message: "Server URL",
           placeholder: "https://sessions.example.com",
-          validate: (value) => (normalizeServerUrl(value) ? undefined : "An http(s):// URL"),
+          validate: (value) =>
+            normalizeServerUrl(value) ? undefined : "An https:// URL (http:// only to localhost)",
         },
         input.server,
       ),

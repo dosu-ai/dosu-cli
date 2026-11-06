@@ -16,6 +16,7 @@ import { type AgentSession, type SessionHarness, sessionAtPath } from "../sessio
 import { createShipStep } from "../shipper/runner";
 import { selectTarget } from "../shipper/select";
 import { createServerTarget, type Target } from "../shipper/target";
+import { normalizeServerUrl } from "../sources/server-wizard";
 import type { ShipSessionResult } from "../sync/sync";
 
 type FileHarness = Extract<SessionHarness, "claude" | "codex" | "cursor">;
@@ -74,7 +75,13 @@ function pushTarget(env: NodeJS.ProcessEnv, name: string | undefined): Target {
         "DOSU_SESSIONDB_URL and DOSU_SESSIONDB_TOKEN go together; set both, or neither to use a configured server",
       );
     }
-    return createServerTarget({ name: "env", url: url.replace(/\/+$/, ""), token });
+    const server = normalizeServerUrl(url);
+    if (!server) {
+      throw new CliUsageError(
+        `DOSU_SESSIONDB_URL must be an https:// URL (http:// only to localhost), got '${url}'`,
+      );
+    }
+    return createServerTarget({ name: "env", url: server, token });
   }
   const target = selectTarget(loadConfig(), { target: name });
   if (!target) {

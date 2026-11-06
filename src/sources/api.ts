@@ -102,11 +102,23 @@ export class SourcesApiError extends Error {
   }
 }
 
-/** The client for this install's login, or undefined when it cannot call Dosu: OSS mode, no API
- * key or deployment, or no absolute backend URL. */
-export function sourcesApi(cfg: Config): SourcesApi | undefined {
+/** Per-request cap. `dosu sync` renews a hosted token and nudges a source from a detached run that
+ * holds the sync lock, so a backend that never answers must not hold it with them. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+type Call = <T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown) => Promise<T>;
+
+interface Caller {
+  deploymentId: string;
+  backendUrl: string;
+  call: Call;
+}
+
+/** A caller for one `/v1/memory/<resource>` collection with this install's login, or undefined
+ * when it cannot call Dosu: OSS mode, no API key or deployment, or no absolute backend URL. */
+function backendCaller(cfg: Config, resource: "sources" | "imports"): Caller | undefined {
   const account = cfg.active_account?.target;
-  const backendUrl = getBackendURL();
+  const backendUrl = getBackendURL().replace(/\/$/, "");
   if (
     cfg.mode === MODE_OSS ||
     !account?.api_key ||
@@ -115,15 +127,14 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
   ) {
     return undefined;
   }
-  const base = `${backendUrl.replace(/\/$/, "")}/v1/memory/sources`;
+  const base = `${backendUrl}/v1/memory/${resource}`;
   const apiKey = account.api_key;
-  const deploymentId = account.deployment_id;
 
-  async function call<T>(
+  const call: Call = async <T>(
     method: "GET" | "POST" | "DELETE",
     path: string,
     body?: unknown,
-  ): Promise<T> {
+  ): Promise<T> => {
     const response = await fetch(`${base}${path}`, {
       method,
       headers: {
@@ -131,19 +142,33 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) throw new SourcesApiError(response.status, await errorDetail(response));
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
-  }
+  };
+  return { deploymentId: account.deployment_id, backendUrl, call };
+}
 
+/** The client for this install's login, or undefined when it cannot call Dosu: OSS mode, no API
+ * key or deployment, or no absolute backend URL. */
+export function sourcesApi(cfg: Config): SourcesApi | undefined {
+  const caller = backendCaller(cfg, "sources");
+  if (!caller) return undefined;
+  const { deploymentId, backendUrl, call } = caller;
   return {
     deploymentId,
-    backendUrl: backendUrl.replace(/\/$/, ""),
+    backendUrl,
     connect: (body) => call("POST", "", { deployment_id: deploymentId, ...body }),
     hosted: () => call("POST", "/hosted", { deployment_id: deploymentId }),
     list: async () =>
-      (await call<{ sources: SourceStatus[] }>("GET", `?deployment_id=${deploymentId}`)).sources,
+      (
+        await call<{ sources: SourceStatus[] }>(
+          "GET",
+          `?deployment_id=${encodeURIComponent(deploymentId)}`,
+        )
+      ).sources,
     get: (id) => call("GET", `/${encodeURIComponent(id)}`),
     sync: (id) => call("POST", `/${encodeURIComponent(id)}/sync`),
     disconnect: (id) => call("DELETE", `/${encodeURIComponent(id)}`),
@@ -244,44 +269,20 @@ export interface ImportsApi {
 
 /** The imports client for this install's login, under the same conditions as `sourcesApi`. */
 function importsApi(cfg: Config): ImportsApi | undefined {
-  const account = cfg.active_account?.target;
-  const backendUrl = getBackendURL();
-  if (
-    cfg.mode === MODE_OSS ||
-    !account?.api_key ||
-    !account.deployment_id ||
-    !isAbsoluteHttpUrl(backendUrl)
-  ) {
-    return undefined;
-  }
-  const base = `${backendUrl.replace(/\/$/, "")}/v1/memory/imports`;
-  const apiKey = account.api_key;
-  const deploymentId = account.deployment_id;
-
-  async function call<T>(
-    method: "GET" | "POST" | "DELETE",
-    path: string,
-    body?: unknown,
-  ): Promise<T> {
-    const response = await fetch(`${base}${path}`, {
-      method,
-      headers: {
-        "X-Dosu-API-Key": apiKey,
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
-    if (!response.ok) throw new SourcesApiError(response.status, await errorDetail(response));
-    if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
-  }
-
+  const caller = backendCaller(cfg, "imports");
+  if (!caller) return undefined;
+  const { deploymentId, backendUrl, call } = caller;
   return {
     deploymentId,
-    backendUrl: backendUrl.replace(/\/$/, ""),
+    backendUrl,
     connect: (body) => call("POST", "", { deployment_id: deploymentId, ...body }),
     list: async () =>
-      (await call<{ imports: ImportStatus[] }>("GET", `?deployment_id=${deploymentId}`)).imports,
+      (
+        await call<{ imports: ImportStatus[] }>(
+          "GET",
+          `?deployment_id=${encodeURIComponent(deploymentId)}`,
+        )
+      ).imports,
     get: (id) => call("GET", `/${encodeURIComponent(id)}`),
     sync: (id) => call("POST", `/${encodeURIComponent(id)}/sync`),
     disconnect: (id) => call("DELETE", `/${encodeURIComponent(id)}`),

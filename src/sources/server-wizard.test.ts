@@ -135,6 +135,8 @@ describe("helpers", () => {
   it("normalizes server URLs", () => {
     expect(normalizeServerUrl(" https://s.example.com/ ")).toBe("https://s.example.com");
     expect(normalizeServerUrl("http://localhost:7200")).toBe("http://localhost:7200");
+    expect(normalizeServerUrl("http://127.0.0.1:7200/")).toBe("http://127.0.0.1:7200");
+    expect(normalizeServerUrl("http://sessions.example.com")).toBeUndefined();
     expect(normalizeServerUrl("s3://bucket")).toBeUndefined();
     expect(normalizeServerUrl("example.com")).toBeUndefined();
   });
