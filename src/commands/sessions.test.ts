@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -106,12 +106,6 @@ beforeEach(() => {
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", `${BACKEND}/`);
   vi.stubEnv("DOSU_INGEST_KEY", KEY);
   vi.stubEnv("DOSU_PROJECT", "");
-  // The agents' stores and the CLI's own files, all in the test's directory.
-  vi.stubEnv("HOME", join(dir, "home"));
-  vi.stubEnv("XDG_CONFIG_HOME", join(dir, "config"));
-  for (const name of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_DATA_HOME", "PI_CODING_AGENT_DIR"]) {
-    vi.stubEnv(name, undefined);
-  }
   fetchMock.mockReset();
   fetchMock.mockImplementation(async () => queued());
   vi.stubGlobal("fetch", fetchMock);
@@ -206,61 +200,12 @@ describe("dosu sessions push", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
-
-  it("asks for files or --since, not both or neither", async () => {
-    const neither = await run("push").catch((err: unknown) => err);
-    const both = await run("push", claudeFile(), "--since", "2026-11-04T00:00:00Z").catch(
-      (err: unknown) => err,
-    );
-    const notATime = await run("push", "--since", "yesterday-ish").catch((err: unknown) => err);
-
-    expect(neither).toMatchObject({ code: "INVALID_ARGUMENT", message: "Nothing to push" });
-    expect(both).toMatchObject({
-      code: "INVALID_ARGUMENT",
-      message: "Name session files or --since, not both",
-    });
-    expect(notATime).toMatchObject({
-      code: "INVALID_ARGUMENT",
-      message: "--since yesterday-ish is not a time",
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 });
 
-describe("dosu sessions push --since", () => {
-  /** A Claude Code session in the agent's own store, last active at `at`. */
-  function stored(id: string, at: Date, configDir = join(dir, "home", ".claude")): string {
-    const project = join(configDir, "projects", "-widget");
-    mkdirSync(project, { recursive: true });
-    const path = claudeFile(`${id}.jsonl`, 2, project);
-    utimesSync(path, at, at);
-    return path;
-  }
-
-  const since = new Date("2026-11-05T22:00:00Z");
-  const before = new Date("2026-11-05T21:00:00Z");
-  const after = new Date("2026-11-05T22:05:00Z");
-
-  it("pushes every session the machine's agents kept since the time, oldest first", async () => {
-    stored("old", before);
-    const first = stored("first", after);
-    const relocated = join(dir, "work", "claude");
-    vi.stubEnv("CLAUDE_CONFIG_DIR", relocated);
-    const second = stored("second", new Date("2026-11-05T22:10:00Z"), relocated);
-
-    await run("push", "--since", since.toISOString());
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(sent(0).body.metadata).toMatchObject({ agent: "claude-code", session_id: "first" });
-    expect(sent(1).body.metadata).toMatchObject({ session_id: "second" });
-    expect(sent(1).url).toBe(`${BACKEND}/v1/memory/ingest`);
-    expect(printed(logSpy)).toContain(`✓ ${first}`);
-    expect(printed(logSpy)).toContain(`✓ ${second}`);
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it("files the sessions under DOSU_PROJECT when their checkout's origin doesn't name it", async () => {
-    // A runner clones through its own gateway: the origin names no repository on GitHub.
+describe("dosu sessions push from a runner's task", () => {
+  it("pushes the files of the task's own agent directory, under DOSU_PROJECT", async () => {
+    // A runner gives each task its own Claude Code directory and clones through its own gateway,
+    // so the origin names no repository on GitHub.
     execFileSync("git", [
       "-C",
       repo,
@@ -270,21 +215,25 @@ describe("dosu sessions push --since", () => {
       "http://git.internal/acme/widget.git",
     ]);
     vi.stubEnv("DOSU_PROJECT", "github.com/acme/widget");
-    stored("task", after);
+    const project = join(dir, "work", "attempt-1", "claude", "projects", "-widget");
+    mkdirSync(join(project, "task", "subagents"), { recursive: true });
+    const main = claudeFile("task.jsonl", 2, project);
+    const subagent = claudeFile("agent-a1.jsonl", 2, join(project, "task", "subagents"));
 
-    await run("push", "--since", since.toISOString());
+    await run("push", main, subagent);
 
-    expect(sent().body.metadata).toMatchObject({ project: "github.com/acme/widget" });
-    expect(sent().body.metadata.repo).toBeUndefined();
-  });
-
-  it("says so when there is nothing since the time", async () => {
-    stored("old", before);
-
-    await run("push", "--since", since.toISOString());
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(printed(logSpy)).toContain(`No agent sessions since ${since.toISOString()}.`);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sent(0).body.metadata).toMatchObject({
+      project: "github.com/acme/widget",
+      agent: "claude-code",
+      session_id: "task",
+    });
+    expect(sent(0).body.metadata.repo).toBeUndefined();
+    expect(sent(1).body.metadata).toMatchObject({
+      project: "github.com/acme/widget",
+      session_id: "agent-a1",
+      parent_session_id: "task",
+    });
     expect(process.exitCode).toBeUndefined();
   });
 });

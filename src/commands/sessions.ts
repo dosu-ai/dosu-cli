@@ -1,20 +1,17 @@
-/** `dosu sessions push`: send agent sessions to Dosu with an organization ingest key, from a
- * machine nobody signs in on (a cloud agent's runner, CI): the files named, or every session the
- * machine's agents kept since a time (`--since`, a runner's last step before it is thrown away).
- * Each one goes through the shipper a signed-in sync uses (shipper/runner.ts), so it is normalized,
- * redacted, and judged the same way; only the credential differs. */
+/** `dosu sessions push`: send the agent session files named to Dosu with an organization ingest
+ * key, from a machine nobody signs in on (a cloud agent's runner, CI). It sends only what it is
+ * handed, never what it finds on the machine: the key files sessions under the organization, past
+ * the sync's scope and incognito settings, so choosing them is the caller's (a runner gives each
+ * task its own agent directory and names what is in it). Each one goes through the shipper a
+ * signed-in sync uses (shipper/runner.ts), so it is normalized, redacted, and judged the same way;
+ * only the credential differs. */
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { CommandError } from "../cli/command-error";
-import {
-  type AgentSession,
-  type SessionHarness,
-  scanAgentSessions,
-  sessionAtPath,
-} from "../sessions/scan";
+import { type AgentSession, type SessionHarness, sessionAtPath } from "../sessions/scan";
 import { createShipStep } from "../shipper/runner";
 import type { ShipSessionResult } from "../sync/sync";
 
@@ -63,12 +60,6 @@ function sessionOfFile(path: string): AgentSession | string {
   return session ?? "cannot read the file";
 }
 
-/** The `--since` time, or null when it is not one. */
-function sinceOf(value: string): Date | null {
-  const at = Date.parse(value);
-  return Number.isNaN(at) ? null : new Date(at);
-}
-
 /** One line for a session the shipper settled without sending, or null for one it sent or could
  * not send. */
 function skippedLine(result: ShipSessionResult): string | null {
@@ -97,11 +88,7 @@ export function sessionsCommand(): Command {
   cmd
     .command("push")
     .description("Push agent sessions to Dosu with an ingest key (no sign-in)")
-    .argument("[files...]", "Claude Code, Codex, or Cursor session files (.jsonl)")
-    .option(
-      "--since <time>",
-      "push every agent session on this machine active since this time (ISO 8601), instead of files",
-    )
+    .argument("<files...>", "Claude Code, Codex, or Cursor session files (.jsonl)")
     .addHelpText(
       "after",
       "\nEnvironment:\n  DOSU_INGEST_KEY  Dosu ingest key (dxi_live_...); required\n" +
@@ -110,47 +97,21 @@ export function sessionsCommand(): Command {
         "Each session is redacted before it is sent. Sessions too short to learn from, and those\n" +
         "taken off the record with /dosu-incognito, are skipped.",
     )
-    .action(async (files: string[], options: { since?: string }) => {
+    .action(async (files: string[]) => {
       const key = process.env.DOSU_INGEST_KEY?.trim();
       if (!key) {
         throw new CommandError("INVALID_ARGUMENT", "DOSU_INGEST_KEY is not set", [
           "Set it to a Dosu ingest key (dxi_live_...) and run the command again.",
         ]);
       }
-      if (files.length > 0 === (options.since !== undefined)) {
-        throw new CommandError(
-          "INVALID_ARGUMENT",
-          files.length > 0 ? "Name session files or --since, not both" : "Nothing to push",
-          ["Name the session files to push, or push every session since a time with --since."],
-        );
-      }
       const sessions: AgentSession[] = [];
-      if (options.since !== undefined) {
-        const since = sinceOf(options.since);
-        if (!since) {
-          throw new CommandError("INVALID_ARGUMENT", `--since ${options.since} is not a time`, [
-            "Give an ISO 8601 time, such as 2026-11-05T22:00:00Z.",
-          ]);
-        }
-        sessions.push(
-          ...scanAgentSessions({
-            since,
-            onUnreadable: (harness, path) => {
-              console.error(pc.red(`✗ ${path}: cannot read ${harness}'s sessions there`));
-              process.exitCode = 1;
-            },
-          }).reverse(),
-        );
-        if (sessions.length === 0) console.log(`No agent sessions since ${since.toISOString()}.`);
-      } else {
-        for (const file of files) {
-          const session = sessionOfFile(file);
-          if (typeof session === "string") {
-            console.error(pc.red(`✗ ${file}: ${session}`));
-            process.exitCode = 1;
-          } else {
-            sessions.push(session);
-          }
+      for (const file of files) {
+        const session = sessionOfFile(file);
+        if (typeof session === "string") {
+          console.error(pc.red(`✗ ${file}: ${session}`));
+          process.exitCode = 1;
+        } else {
+          sessions.push(session);
         }
       }
       // The pusher's environment is its agents' (a runner gives both the same one), so the
