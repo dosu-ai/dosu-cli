@@ -92,6 +92,10 @@ describe("CLI", () => {
     expect(shouldRunBackgroundChecks("knowledge context")).toBe(false);
   });
 
+  it("skips background checks for sessions push, which runs on unattended machines", () => {
+    expect(shouldRunBackgroundChecks("sessions push")).toBe(false);
+  });
+
   it("has login command", () => {
     const program = createProgram();
     const cmd = program.commands.find((c) => c.name() === "login");

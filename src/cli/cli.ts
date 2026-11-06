@@ -45,6 +45,9 @@ import { fatalErrorDiagnostics, printFatalError } from "./fatal-error";
 const NO_BACKGROUND_CHECKS = new Set([
   "upgrade",
   "knowledge context",
+  // Run on machines nobody signs in on (a cloud agent's runner, CI without `CI` set): a global
+  // install there is a side effect of shipping, and the update nudge has no one to read it.
+  "sessions push",
   // Started by agents: the MCP server owns stdout for the protocol, and agents run the memory
   // commands from their shell while they wait.
   "mcp serve",
