@@ -1,3 +1,36 @@
+# [0.67.0-sessions.1](https://github.com/dosu-ai/dosu-cli/compare/v0.66.1...v0.67.0-sessions.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **auth:** bind the login callback to 127.0.0.1 so IPv4-only browsers reach it ([#290](https://github.com/dosu-ai/dosu-cli/issues/290)) ([cc2e96d](https://github.com/dosu-ai/dosu-cli/commit/cc2e96db4ace90d2b298eb716cb83f1ef1ade27d))
+* **auth:** use Dosu's current Supabase publishable key (beta) ([#303](https://github.com/dosu-ai/dosu-cli/issues/303)) ([da2a2a3](https://github.com/dosu-ai/dosu-cli/commit/da2a2a38ead99b1e74400a3a1d03145ab6bdc300))
+* drop the unused GitHub slug helper ([510be54](https://github.com/dosu-ai/dosu-cli/commit/510be54ed2c49079cb0d939585a07be2ac8d076e))
+* **hosted:** try the minted token on Dosu's server before saving it ([79cecea](https://github.com/dosu-ai/dosu-cli/commit/79cecea3ec24277dba41cfc68715896d484c8a8f))
+* **redact:** catch JWTs glued to a word character and short access/id tokens ([#292](https://github.com/dosu-ai/dosu-cli/issues/292)) ([2b0529b](https://github.com/dosu-ai/dosu-cli/commit/2b0529bcd7db748e99a386aa45048c3c923c6110)), closes [#289](https://github.com/dosu-ai/dosu-cli/issues/289)
+* **redact:** redact short refresh_token values ([#289](https://github.com/dosu-ai/dosu-cli/issues/289)) ([1895af2](https://github.com/dosu-ai/dosu-cli/commit/1895af2ac4a841b61e19c19a5c610fe53608e89c))
+* **setup:** wrap log prose to the centered content column ([#281](https://github.com/dosu-ai/dosu-cli/issues/281)) ([ac69162](https://github.com/dosu-ai/dosu-cli/commit/ac69162325b95a1b27cb26dc543f6802b651f0ec))
+* **shipper:** the SDK is @dosu/sessiondb, Dosu's npm org; ^0.2.0 is its first release ([a9af598](https://github.com/dosu-ai/dosu-cli/commit/a9af598faaf5fcd741d1ad22d003afa7db7e10ac))
+* **sync:** ship every ready session in one run ([#277](https://github.com/dosu-ai/dosu-cli/issues/277)) ([c9e1741](https://github.com/dosu-ai/dosu-cli/commit/c9e1741feb1fbcbc003f32c8cec42e4025f5677a))
+* **tui:** count wrapped rows when repainting a prompt in place ([#284](https://github.com/dosu-ai/dosu-cli/issues/284)) ([7a98e90](https://github.com/dosu-ai/dosu-cli/commit/7a98e90d3ee6913da6961f1181a34d20770c122c))
+
+
+### Features
+
+* dosu imports, a bucket of raw session files Dosu imports for the org ([3681062](https://github.com/dosu-ai/dosu-cli/commit/368106256da65c9c924842aa6a2760087f754d66))
+* drop unlearnable-agent providers; ship Cursor sessions on sessionEnd ([#282](https://github.com/dosu-ai/dosu-cli/issues/282)) ([23468d4](https://github.com/dosu-ai/dosu-cli/commit/23468d4d62a58eca0949ba3216f4bbd33ccae95a))
+* **memory:** v2 memory + more agent support ([#272](https://github.com/dosu-ai/dosu-cli/issues/272)) ([cd53fcf](https://github.com/dosu-ai/dosu-cli/commit/cd53fcf8dfcda3e6e9c7b83d6f9147b25442548c)), closes [#224](https://github.com/dosu-ai/dosu-cli/issues/224) [#224](https://github.com/dosu-ai/dosu-cli/issues/224) [#253](https://github.com/dosu-ai/dosu-cli/issues/253)
+* **sessions:** push session files through the sync's shipper, under DOSU_PROJECT ([#308](https://github.com/dosu-ai/dosu-cli/issues/308)) ([67b93dc](https://github.com/dosu-ai/dosu-cli/commit/67b93dce5103921188773390b94cbd5412312d8d))
+* **sessions:** push session files with an ingest key ([#304](https://github.com/dosu-ai/dosu-cli/issues/304)) ([c66cb58](https://github.com/dosu-ai/dosu-cli/commit/c66cb58df2f69e17cd875e3acf786895a03fec07))
+* **setup:** offer Dosu's sessiondb, or your own server ([9724779](https://github.com/dosu-ai/dosu-cli/commit/972477957e4d86cb43a5a180e9b4568d6dc9b26d)), closes [dosu-ai/sessiondb#10](https://github.com/dosu-ai/sessiondb/issues/10)
+* **setup:** pick the sync scope before the backfill offer ([#279](https://github.com/dosu-ai/dosu-cli/issues/279)) ([b464244](https://github.com/dosu-ai/dosu-cli/commit/b464244aefc20b4dede654eeed963cad9b355bb0))
+* **shipper:** send per-request token usage with ingested sessions ([#294](https://github.com/dosu-ai/dosu-cli/issues/294)) ([0099e04](https://github.com/dosu-ai/dosu-cli/commit/0099e049a33d9bcbe2b13f9b888d8dce7ad5a185))
+* **shipper:** send the session's GitHub repository as metadata.repo ([#296](https://github.com/dosu-ai/dosu-cli/issues/296)) ([b9d5ff6](https://github.com/dosu-ai/dosu-cli/commit/b9d5ff6d475248514fb9ea99c8cac5340b323983))
+* **shipper:** talk to sessiondb through @dosu-ai/sessiondb ([e8c4424](https://github.com/dosu-ai/dosu-cli/commit/e8c4424c2a0bcc4089906fc6aee9c19563db40cd))
+* **sources:** --endpoint override on connect for backends that reach the bucket by another host ([8be14c4](https://github.com/dosu-ai/dosu-cli/commit/8be14c4e4c098f4ab82f2761d0f49b8c41670e02))
+* **sync:** ship through a sessiondb server ([5e94cab](https://github.com/dosu-ai/dosu-cli/commit/5e94cab48fa0ef95ac81ad5ec29fdded5faa8215))
+* trim the CLI to capture + memory, add bucket targets and Dosu sources ([cbd9a4b](https://github.com/dosu-ai/dosu-cli/commit/cbd9a4ba7951dc1cb869f8d92e2a691e8bb32ca2))
+
 # [0.67.0-beta.12](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.11...v0.67.0-beta.12) (2026-11-06)
 
 
