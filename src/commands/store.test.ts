@@ -93,7 +93,7 @@ describe("redact on a bucket target", () => {
       targets: [BUCKET, team],
       default_target: "mine",
     });
-    const fetch = vi.fn(async () => new Response(JSON.stringify({ removed: 3 })));
+    const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ removed: 3 })));
     vi.stubGlobal("fetch", fetch);
 
     await dosu("claude:sess1", "--yes", "--target", "team");
