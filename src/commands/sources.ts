@@ -8,8 +8,8 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { CliUsageError } from "../cli/errors";
 import { type Config, loadConfig, saveConfig } from "../config/config";
-import type { ServerTarget } from "../config/schema";
-import { configuredTargets, selectTarget } from "../config/targets";
+import type { SessionTarget } from "../config/schema";
+import { configuredTargets, isBucketTarget, selectTarget } from "../config/targets";
 import {
   type ConnectSourceRequest,
   requireSourcesApi,
@@ -17,6 +17,12 @@ import {
   type SourcesApi,
   SourcesApiError,
 } from "../sources/api";
+import {
+  type BucketWizardInput,
+  type BucketWizardResult,
+  runBucketWizard,
+} from "../sources/bucket-wizard";
+import { bucketOfStorage } from "../sources/connect";
 import { setupHostedTarget } from "../sources/hosted";
 import {
   bucketOfTarget,
@@ -45,9 +51,9 @@ interface TargetSelection {
   target?: string;
 }
 
-/** The server a sources command is about: `--target`, else the default, else the only one. */
-function selectServer(cfg: Config, selection: TargetSelection): ServerTarget {
-  let target: ServerTarget | undefined;
+/** The target a sources command is about: `--target`, else the default, else the only one. */
+function selectServer(cfg: Config, selection: TargetSelection): SessionTarget {
+  let target: SessionTarget | undefined;
   try {
     target = selectTarget(cfg, selection.target);
   } catch (err) {
@@ -55,14 +61,33 @@ function selectServer(cfg: Config, selection: TargetSelection): ServerTarget {
   }
   if (!target) {
     throw new CliUsageError(
-      "no sessiondb server configured: run 'dosu sources setup --hosted' (Dosu's) or 'dosu sources setup --server <url> --token <token>' (your own)",
+      "no sessiondb target configured: run 'dosu sources setup --hosted' (Dosu's), 'dosu sources setup --server <url> --token <token>' (your own server) or 'dosu sources setup --bucket <url>' (your bucket, no server)",
     );
   }
   return target;
 }
 
+/** The bucket behind a target: a bucket target's own, or what a server says it writes. */
+async function bucketOf(target: SessionTarget): ReturnType<typeof bucketOfTarget> {
+  if (!isBucketTarget(target)) return bucketOfTarget(target);
+  const parsed = bucketOfStorage({
+    url: target.url,
+    ...(target.endpoint ? { endpoint: target.endpoint } : {}),
+  });
+  if (!parsed) throw new CliUsageError(`${target.url} is not a bucket Dosu can read`);
+  return {
+    url: target.url,
+    scheme: parsed.provider === "r2" ? "r2" : "s3",
+    bucket: parsed.bucket,
+    prefix: parsed.prefix,
+    ...(target.region ? { region: target.region } : {}),
+    ...(target.account_id ? { account_id: target.account_id } : {}),
+    ...(target.endpoint ? { endpoint: target.endpoint } : {}),
+  };
+}
+
 /** Persist the source id on the configured target. */
-function rememberSourceId(target: ServerTarget, sourceId: string | undefined): void {
+function rememberSourceId(target: SessionTarget, sourceId: string | undefined): void {
   const cfg = loadConfig();
   const configured = configuredTargets(cfg).find((t) => t.name === target.name);
   if (!configured) return;
@@ -75,7 +100,7 @@ function rememberSourceId(target: ServerTarget, sourceId: string | undefined): v
  * among the login's sources (a target connected from another machine, or before this field). */
 async function findSource(
   api: SourcesApi,
-  target: ServerTarget,
+  target: SessionTarget,
 ): Promise<SourceStatus | undefined> {
   if (target.source_id) {
     try {
@@ -87,8 +112,8 @@ async function findSource(
     }
   }
   const sources = await api.list();
-  // Matched by the bucket behind the server, when the server can say.
-  const url = await bucketOfTarget(target).then(
+  // Matched by the bucket behind the target, when it can be said.
+  const url = await bucketOf(target).then(
     (b) => b.url,
     () => target.url,
   );
@@ -97,7 +122,7 @@ async function findSource(
   return match;
 }
 
-async function requireSource(api: SourcesApi, target: ServerTarget): Promise<SourceStatus> {
+async function requireSource(api: SourcesApi, target: SessionTarget): Promise<SourceStatus> {
   const source = await findSource(api, target);
   if (!source) {
     throw new CliUsageError(
@@ -113,6 +138,13 @@ interface SetupOptions {
   hosted?: boolean;
   server?: string;
   token?: string;
+  bucket?: string;
+  region?: string;
+  accountId?: string;
+  endpoint?: string;
+  owner?: string;
+  writeAccessKeyId?: string;
+  writeSecretAccessKey?: string;
   name?: string;
   readAccessKeyId?: string;
   readSecretAccessKey?: string;
@@ -120,6 +152,30 @@ interface SetupOptions {
   default?: boolean;
   yes?: boolean;
   json?: boolean;
+}
+
+/** `dosu sources setup --bucket` flags as the bucket wizard's answers. */
+function bucketInputFromOptions(opts: SetupOptions): BucketWizardInput {
+  if (Boolean(opts.writeAccessKeyId) !== Boolean(opts.writeSecretAccessKey)) {
+    throw new CliUsageError("--write-access-key-id and --write-secret-access-key go together");
+  }
+  const { server: _server, token: _token, ...shared } = wizardInputFromOptions(opts);
+  return {
+    ...shared,
+    ...(opts.bucket ? { bucket: opts.bucket } : {}),
+    ...(opts.region ? { region: opts.region } : {}),
+    ...(opts.accountId ? { accountId: opts.accountId } : {}),
+    ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
+    ...(opts.owner ? { owner: opts.owner } : {}),
+    ...(opts.writeAccessKeyId && opts.writeSecretAccessKey
+      ? {
+          write: {
+            access_key_id: opts.writeAccessKeyId,
+            secret_access_key: opts.writeSecretAccessKey,
+          },
+        }
+      : {}),
+  };
 }
 
 /** `dosu sources setup` flags as wizard answers; a pair given by halves is an error. */
@@ -149,12 +205,25 @@ function setupCommand(): Command {
   return new Command("setup")
     .alias("add")
     .description(
-      "Point this machine at a sessiondb server: Dosu's own with --hosted (one call to your login, nothing to paste), or a guided setup for your own server that checks the token, makes it where 'dosu sync' ships, and lets Dosu read its bucket. Every answer can be a flag; --yes never prompts",
+      "Choose where this machine's sessions go: Dosu's sessiondb with --hosted (one call to your login, nothing to paste), your own sessiondb server (--server, checks the token), or your own bucket with --bucket (redacted here and written with a key this machine keeps; no server). Each makes it where 'dosu sync' ships and lets Dosu read the bucket. Every answer can be a flag; --yes never prompts",
     )
     .option("--hosted", "Use Dosu's sessiondb: Dosu stores your sessions and learns from them")
     .option("--server <url>", "Your own server, https://sessions.example.com")
     .option("--token <token>", "The server token (sdb_…) minted for you")
-    .option("--name <name>", "The target's name in config (default: server)")
+    .option(
+      "--bucket <url>",
+      "Your own bucket, no server: s3://bucket/prefix or r2://bucket/prefix",
+    )
+    .option("--region <region>", "AWS region of an s3:// bucket (default: us-east-1)")
+    .option("--account-id <id>", "Cloudflare account id of an r2:// bucket")
+    .option("--endpoint <url>", "S3-compatible endpoint (MinIO, Backblaze…) of an s3:// bucket")
+    .option("--owner <name>", "Your folder in the bucket, owners/<name>/ (default: your user name)")
+    .option(
+      "--write-access-key-id <id>",
+      "Key this machine writes the bucket with (or DOSU_BUCKET_ACCESS_KEY_ID)",
+    )
+    .option("--write-secret-access-key <secret>", "Secret for --write-access-key-id")
+    .option("--name <name>", "The target's name in config (default: server, or bucket)")
     .option("--read-access-key-id <id>", "Key Dosu reads the bucket with (read-only is enough)")
     .option("--read-secret-access-key <secret>", "Secret for --read-access-key-id")
     .option("--no-connect", "Save the target without letting Dosu read its bucket")
@@ -164,9 +233,15 @@ function setupCommand(): Command {
     .action(async (opts: SetupOptions) => {
       const cfg = loadConfig();
       if (opts.hosted) {
-        if (opts.server || opts.token || opts.readAccessKeyId || opts.readSecretAccessKey) {
+        if (
+          opts.server ||
+          opts.token ||
+          opts.bucket ||
+          opts.readAccessKeyId ||
+          opts.readSecretAccessKey
+        ) {
           throw new CliUsageError(
-            "--hosted is Dosu's server: --server, --token and the read keys are for your own",
+            "--hosted is Dosu's server: --server, --token, --bucket and the read keys are for your own",
           );
         }
         const { target, source } = await setupHostedTarget(cfg, requireSourcesApi(cfg), {
@@ -186,6 +261,40 @@ function setupCommand(): Command {
         return;
       }
       const yes = opts.yes || opts.json ? { yes: true } : {};
+      if (opts.bucket) {
+        if (opts.server || opts.token) {
+          throw new CliUsageError(
+            "--bucket is written from this machine: --server and --token are for a server",
+          );
+        }
+        const result: BucketWizardResult | null = await runBucketWizard(cfg, {
+          ...bucketInputFromOptions(opts),
+          ...yes,
+        });
+        if (!result) {
+          console.log("Cancelled; nothing saved.");
+          return;
+        }
+        if (opts.json) {
+          printResult(
+            {
+              target: { ...result.target, secret_access_key: "***" },
+              ...(result.source ? { source: result.source } : {}),
+              ...(result.connectError ? { connect_error: result.connectError } : {}),
+            },
+            opts,
+          );
+          return;
+        }
+        if (result.source) {
+          try {
+            await requireSourcesApi(loadConfig()).sync(result.source.id);
+          } catch {
+            // The scheduled read covers it.
+          }
+        }
+        return;
+      }
       const result: ServerWizardResult | null = await runServerWizard(cfg, {
         ...wizardInputFromOptions(opts),
         ...yes,
@@ -389,8 +498,8 @@ function connectCommand(): Command {
         }
 
         const { credentials, from } = await readCredentials(opts);
-        // The bucket is whatever the server writes to; ask it.
-        const store = await bucketOfTarget(target);
+        // A bucket target names its bucket; a server is asked which it writes to.
+        const store = await bucketOf(target);
         const { scheme, bucket, prefix } = store;
         const lag = opts.lag === undefined ? undefined : Number.parseInt(opts.lag, 10);
         if (lag !== undefined && (!Number.isFinite(lag) || lag < 0)) {
@@ -499,7 +608,7 @@ function sourceState(s: SourceStatus): string {
   return "ok";
 }
 
-function printSourceStatus(s: SourceStatus, target: ServerTarget, now: Date = new Date()): void {
+function printSourceStatus(s: SourceStatus, target: SessionTarget, now: Date = new Date()): void {
   const dot = !s.enabled ? pc.dim("○") : s.last_error ? pc.yellow("●") : pc.green("●");
   console.log(`${dot} ${s.name} ${pc.dim(`(${s.id})`)}`);
   console.log(`  Target:     ${target.name} → ${s.url}`);

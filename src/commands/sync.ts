@@ -4,7 +4,7 @@
 import { Command, Option } from "commander";
 import pc from "picocolors";
 import { loadConfig } from "../config/config";
-import { configuredTargets } from "../config/targets";
+import { configuredTargets, isBucketTarget } from "../config/targets";
 import { logger } from "../debug/logger";
 import { captureHookSession, endedSessionArgs, parseEndedSessionArgs } from "../sessions/capture";
 import { pinEndedSessionProjects } from "../sessions/project-dir";
@@ -212,7 +212,7 @@ function buildShipper(selection: TargetSelection): Shipper {
       // A token Dosu minted is renewed from Dosu before it runs out; the ship goes on with the
       // old one when Dosu cannot be asked.
       let target = selected;
-      if (configured && hostedTokenNeedsRenewal(configured)) {
+      if (configured && !isBucketTarget(configured) && hostedTokenNeedsRenewal(configured)) {
         const { renewHostedToken } = await import("../sources/hosted");
         const { sourcesApi } = await import("../sources/api");
         const { createServerTarget } = await import("../shipper/target");

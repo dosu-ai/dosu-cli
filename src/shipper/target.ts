@@ -69,8 +69,12 @@ function detail(err: ServerError | OffsetMismatch): string {
 }
 
 /** A target over any sessiondb client: a server, or a bucket this machine writes. */
-function createTarget(db: SessionDB, options: { name: string; url: string }): Target {
+function createTarget(
+  db: SessionDB,
+  options: { name: string; url: string; kind: "server" | "bucket" },
+): Target {
   const url = options.url.replace(/\/$/, "");
+  const where = `${options.kind} ${url}`;
   return {
     name: options.name,
     url,
@@ -91,13 +95,13 @@ function createTarget(db: SessionDB, options: { name: string; url: string }): Ta
           return { status: "rejected", httpStatus: err.status, message: detail(err) };
         }
         if (err instanceof ServerError || err instanceof OffsetMismatch) {
-          return { status: "failed", message: `server ${url}: ${detail(err)}` };
+          return { status: "failed", message: `${where}: ${detail(err)}` };
         }
         // A StoreError's message already names the server when it was never reached.
         const message = describeServerError(err);
         return {
           status: "failed",
-          message: message.includes(url) ? message : `server ${url}: ${message}`,
+          message: message.includes(url) ? message : `${where}: ${message}`,
         };
       }
     },
@@ -111,6 +115,43 @@ export interface ServerTargetOptions {
   fetchImpl?: Fetch;
 }
 
+export interface BucketTargetOptions {
+  name: string;
+  /** `s3://bucket/prefix` or `r2://bucket/prefix`. */
+  url: string;
+  owner: string;
+  region?: string;
+  accountId?: string;
+  endpoint?: string;
+  credentials: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+  fetchImpl?: Fetch;
+}
+
+/** The SDK's client over a bucket this machine writes: redaction and normalization run here. */
+export function bucketClient(options: Omit<BucketTargetOptions, "name">): SessionDB {
+  return connect({
+    store: options.url,
+    owner: options.owner,
+    client: `dosu-cli/${VERSION}`,
+    credentials: options.credentials,
+    ...(options.region ? { region: options.region } : {}),
+    ...(options.accountId ? { accountId: options.accountId } : {}),
+    ...(options.endpoint ? { endpoint: options.endpoint } : {}),
+    ...(options.fetchImpl ? { fetch: options.fetchImpl } : {}),
+    env: {},
+  });
+}
+
+/** A bucket as a target: the session is redacted, normalized and written to `owners/<owner>/`
+ * on this machine, with its own key. No server is involved. */
+export function createBucketTarget(options: BucketTargetOptions): Target {
+  return createTarget(bucketClient(options), {
+    name: options.name,
+    url: options.url,
+    kind: "bucket",
+  });
+}
+
 /** A sessiondb server as a target: the raw transcript goes to it with the owner's bearer token,
  * gzipped whatever its size. */
 export function createServerTarget(options: ServerTargetOptions): Target {
@@ -122,5 +163,5 @@ export function createServerTarget(options: ServerTargetOptions): Target {
     timeoutMs: REQUEST_TIMEOUT_MS,
     userAgent: `dosu-cli/${VERSION}`,
   });
-  return createTarget(db, { name: options.name, url: options.url });
+  return createTarget(db, { name: options.name, url: options.url, kind: "server" });
 }

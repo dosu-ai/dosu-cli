@@ -19,11 +19,13 @@ import { getAccessTokenUserID } from "./identity";
 import {
   type AccountTarget,
   type AuthenticatedConfig,
+  type BucketTarget,
   CONFIG_SCHEMA_VERSION,
   type Config,
   MODE_OSS,
   type ServerTarget,
   type SessionCredentials,
+  type SessionTarget,
 } from "./schema";
 
 export {
@@ -227,19 +229,50 @@ function normalizeV2(value: Config): Config {
   };
 }
 
-/** The server targets and default-target name, each kept only when well-formed. A default
- * naming no configured server (a bucket target from before servers were the only kind, or a
- * hand-edited name) is dropped, so the only remaining server stands in rather than every
+/** The targets and default-target name, each kept only when well-formed. A default naming no
+ * configured target (a bucket target in the shape from before servers were the only kind, or
+ * a hand-edited name) is dropped, so the only remaining target stands in rather than every
  * command failing on a name that no longer exists. */
 function targetsOf(value: Config): Pick<Config, "targets" | "default_target"> {
   const targets = Array.isArray(value.targets)
-    ? value.targets.map(normalizeServerTarget).filter((t): t is ServerTarget => t !== undefined)
+    ? value.targets.map(normalizeSessionTarget).filter((t): t is SessionTarget => t !== undefined)
     : [];
   const defaultTarget = stringValue(value.default_target);
   const defaultConfigured = targets.some((target) => target.name === defaultTarget);
   return {
     ...(targets.length > 0 ? { targets } : {}),
     ...(defaultConfigured ? { default_target: defaultTarget } : {}),
+  };
+}
+
+function normalizeSessionTarget(value: unknown): SessionTarget | undefined {
+  return isRecord(value) && value.kind === "bucket"
+    ? normalizeBucketTarget(value)
+    : normalizeServerTarget(value);
+}
+
+function normalizeBucketTarget(value: Record<string, unknown>): BucketTarget | undefined {
+  const name = stringValue(value.name);
+  const url = stringValue(value.url);
+  const owner = stringValue(value.owner);
+  const accessKeyId = stringValue(value.access_key_id);
+  const secretAccessKey = stringValue(value.secret_access_key);
+  if (!name || !url || !owner || !accessKeyId || !secretAccessKey) return undefined;
+  if (!/^(s3|r2):\/\/[^/\s]+/.test(url)) return undefined;
+  const optional = (key: "region" | "account_id" | "endpoint" | "session_token" | "source_id") =>
+    stringValue(value[key]) ? { [key]: value[key] as string } : {};
+  return {
+    kind: "bucket",
+    name,
+    url: url.replace(/\/+$/, ""),
+    owner,
+    ...optional("region"),
+    ...optional("account_id"),
+    ...optional("endpoint"),
+    access_key_id: accessKeyId,
+    secret_access_key: secretAccessKey,
+    ...optional("session_token"),
+    ...optional("source_id"),
   };
 }
 

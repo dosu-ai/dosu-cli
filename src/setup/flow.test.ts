@@ -43,6 +43,9 @@ vi.mock("../auth/flow", () => ({
   startOAuthFlow: vi.fn(),
 }));
 
+vi.mock("../sources/bucket-wizard", () => ({
+  runBucketWizard: vi.fn(),
+}));
 vi.mock("../sources/server-wizard", () => ({
   runServerWizard: vi.fn(),
 }));
@@ -187,6 +190,7 @@ import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
 import { sourcesApi } from "../sources/api";
+import { runBucketWizard } from "../sources/bucket-wizard";
 import { HostedUnavailable, setupHostedTarget } from "../sources/hosted";
 import { runServerWizard } from "../sources/server-wizard";
 import {
@@ -2892,6 +2896,27 @@ describe("stepOfferInitialSync", () => {
     expect(said).not.toContain("stay on this machine");
   });
 
+  it("says a bucket target's sessions are redacted here and written to the bucket", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+    const bucket = {
+      kind: "bucket" as const,
+      name: "mine",
+      url: "s3://acme/sessions",
+      owner: "me",
+      access_key_id: "AKID",
+      secret_access_key: "secret",
+    };
+
+    await stepOfferInitialSync({ ...makeCfg(), targets: [bucket], default_target: "mine" });
+
+    const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain(
+      "Sessions are redacted on this machine and written to your bucket s3://acme/sessions.",
+    );
+    expect(said).not.toContain("uploaded to");
+  });
+
   it("offers no incognito command that is not installed", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
@@ -3359,7 +3384,7 @@ describe("stepChooseSessionStorage", () => {
   /** The login can call Dosu: the hosted option is on the menu. */
   const api = { backendUrl: "https://api.dosu.test" } as unknown as ReturnType<typeof sourcesApi>;
 
-  it("offers Dosu's sessiondb first, your own server, or not now", async () => {
+  it("offers Dosu's sessiondb first, your own server, your own bucket, or not now", async () => {
     vi.mocked(sourcesApi).mockReturnValue(api);
     vi.mocked(p.select).mockResolvedValueOnce("none");
 
@@ -3369,12 +3394,12 @@ describe("stepChooseSessionStorage", () => {
       { message: string; options: Array<{ value: string; label: string }> },
     ];
     expect(message).toBe("Where should finished sessions go?");
-    expect(options.map((o) => o.value)).toEqual(["hosted", "server", "none"]);
+    expect(options.map((o) => o.value)).toEqual(["hosted", "server", "bucket", "none"]);
     expect(options[0]?.label).toContain("Dosu's sessiondb");
     expect(options[0]?.label).toContain("recommended");
   });
 
-  it("without a login, offers only your own server", async () => {
+  it("without a login, offers only your own server or bucket", async () => {
     vi.mocked(sourcesApi).mockReturnValue(undefined);
     vi.mocked(p.select).mockResolvedValueOnce("none");
 
@@ -3383,7 +3408,7 @@ describe("stepChooseSessionStorage", () => {
     const [{ options }] = vi.mocked(p.select).mock.calls[0] as unknown as [
       { options: Array<{ value: string }> },
     ];
-    expect(options.map((o) => o.value)).toEqual(["server", "none"]);
+    expect(options.map((o) => o.value)).toEqual(["server", "bucket", "none"]);
   });
 
   it("stops setup when the user cancels the question, saving nothing", async () => {
@@ -3495,6 +3520,48 @@ describe("stepChooseSessionStorage", () => {
     const warned = vi.mocked(p.log.warn).mock.calls.join(" ");
     expect(warned).toContain("did not accept that token");
     expect(warned).toContain("Nothing ships until a server is set up");
+  });
+
+  it("runs the bucket wizard for your own bucket, and stops or carries on as it ends", async () => {
+    const bucket = {
+      kind: "bucket" as const,
+      name: "mine",
+      url: "s3://acme/sessions",
+      owner: "james",
+      access_key_id: "AKID",
+      secret_access_key: "secret",
+    };
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockResolvedValueOnce({ target: bucket });
+    const cfg = makeCfg();
+    expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
+    expect(runBucketWizard).toHaveBeenCalledWith(cfg);
+    expect(runServerWizard).not.toHaveBeenCalled();
+
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockResolvedValueOnce(null);
+    expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
+    expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("No bucket set up");
+
+    vi.mocked(p.select).mockResolvedValueOnce("bucket");
+    vi.mocked(runBucketWizard).mockRejectedValueOnce(new CliUsageError("403 AccessDenied"));
+    expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
+    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain(
+      "Nothing ships until a bucket is set up",
+    );
+
+    const saved = {
+      ...makeCfg(),
+      targets: [{ ...bucket, source_id: "src-1" }],
+      default_target: "mine",
+    };
+    saveConfig(saved);
+    vi.mocked(p.select).mockClear();
+    expect(await stepChooseSessionStorage(saved)).toBe("bucket");
+    expect(vi.mocked(p.select)).not.toHaveBeenCalled();
+    const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain("redacted here and written to your bucket s3://acme/sessions");
+    expect(said).toContain("which Dosu reads");
   });
 
   it("keeps a server that is already set up and says so, unless --storage asks again", async () => {
