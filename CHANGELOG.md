@@ -1,3 +1,10 @@
+# [0.67.0-sessions.3](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.2...v0.67.0-sessions.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* **cli:** cli write stage on bucket ([#311](https://github.com/dosu-ai/dosu-cli/issues/311)) ([603c304](https://github.com/dosu-ai/dosu-cli/commit/603c304a024e65ccf7fe701e4ded1f1eaa340561))
+
 # [0.67.0-sessions.2](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.1...v0.67.0-sessions.2) (2026-11-06)
 
 
