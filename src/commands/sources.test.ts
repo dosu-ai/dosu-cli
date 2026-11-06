@@ -367,6 +367,61 @@ describe("sources setup --bucket", () => {
     expect(out.join("\n")).toContain("mine → s3://acme-sessions/agents");
   });
 
+  it("--server prints its target with the token masked, as --bucket masks the write secret", async () => {
+    configure([]);
+    dosuAnswers(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
+
+    await dosu(
+      "setup",
+      "--server",
+      SERVER.url,
+      "--token",
+      "sdb_secret",
+      "--read-access-key-id",
+      "AKIDREAD",
+      "--read-secret-access-key",
+      "readsecret",
+      "--json",
+    );
+
+    const printed = out.join("\n");
+    expect(printed).toContain('"token": "***"');
+    expect(printed).not.toContain("sdb_secret");
+  });
+
+  it("without --json, starts Dosu's first read of the new bucket source", async () => {
+    configure([]);
+    vi.stubEnv("DOSU_BUCKET_ACCESS_KEY_ID", "AKIDWRITE");
+    vi.stubEnv("DOSU_BUCKET_SECRET_ACCESS_KEY", "writesecret");
+    bucketAnswers(async (_url, init) =>
+      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    );
+
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--region",
+      "us-east-1",
+      "--endpoint",
+      ENDPOINT,
+      "--owner",
+      "james",
+      "--read-access-key-id",
+      "AKIDREAD",
+      "--read-secret-access-key",
+      "readsecret",
+      "--yes",
+    );
+
+    expect(loadConfig().targets?.[0]).toMatchObject({ ...BUCKET, name: "bucket" });
+    expect(calls().map((c) => `${c.method} ${c.path}`)).toContain(
+      `POST /v1/memory/sources/${source().id}/sync`,
+    );
+  });
+
   it("refuses --bucket with a server's flags, with --hosted, or half a write key", async () => {
     await expect(dosu("setup", "--bucket", "s3://a", "--server", SERVER.url)).rejects.toThrow(
       /--server and --token are for a server/,

@@ -2917,6 +2917,20 @@ describe("stepOfferInitialSync", () => {
     expect(said).not.toContain("uploaded to");
   });
 
+  it("names Dosu's sessiondb for a hosted target", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync({
+      ...makeCfg(),
+      targets: [{ ...SERVER, hosted: true }],
+      default_target: "team",
+    });
+
+    const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain("Sessions are uploaded to Dosu's sessiondb, which redacts secrets");
+  });
+
   it("offers no incognito command that is not installed", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
@@ -3566,6 +3580,27 @@ describe("stepChooseSessionStorage", () => {
     const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
     expect(said).toContain("redacted here and written to your bucket s3://acme/sessions");
     expect(said).toContain("which Dosu reads");
+  });
+
+  it("does not claim Dosu reads a target that is not connected to it yet", async () => {
+    const bucket = {
+      kind: "bucket" as const,
+      name: "mine",
+      url: "s3://acme/sessions",
+      owner: "james",
+      access_key_id: "AKID",
+      secret_access_key: "secret",
+    };
+    for (const target of [bucket, server]) {
+      vi.mocked(p.log.success).mockClear();
+      const cfg = { ...makeCfg(), targets: [target], default_target: target.name };
+      saveConfig(cfg);
+
+      expect(await stepChooseSessionStorage(cfg)).toBe(target === bucket ? "bucket" : "server");
+      const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
+      expect(said).toContain(target.url);
+      expect(said).not.toContain("Dosu reads");
+    }
   });
 
   it("keeps a server that is already set up and says so, unless --storage asks again", async () => {

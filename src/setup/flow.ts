@@ -16,6 +16,7 @@ import {
   saveConfig,
   updateTarget,
 } from "../config/config";
+import type { SessionTarget } from "../config/schema";
 import { configuredTargets, isBucketTarget } from "../config/targets";
 import { logger } from "../debug/logger";
 import type { CliLibrary } from "../generated/dosu-api-types";
@@ -450,18 +451,17 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
   // What happens to the sessions, why it's worth it, and how to keep something out.
   const incognito = installedIncognitoCommands();
   const targets = configuredTargets(cfg);
-  const server = targets.find((t) => t.name === cfg.default_target) ?? targets[0];
+  const server = (targets.find((t) => t.name === cfg.default_target) ??
+    targets[0]) as SessionTarget;
   p.log.message(
     wrapLog(
       [
         "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
         `${
-          server && isBucketTarget(server)
+          isBucketTarget(server)
             ? `Sessions are redacted on this machine and written to your bucket ${server.url}`
             : `Sessions are uploaded to ${
-                server?.hosted
-                  ? "Dosu's sessiondb"
-                  : `your sessiondb server${server ? ` ${server.url}` : ""}`
+                server.hosted ? "Dosu's sessiondb" : `your sessiondb server ${server.url}`
               }, which redacts secrets before anything is stored`
         }. ${
           incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"

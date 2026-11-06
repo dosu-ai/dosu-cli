@@ -412,6 +412,33 @@ describe("runBucketWizard", () => {
     expect(asked().filter((m) => m === "S3-compatible endpoint (blank for AWS)")).toHaveLength(1);
   });
 
+  it("keeps the bucket and says why when Dosu cannot connect buckets", async () => {
+    const s3 = fakeS3(ENDPOINT, "acme");
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) =>
+      url.startsWith(DOSU) ? new Response("{}", { status: 404 }) : s3.fetch(url, init),
+    );
+
+    const result = await runBucketWizard(
+      loadConfig(),
+      {
+        bucket: "s3://acme",
+        region: "us-east-1",
+        endpoint: ENDPOINT,
+        write: WRITE,
+        owner: "james",
+        read: { access_key_id: "AKIDREAD", secret_access_key: "readsecret" },
+        yes: true,
+      },
+      {},
+      s3.fetch,
+    );
+
+    expect(result?.target.url).toBe("s3://acme");
+    expect(result?.source).toBeUndefined();
+    expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("no session sources API");
+    expect(loadConfig().targets?.map((t) => t.name)).toEqual(["bucket"]);
+  });
+
   it("refuses an owner that is not one path segment", async () => {
     const s3 = fakeS3(ENDPOINT, "acme");
     const w = world(s3);

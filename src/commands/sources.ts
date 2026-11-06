@@ -70,19 +70,18 @@ function selectServer(cfg: Config, selection: TargetSelection): SessionTarget {
 /** The bucket behind a target: a bucket target's own, or what a server says it writes. */
 async function bucketOf(target: SessionTarget): ReturnType<typeof bucketOfTarget> {
   if (!isBucketTarget(target)) return bucketOfTarget(target);
-  const parsed = bucketOfStorage({
-    url: target.url,
-    ...(target.endpoint ? { endpoint: target.endpoint } : {}),
-  });
-  if (!parsed) throw new CliUsageError(`${target.url} is not a bucket Dosu can read`);
+  // Config only keeps a bucket target whose URL bucketOfStorage parses.
+  const parsed = bucketOfStorage({ url: target.url, endpoint: target.endpoint }) as NonNullable<
+    ReturnType<typeof bucketOfStorage>
+  >;
   return {
     url: target.url,
-    scheme: parsed.provider === "r2" ? "r2" : "s3",
+    scheme: target.url.slice(0, 2) as "s3" | "r2",
     bucket: parsed.bucket,
     prefix: parsed.prefix,
-    ...(target.region ? { region: target.region } : {}),
-    ...(target.account_id ? { account_id: target.account_id } : {}),
-    ...(target.endpoint ? { endpoint: target.endpoint } : {}),
+    region: target.region,
+    account_id: target.account_id,
+    endpoint: target.endpoint,
   };
 }
 
@@ -162,11 +161,11 @@ function bucketInputFromOptions(opts: SetupOptions): BucketWizardInput {
   const { server: _server, token: _token, ...shared } = wizardInputFromOptions(opts);
   return {
     ...shared,
-    ...(opts.bucket ? { bucket: opts.bucket } : {}),
-    ...(opts.region ? { region: opts.region } : {}),
-    ...(opts.accountId ? { accountId: opts.accountId } : {}),
-    ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
-    ...(opts.owner ? { owner: opts.owner } : {}),
+    bucket: opts.bucket,
+    region: opts.region,
+    accountId: opts.accountId,
+    endpoint: opts.endpoint,
+    owner: opts.owner,
     ...(opts.writeAccessKeyId && opts.writeSecretAccessKey
       ? {
           write: {

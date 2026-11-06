@@ -86,7 +86,7 @@ async function checkWrite(
     credentials: {
       accessKeyId: target.access_key_id,
       secretAccessKey: target.secret_access_key,
-      ...(target.session_token ? { sessionToken: target.session_token } : {}),
+      sessionToken: target.session_token,
     },
     ...(fetchImpl ? { fetchImpl } : {}),
   });
@@ -163,7 +163,7 @@ async function wizard(
           await ask.text(
             {
               message: "Cloudflare account id",
-              ...(process.env.R2_ACCOUNT_ID ? { initialValue: process.env.R2_ACCOUNT_ID } : {}),
+              initialValue: process.env.R2_ACCOUNT_ID,
               validate: required("The account id"),
             },
             input.accountId,
@@ -223,7 +223,7 @@ async function wizard(
       ...(endpoint ? { endpoint } : {}),
       access_key_id: write.access_key_id,
       secret_access_key: write.secret_access_key,
-      ...(write.session_token ? { session_token: write.session_token } : {}),
+      session_token: write.session_token,
     };
     s.start(`Checking ${url}...`);
     const failure = await checkWrite(candidate, fetchImpl);
@@ -283,7 +283,7 @@ async function wizard(
     ...(endpoint ? { endpoint } : {}),
     access_key_id: write.access_key_id,
     secret_access_key: write.secret_access_key,
-    ...(write.session_token ? { session_token: write.session_token } : {}),
+    session_token: write.session_token,
   };
   const existing = configuredTargets(cfg).find((t) => t.name === name);
   if (existing?.source_id) target.source_id = existing.source_id;
@@ -296,7 +296,7 @@ async function wizard(
           {
             message: "Ship finished sessions here by default?",
             active: `Yes, ${name}`,
-            inactive: `No, keep ${cfg.default_target ?? others[0]?.name}`,
+            inactive: "No, keep the current default",
             initialValue: true,
           },
           input.makeDefault,
