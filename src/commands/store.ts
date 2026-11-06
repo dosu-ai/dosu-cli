@@ -30,22 +30,16 @@ interface StoreSelection {
 type RedactServer = Pick<ServerTarget, "name" | "url" | "token">;
 
 /** The server `redact` works against: `--target`, else DOSU_SESSIONDB_URL with
- * DOSU_SESSIONDB_TOKEN (as `sessions push` ships to), else the default, else the only one. */
-function selectServer(cfg: Config, selection: StoreSelection): RedactServer {
+ * DOSU_SESSIONDB_TOKEN (as `sessions push` ships to), else the default, else the only one;
+ * undefined when there is none. */
+function selectServer(cfg: Config, selection: StoreSelection): RedactServer | undefined {
   const env = selection.target === undefined ? envServer(process.env) : undefined;
   if (env) return { name: "env", ...env };
-  let target: ServerTarget | undefined;
   try {
-    target = selectTarget(cfg, selection.target);
+    return selectTarget(cfg, selection.target);
   } catch (err) {
     throw new CliUsageError(err instanceof Error ? err.message : String(err));
   }
-  if (!target) {
-    throw new CliUsageError(
-      "no sessiondb server configured: run 'dosu setup' or 'dosu sources setup --server <url> --token <token>', or set DOSU_SESSIONDB_URL and DOSU_SESSIONDB_TOKEN",
-    );
-  }
-  return target;
 }
 
 /** `<harness>:<id>` → the agent the server keys by, and the session id. */
@@ -82,11 +76,11 @@ function redactCommand(): Command {
       ) => {
         const cfg = loadConfig();
         const { sessionId, agent } = parseSessionRef(ref);
-        const toDosu =
-          opts.dosu === true ||
-          (configuredTargets(cfg).length === 0 &&
-            (opts.target !== undefined || envServer(process.env) === undefined));
-        const where = toDosu ? "Dosu" : selectServer(cfg, opts).name;
+        const server =
+          opts.dosu === true || (configuredTargets(cfg).length === 0 && opts.target !== undefined)
+            ? undefined
+            : selectServer(cfg, opts);
+        const where = server ? server.name : "Dosu";
         if (!opts.yes) {
           const ok = await confirm({
             message: `Redact ${ref} from ${where}? This cannot be undone.`,
@@ -97,9 +91,9 @@ function redactCommand(): Command {
             return;
           }
         }
-        const result = toDosu
-          ? await redactFromDosu(cfg, sessionId)
-          : await redactOnServer(cfg, opts, { agent, sessionId });
+        const result = server
+          ? await redactOnServer(server, { agent, sessionId })
+          : await redactFromDosu(cfg, sessionId);
         if (opts.json) {
           printResult({ session: ref, target: where, ...result }, opts);
           return;
@@ -111,11 +105,9 @@ function redactCommand(): Command {
 }
 
 async function redactOnServer(
-  cfg: Config,
-  selection: StoreSelection,
+  target: RedactServer,
   session: { agent: string; sessionId: string },
 ): Promise<{ summary: string; removed: number }> {
-  const target = selectServer(cfg, selection);
   const result = await serverClient(target).tombstone(session.agent, session.sessionId);
   if (!result) {
     throw new CliUsageError(

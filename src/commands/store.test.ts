@@ -89,6 +89,41 @@ describe("dosu redact", () => {
     });
   });
 
+  it("redacts from Dosu when neither the config nor the environment names a server", async () => {
+    const error = await run("claude:sess1", "--yes").catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect((error as Error).message).toBe("not logged in to Dosu: run 'dosu setup'");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("redacts from Dosu on --target with nothing configured, whatever the environment says", async () => {
+    vi.stubEnv("DOSU_SESSIONDB_URL", "https://sessions.test");
+    vi.stubEnv("DOSU_SESSIONDB_TOKEN", TOKEN);
+
+    const error = await run("claude:sess1", "--yes", "--target", "team").catch(
+      (err: unknown) => err,
+    );
+
+    expect((error as Error).message).toBe("not logged in to Dosu: run 'dosu setup'");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses a --target that is not configured", async () => {
+    saveConfig({
+      ...makeTestConfig({ access_token: "t", refresh_token: "r", expires_at: 0 }),
+      targets: [{ name: "team", url: "https://team.test", owner: "ci", token: "sdb_team" }],
+    });
+
+    const error = await run("claude:sess1", "--yes", "--target", "other").catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect((error as Error).message).toContain("unknown target 'other' (configured: team)");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("refuses a plain http:// server that is not this machine", async () => {
     vi.stubEnv("DOSU_SESSIONDB_URL", "http://sessions.example.com");
     vi.stubEnv("DOSU_SESSIONDB_TOKEN", TOKEN);
