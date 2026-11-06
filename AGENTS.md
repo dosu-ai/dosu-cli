@@ -34,7 +34,8 @@ bun run check                   # Biome lint + format check (used in CI)
 Running `dosu` with no args launches the interactive TUI (`src/tui/tui.ts`). Two broad families of subcommands are registered in `src/cli/cli.ts`:
 
 - **Local / MCP management** — `login`, `logout`, `status`, `setup`, `mcp add|refresh|list`, `logs`, `upgrade`.
-- **Sessions and memory** — `sync`, `knowledge`, `memory`, `project`, `sources`, and the per-session `get`, `export`, `changes`, `redact`. Each lives in `src/commands/<name>.ts`; the Dosu-backed ones talk to the backend via `src/client/`, the rest to the configured session store (`src/store/`).
+- **Sessions and memory** — `sync`, `knowledge`, `memory`, `project`, `sources`, `imports`, `sessions push`, and the per-session `redact`. Each lives in `src/commands/<name>.ts` (`redact` in `store.ts`); the Dosu-backed ones talk to the backend via `src/client/` and `src/sources/api.ts`, the rest to the configured sessiondb server.
+- **No sign-in** — `sessions push <files...>` ships the session files it is named to a sessiondb server (`DOSU_SESSIONDB_URL` + `DOSU_SESSIONDB_TOKEN`, else a configured target) from machines nobody signs in on (a cloud agent's runner, CI), through the sync's own ship step (`src/shipper/runner.ts`); `DOSU_PROJECT` in the pusher's environment names the sessions' project. It never looks for sessions on the machine itself: what it sends skips the sync's scope and incognito settings, so the caller chooses the files (a runner names what its task's own agent directory holds).
 
 Key modules:
 

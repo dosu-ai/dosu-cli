@@ -7,6 +7,7 @@ import { importsCommand } from "../commands/imports";
 import { knowledgeCommand } from "../commands/knowledge";
 import { memoryCommand } from "../commands/memory";
 import { projectCommand } from "../commands/project";
+import { sessionsCommand } from "../commands/sessions";
 import { sourcesCommand } from "../commands/sources";
 import { storeCommands } from "../commands/store";
 import { syncCommand } from "../commands/sync";
@@ -451,6 +452,7 @@ export function createProgram(): Command {
   program.addCommand(knowledgeCommand());
   program.addCommand(memoryCommand());
   program.addCommand(projectCommand());
+  program.addCommand(sessionsCommand());
   program.addCommand(syncCommand()); // `dosu knowledge sync` stays as the hook command.
   for (const cmd of storeCommands()) program.addCommand(cmd);
   program.addCommand(sourcesCommand());

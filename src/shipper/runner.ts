@@ -1,4 +1,4 @@
-/** Transcript shipper — the sync pipeline's `ship` step. Per session: honor the incognito
+/** Transcript shipper — the sync pipeline's `ship` step, and `dosu sessions push`'s. Per session: honor the incognito
  * opt-out, read the raw log, and hand it to the sessiondb server with what this machine knows
  * that the log does not (the project, a fallback branch, the session's lineage, what shipped
  * before). The server normalizes, redacts, and judges; its answer becomes the session's outcome
@@ -21,6 +21,10 @@ export interface ShipStepOptions {
   resolveProject?: (session: AgentSession) => ProjectKey | null;
   /** `at`: when the session's own prompts began (ISO), the time to ask the reflog about. */
   resolveBranch?: (session: AgentSession, at?: string) => string | null;
+  /** The environment the sessions' agents ran in, when the caller's is theirs (a runner pushing
+   * its own task's sessions): DOSU_PROJECT there names their project. A sync started from some
+   * agent's hook knows no such thing, so it passes none. */
+  agentEnv?: NodeJS.ProcessEnv;
 }
 
 /** Build the sync pipeline's ship step. Processes oldest-first and stops after the first
@@ -106,7 +110,8 @@ export function createShipStep(options: ShipStepOptions): NonNullable<SyncDeps["
       options.resolveProject && options.resolveBranch ? undefined : createProjectDirResolver();
     const resolve = {
       resolveProject:
-        options.resolveProject ?? ((session) => resolver?.resolveProject(session) ?? null),
+        options.resolveProject ??
+        ((session) => resolver?.resolveProject(session, options.agentEnv) ?? null),
       resolveBranch:
         options.resolveBranch ?? ((session, at) => resolver?.resolveBranch(session, at) ?? null),
     };
