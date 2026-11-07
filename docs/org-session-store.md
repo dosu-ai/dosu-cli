@@ -82,6 +82,8 @@ backend has it configured, so nothing changes for hosted users.
 - **`dosu sources store setup` (admin):** the server and bucket wizards' questions, the read key,
   and optionally the server's token secret. It checks the read key against the bucket (as connect
   does today) and saves the store. `dosu sources store status` shows it, and the members enrolled.
+- **`dosu sources store join` (member):** what setup does, by hand, with `--token`, `--owner` and
+  the write-key flags. Again with another `--owner` moves the member to that folder.
 - **Personal targets** stay: `dosu sources setup --server …` or `--bucket …` with no login, or for
   someone whose org has no store. Without a login nothing is read by Dosu; with one, the
   per-member connect (read key and all) remains possible but is no longer what setup leads with.
@@ -89,14 +91,17 @@ backend has it configured, so nothing changes for hosted users.
 ## Backend
 
 - `memory.session_store`: `org_id` (unique), `kind`, location columns as on `session_source`,
-  `encrypted_read_credentials`, `encrypted_issuer_secret` (nullable), audit columns.
+  `encrypted_read_credentials`, `encrypted_token_secret` (nullable), audit columns.
 - `memory.session_source.store_id` (nullable): which store a source was enrolled from, so
   re-keying the store re-keys its sources, and removing a member removes their source.
 - Endpoints: `GET /store`, `PUT /store` (org admins only), `POST /store/enroll`.
 - Owner names are unique per store: a second member claiming an owner already enrolled is
   refused. For minted tokens the owner is fixed by Dosu. For pasted server tokens and bucket
   keys, Dosu cannot prove which folder a person may write, so first-come and an admin-visible
-  member list are the guard (see open questions).
+  member list are the guard (see Decisions).
+- Moving to another folder disables the member's old source in the store. Disabling a source
+  hides its transcripts (the folder may be claimed by someone else next); the memories learned
+  from them stay.
 
 ## Example: an org that runs its own server
 
@@ -146,15 +151,17 @@ repo behind a `sessiondb` command, with dosu-cli adding login and the org store.
 
 1. Backend: `session_store`, `GET`/`PUT /store`, `POST /store/enroll`, with `hosted` as the
    implicit store and `/sources/hosted` as an alias. No CLI change needed.
-2. CLI member flow: `dosu setup` reads the store and enrolls; no read-key prompts.
-3. CLI admin flow: `dosu sources store setup` and `status`.
+   ([dosu#13862](https://github.com/dosu-ai/dosu/pull/13862))
+2. CLI member flow: `dosu setup` reads the store and enrolls; no read-key prompts. (this PR)
+3. CLI admin flow: `dosu sources store setup` and `status`. (this PR)
 4. Existing per-member sources: attach each to its org's store where the bucket matches, and stop
    leading setup with the per-member connect.
 
-## Open questions
+## Decisions
 
-- Who may `PUT /store`: org admins only, or anyone until a store exists?
-- Pasted tokens and bucket keys: is first-come owner naming enough, or should a member's owner
-  need an admin's approval before Dosu reads it?
-- One store per org, or several (for example one per team) later? The table allows adding a name
-  and dropping the unique `org_id` without changing enrollment.
+- Only org admins (and owners) may `PUT /store`.
+- Owner names are first-come for pasted tokens and bucket keys, and a member can move to another
+  folder by enrolling under a new owner. The admin sees who holds which folder in
+  `dosu sources store status`.
+- One store per org. Several (for example one per team) would mean adding a name and dropping the
+  unique `org_id`; enrollment would not change.

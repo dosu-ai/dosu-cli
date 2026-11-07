@@ -54,7 +54,7 @@ async function askDosu(api: SourcesApi): Promise<HostedSource> {
   }
 }
 
-function targetOf(hosted: HostedSource, name: string): ServerTarget {
+export function targetOf(hosted: HostedSource, name: string): ServerTarget {
   return {
     name,
     url: hosted.server_url.replace(/\/+$/, ""),
@@ -70,7 +70,7 @@ function targetOf(hosted: HostedSource, name: string): ServerTarget {
  * pasted one: a token Dosu minted but its server does not accept (the two do not share a
  * secret yet, or the server is down) would otherwise be saved and fail at every ship. The
  * fault is on Dosu's side either way, and the message says so. */
-async function checkWithServer(target: ServerTarget, fetchImpl: FetchLike): Promise<void> {
+export async function checkWithServer(target: ServerTarget, fetchImpl: FetchLike): Promise<void> {
   let owner: string;
   try {
     ({ owner } = await serverClient(target, fetchImpl).me());
@@ -132,7 +132,7 @@ export function hostedTokenNeedsRenewal(target: ServerTarget, now: Date = new Da
 export async function renewHostedToken(
   cfg: Config,
   target: ServerTarget,
-  api: SourcesApi | undefined,
+  api: Pick<SourcesApi, "hosted"> | undefined,
   now: Date = new Date(),
   fetchImpl: FetchLike = fetch,
 ): Promise<ServerTarget> {

@@ -1,0 +1,452 @@
+/** `dosu sources store setup|status|join` against a faked `/v1/memory/store`: what setup sends
+ * for each kind, what status prints to a member and to an admin, and how join hands off. */
+
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveConfig } from "../config/config";
+import { makeTestConfig } from "../config/config.test-utils";
+import type { SessionStore } from "../sources/api";
+import { joinOrgStore } from "../sources/store";
+import * as p from "../tui/prompts";
+import { sourcesCommand } from "./sources";
+
+vi.mock("../tui/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tui/prompts")>()),
+  text: vi.fn(),
+  select: vi.fn(),
+  confirm: vi.fn(),
+}));
+vi.mock("../sources/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sources/store")>()),
+  joinOrgStore: vi.fn(),
+}));
+
+const DOSU = "https://api.dosu.test";
+type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+const STORE: SessionStore = {
+  kind: "bucket",
+  configured: true,
+  server_url: null,
+  url: "s3://acme-sessions/agents",
+  bucket_kind: "s3",
+  bucket: "acme-sessions",
+  prefix: "agents",
+  region: "us-east-1",
+  account_id: null,
+  endpoint: null,
+  issues_tokens: false,
+  updated_at: null,
+  owner: null,
+  source_id: null,
+  members: null,
+};
+
+let home: string;
+let out: string[];
+let fetchImpl: ReturnType<typeof vi.fn<Fetch>>;
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+/** Dosu answers every call with `answer`, echoing a PUT's body back as the store. */
+function dosuAnswers(answer: (method: string, body?: Record<string, unknown>) => Response): void {
+  fetchImpl.mockImplementation(async (_url, init) => {
+    const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+    return answer(init?.method ?? "GET", init?.body ? body : undefined);
+  });
+}
+
+function calls(): Array<{ method: string; path: string; body?: Record<string, unknown> }> {
+  return fetchImpl.mock.calls.map(([url, init]) => ({
+    method: init?.method ?? "GET",
+    path: url.replace(DOSU, ""),
+    ...(init?.body ? { body: JSON.parse(init.body as string) } : {}),
+  }));
+}
+
+function script(answers: Record<string, unknown>): void {
+  const answer = async (opts: { message: string }) => {
+    if (!(opts.message in answers)) throw new Error(`unscripted prompt: ${opts.message}`);
+    return answers[opts.message];
+  };
+  vi.mocked(p.text).mockImplementation(answer as typeof p.text);
+  vi.mocked(p.select).mockImplementation(answer as typeof p.select);
+}
+
+async function dosu(...args: string[]): Promise<void> {
+  const cmd = sourcesCommand();
+  cmd.exitOverride();
+  await cmd.parseAsync(["node", "dosu", "store", ...args]);
+}
+
+beforeEach(() => {
+  home = realpathSync(mkdtempSync(join(tmpdir(), "dosu-store-cmd-")));
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
+  vi.stubEnv("DOSU_DEV", undefined);
+  vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", DOSU);
+  for (const name of [
+    "DOSU_SOURCE_ACCESS_KEY_ID",
+    "DOSU_SOURCE_SECRET_ACCESS_KEY",
+    "DOSU_SOURCE_SESSION_TOKEN",
+    "DOSU_STORE_TOKEN_SECRET",
+  ]) {
+    vi.stubEnv(name, undefined);
+  }
+  saveConfig(
+    makeTestConfig({
+      access_token: "t",
+      refresh_token: "r",
+      expires_at: 0,
+      api_key: "sk_test",
+      deployment_id: "dep1",
+      org_id: "org1",
+    }),
+  );
+  fetchImpl = vi.fn<Fetch>();
+  dosuAnswers((method, body) => json(method === "PUT" ? { ...STORE, ...body } : STORE));
+  vi.stubGlobal("fetch", fetchImpl);
+  out = [];
+  vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    out.push(args.join(" "));
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  rmSync(home, { recursive: true, force: true });
+});
+
+const READ = ["--read-access-key-id", "AKIDREAD", "--read-secret-access-key", "readsecret"];
+
+describe("sources store setup", () => {
+  it("sets Dosu's sessiondb with --hosted", async () => {
+    await dosu("setup", "--hosted");
+    expect(calls()).toEqual([
+      { method: "PUT", path: "/v1/memory/store", body: { deployment_id: "dep1", kind: "hosted" } },
+    ]);
+    expect(out.join("\n")).toContain("The org's sessions go to Dosu's sessiondb.");
+  });
+
+  it("sends a bucket store from flags, and says how to scope member keys", async () => {
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--region",
+      "eu-west-1",
+      "--yes",
+      ...READ,
+    );
+    expect(calls()[0]?.body).toEqual({
+      deployment_id: "dep1",
+      kind: "bucket",
+      bucket_kind: "s3",
+      bucket: "acme-sessions",
+      prefix: "agents",
+      region: "eu-west-1",
+      access_key_id: "AKIDREAD",
+      secret_access_key: "readsecret",
+    });
+    expect(out.join("\n")).toContain("owners/<their folder>/");
+  });
+
+  it("sends a server store with its token secret from the environment", async () => {
+    vi.stubEnv("DOSU_STORE_TOKEN_SECRET", "s3cret");
+    vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIDENV");
+    vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
+    dosuAnswers((_m, body) =>
+      json({
+        ...STORE,
+        ...body,
+        kind: "server",
+        server_url: body?.server_url,
+        issues_tokens: true,
+      }),
+    );
+    await dosu(
+      "setup",
+      "--server",
+      "https://sessions.acme.test/",
+      "--bucket",
+      "r2://acme-sessions",
+      "--account-id",
+      "acct",
+      "--json",
+    );
+    expect(calls()[0]?.body).toEqual({
+      deployment_id: "dep1",
+      kind: "server",
+      server_url: "https://sessions.acme.test",
+      bucket_kind: "r2",
+      bucket: "acme-sessions",
+      prefix: "",
+      account_id: "acct",
+      access_key_id: "AKIDENV",
+      secret_access_key: "envsecret",
+      token_secret: "s3cret",
+    });
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ kind: "server", issues_tokens: true });
+  });
+
+  it("asks for each answer when no flags are given", async () => {
+    script({
+      "Where should the org's sessions go?": "server",
+      "Server URL": "https://sessions.acme.test",
+      "The bucket the server writes": "s3://acme-sessions/agents",
+      "AWS region": "us-east-1",
+      "S3-compatible endpoint (blank for AWS)": "https://minio.acme.test",
+      "Dosu's read-only keys (GetObject + ListBucket): access key id": "AKIDREAD",
+      "Dosu's read-only keys (GetObject + ListBucket): secret access key": "readsecret",
+      "The server's SESSIONDB_TOKEN_SECRET, so Dosu signs each member's token (blank: you hand out tokens yourself)":
+        "",
+    });
+    dosuAnswers((_m, body) =>
+      json({ ...STORE, ...body, kind: "server", server_url: body?.server_url }),
+    );
+    await dosu("setup");
+    const body = calls()[0]?.body;
+    expect(body).toMatchObject({ kind: "server", endpoint: "https://minio.acme.test" });
+    expect(body).not.toHaveProperty("token_secret");
+    expect(out.join("\n")).toContain("SESSIONDB_TOKENS");
+
+    const asks = vi.mocked(p.text).mock.calls.map(([opts]) => opts);
+    expect(asks[0]?.validate?.("ftp://x")).toContain("https://");
+    expect(asks[0]?.validate?.("https://ok.test")).toBeUndefined();
+    expect(asks[1]?.validate?.("gs://x")).toContain("s3://");
+    expect(asks[1]?.validate?.("s3://ok")).toBeUndefined();
+  });
+
+  it("asks an r2 bucket for its account, not a region", async () => {
+    script({
+      "Where should the org's sessions go?": "bucket",
+      "Bucket URL": "r2://acme-sessions/agents",
+      "Cloudflare account id": " acct ",
+    });
+    await dosu("setup", ...READ);
+    expect(calls()[0]?.body).toMatchObject({ bucket_kind: "r2", account_id: "acct" });
+    expect(calls()[0]?.body).not.toHaveProperty("region");
+  });
+
+  it("takes an r2 endpoint instead of an account", async () => {
+    await dosu(
+      "setup",
+      "--bucket",
+      "r2://acme-sessions",
+      "--endpoint",
+      "https://acct.r2.cloudflarestorage.com",
+      "--yes",
+      ...READ,
+    );
+    expect(calls()[0]?.body).toMatchObject({ endpoint: "https://acct.r2.cloudflarestorage.com" });
+    expect(calls()[0]?.body).not.toHaveProperty("account_id");
+  });
+
+  it("refuses contradictory or half-given flags before calling Dosu", async () => {
+    await expect(dosu("setup", "--hosted", "--bucket", "s3://b")).rejects.toThrow(
+      "--hosted is Dosu's",
+    );
+    await expect(dosu("setup", "--bucket", "s3://b", "--read-access-key-id", "x")).rejects.toThrow(
+      "go together",
+    );
+    await expect(
+      dosu("setup", "--bucket", "s3://b", "--token-secret", "s", "--yes", ...READ),
+    ).rejects.toThrow("a bucket store has no tokens");
+    await expect(dosu("setup", "--bucket", "gs://b", "--yes", ...READ)).rejects.toThrow(
+      "not a bucket URL: gs://b",
+    );
+    await expect(dosu("setup", "--server", "ftp://s", "--yes", ...READ)).rejects.toThrow(
+      "not a server URL: ftp://s",
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("tells a member that only an admin sets the store", async () => {
+    dosuAnswers(() => json({ detail: "admins only" }, 403));
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(
+      "only an org admin can set the org's session store",
+    );
+    dosuAnswers(() => json({ detail: "bucket refused" }, 422));
+    await expect(dosu("setup", "--hosted")).rejects.toThrow("bucket refused");
+  });
+});
+
+describe("sources store, logged out", () => {
+  it("says to log in first", async () => {
+    saveConfig(makeTestConfig({ access_token: "t", refresh_token: "r", expires_at: 0 }));
+    await expect(dosu("status")).rejects.toThrow("not logged in to Dosu");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("sources store status", () => {
+  it("shows a member where the store is and their folder", async () => {
+    dosuAnswers(() => json({ ...STORE, owner: "james" }));
+    await dosu("status");
+    const said = out.join("\n");
+    expect(said).toContain("the org's bucket s3://acme-sessions/agents");
+    expect(said).toContain("members write with their own key");
+    expect(said).toContain("You ship as james.");
+    expect(calls()).toEqual([{ method: "GET", path: "/v1/memory/store?deployment_id=dep1" }]);
+  });
+
+  it("shows an admin who has enrolled", async () => {
+    dosuAnswers(() =>
+      json({
+        ...STORE,
+        kind: "server",
+        server_url: "https://sessions.acme.test",
+        issues_tokens: true,
+        members: [
+          {
+            user_id: "u1",
+            owner: "alice",
+            source_id: "s1",
+            enabled: true,
+            last_synced_at: null,
+            last_error: null,
+          },
+          {
+            user_id: "u2",
+            owner: "bob",
+            source_id: "s2",
+            enabled: true,
+            last_synced_at: new Date().toISOString(),
+            last_error: "403",
+          },
+          {
+            user_id: "u3",
+            owner: "carol",
+            source_id: "s3",
+            enabled: false,
+            last_synced_at: null,
+            last_error: null,
+          },
+        ],
+      }),
+    );
+    await dosu("status");
+    const said = out.join("\n");
+    expect(said).toContain("Dosu signs each member's token");
+    expect(said).toContain("You have not enrolled.");
+    expect(said).toMatch(/alice\s+u1\s+ok\s+never/);
+    expect(said).toMatch(/bob\s+u2\s+error/);
+    expect(said).toMatch(/carol\s+u3\s+moved/);
+  });
+
+  it("says so when no one has enrolled, or the store is the hosted default", async () => {
+    dosuAnswers(() =>
+      json({ ...STORE, kind: "server", server_url: "https://s.test", url: null, members: [] }),
+    );
+    await dosu("status");
+    expect(out.join("\n")).toContain("members paste a token the admin issued");
+    expect(out.join("\n")).toContain("No one has enrolled yet.");
+
+    out = [];
+    dosuAnswers(() =>
+      json({ ...STORE, kind: "hosted", configured: false, url: null, issues_tokens: true }),
+    );
+    await dosu("status", "--json");
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ configured: false });
+    out = [];
+    await dosu("status");
+    expect(out.join("\n")).toContain("(the default; no admin has set one)");
+  });
+
+  it("says how to set one when the org has none", async () => {
+    dosuAnswers(() => json({ detail: "none" }, 404));
+    await expect(dosu("status")).rejects.toThrow("dosu sources store setup");
+    dosuAnswers(() => json({ detail: "down" }, 500));
+    await expect(dosu("status")).rejects.toThrow("down");
+  });
+});
+
+describe("sources store join", () => {
+  const ENROLLED = { source: { id: "src-1" } };
+
+  it("hands the flags to joinOrgStore and reports the folder", async () => {
+    vi.mocked(joinOrgStore).mockResolvedValueOnce({
+      target: {
+        kind: "bucket",
+        name: "org",
+        url: STORE.url as string,
+        owner: "james",
+        access_key_id: "AKIDW",
+        secret_access_key: "w",
+      },
+      enrollment: ENROLLED,
+    } as never);
+    await dosu(
+      "join",
+      "--owner",
+      "james",
+      "--write-access-key-id",
+      "AKIDW",
+      "--write-secret-access-key",
+      "w",
+      "--name",
+      "acme",
+      "--no-default",
+      "--yes",
+    );
+    expect(vi.mocked(joinOrgStore).mock.calls[0]?.[3]).toEqual({
+      owner: "james",
+      write: { access_key_id: "AKIDW", secret_access_key: "w" },
+      name: "acme",
+      makeDefault: false,
+      yes: true,
+    });
+    expect(out.join("\n")).toContain(
+      "Sessions ship to the org's bucket s3://acme-sessions/agents as james.",
+    );
+  });
+
+  it("never prints a token or key under --json", async () => {
+    vi.mocked(joinOrgStore)
+      .mockResolvedValueOnce({
+        target: { name: "org", url: "https://s.test", owner: "alice", token: "sdb_secret" },
+        enrollment: ENROLLED,
+      } as never)
+      .mockResolvedValueOnce({
+        target: {
+          kind: "bucket",
+          name: "org",
+          url: "s3://b",
+          owner: "james",
+          access_key_id: "AKIDW",
+          secret_access_key: "w",
+        },
+        enrollment: ENROLLED,
+      } as never);
+    await dosu("join", "--token", "sdb_secret", "--json");
+    expect(vi.mocked(joinOrgStore).mock.calls[0]?.[3]).toEqual({ token: "sdb_secret", yes: true });
+    await dosu("join", "--json");
+    const said = out.join("\n");
+    expect(said).not.toContain("sdb_secret");
+    expect(said).not.toContain('"w"');
+    expect(said).toContain('"src-1"');
+  });
+
+  it("saves nothing when cancelled", async () => {
+    vi.mocked(joinOrgStore).mockResolvedValueOnce(null);
+    await dosu("join");
+    expect(vi.mocked(joinOrgStore).mock.calls[0]?.[3]).toEqual({});
+    expect(out.join("\n")).toContain("Cancelled; nothing saved.");
+  });
+
+  it("refuses half a key pair, and an org without a store", async () => {
+    await expect(dosu("join", "--write-access-key-id", "x")).rejects.toThrow("go together");
+    dosuAnswers(() => json({ detail: "none" }, 404));
+    await expect(dosu("join")).rejects.toThrow("dosu sources store setup");
+    dosuAnswers(() => json({ detail: "down" }, 500));
+    await expect(dosu("join")).rejects.toThrow("down");
+    expect(joinOrgStore).not.toHaveBeenCalled();
+  });
+});

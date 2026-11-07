@@ -214,9 +214,15 @@ function buildShipper(selection: TargetSelection): Shipper {
       let target = selected;
       if (configured && !isBucketTarget(configured) && hostedTokenNeedsRenewal(configured)) {
         const { renewHostedToken } = await import("../sources/hosted");
-        const { sourcesApi } = await import("../sources/api");
+        const { sourcesApi, storeApi } = await import("../sources/api");
+        const { storeTokenSource } = await import("../sources/store");
         const { createServerTarget } = await import("../shipper/target");
-        const renewed = await renewHostedToken(cfg, configured, sourcesApi(cfg));
+        const stores = configured.store ? storeApi(cfg) : undefined;
+        const renewed = await renewHostedToken(
+          cfg,
+          configured,
+          configured.store ? stores && storeTokenSource(stores) : sourcesApi(cfg),
+        );
         if (renewed.token !== configured.token) {
           target = createServerTarget({
             name: renewed.name,
