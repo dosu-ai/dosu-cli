@@ -98,6 +98,34 @@ backend has it configured, so nothing changes for hosted users.
   keys, Dosu cannot prove which folder a person may write, so first-come and an admin-visible
   member list are the guard (see open questions).
 
+## Example: an org that runs its own server
+
+1. The admin runs the sessiondb image on their own infra, pointed at their bucket, with
+   `SESSIONDB_TOKEN_SECRET` set (and `SESSIONDB_TOKENS` if they also want hand-issued tokens).
+2. The admin gives Dosu a read-only key to that bucket and runs `dosu sources store setup`:
+   kind `server`, the server URL, the read key, and the token secret.
+3. A member runs `dosu setup` and signs in. The CLI reads the store, enrolls, and gets back a
+   token Dosu signed for `o-<org>.u-<user>`. The member is asked nothing about servers or keys.
+4. The member's hooks ship to the org's server with that token. The server redacts and writes
+   under `owners/o-<org>.u-<user>/`. Dosu reads that folder with the store's read key.
+
+Without the token secret, step 3 asks for a token the admin issued from `SESSIONDB_TOKENS`
+instead; the rest is the same.
+
+## Visibility
+
+- **On the server:** a token is bound to one owner, and every read and write goes through a client
+  scoped to `owners/<owner>/` (`server/src/app.ts`). A member can list, read and redact only their
+  own sessions; no request can name another folder.
+- **In Dosu:** raw transcripts and session reports are visible only to the member who submitted
+  them (`owner_user_id` checks in `backend/public_api/memory/browse.py` and `router.py`). The org
+  sees the memories learned from sessions, and that a turn happened, not what was typed.
+- **Who sees every folder:** the admin, who owns the bucket, and Dosu's read key.
+- **Bucket stores** have no server in between, so isolation is the bucket policy. One write key
+  shared by every member lets them read each other's folders directly; per-member keys scoped to
+  `owners/<owner>/` are what keep them apart. `dosu sources store setup` should say so.
+- **Static server tokens** isolate only if each person gets a distinct one.
+
 ## Security
 
 - Members hold only what they write with. The read key and the issuer secret stay in the backend.
