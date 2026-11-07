@@ -51,6 +51,9 @@ export interface ServerTarget {
   /** Dosu's own sessiondb: the token came from the Dosu login (`POST /v1/memory/sources/hosted`)
    * rather than a server's `.env`, and is renewed from it before `token_expires_at`. */
   hosted?: boolean;
+  /** Enrolled in the org's session store (`POST /v1/memory/store/enroll`): a minted token is
+   * renewed by enrolling again rather than from `/sources/hosted`. */
+  store?: boolean;
   /** When a hosted token stops working (ISO 8601). */
   token_expires_at?: string;
 }

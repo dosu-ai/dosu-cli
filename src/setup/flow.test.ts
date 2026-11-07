@@ -52,6 +52,13 @@ vi.mock("../sources/server-wizard", () => ({
 
 vi.mock("../sources/api", () => ({
   sourcesApi: vi.fn(),
+  storeApi: vi.fn(),
+}));
+
+vi.mock("../sources/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sources/store")>()),
+  orgStore: vi.fn(),
+  joinOrgStore: vi.fn(),
 }));
 
 vi.mock("../sources/hosted", async (importOriginal) => ({
@@ -189,10 +196,11 @@ import { CursorProvider } from "../mcp/providers/cursor";
 import { GeminiProvider } from "../mcp/providers/gemini";
 import { OpenCodeProvider } from "../mcp/providers/opencode";
 import { restoreRunningInstall, stubRunningFromNpx } from "../mcp/running-install.test-utils";
-import { sourcesApi } from "../sources/api";
+import { type SessionStore, sourcesApi, storeApi } from "../sources/api";
 import { runBucketWizard } from "../sources/bucket-wizard";
 import { HostedUnavailable, setupHostedTarget } from "../sources/hosted";
 import { runServerWizard } from "../sources/server-wizard";
+import { joinOrgStore, orgStore } from "../sources/store";
 import {
   loadSyncState,
   saveSyncState,
@@ -3398,6 +3406,73 @@ describe("stepChooseSessionStorage", () => {
 
   /** The login can call Dosu: the hosted option is on the menu. */
   const api = { backendUrl: "https://api.dosu.test" } as unknown as ReturnType<typeof sourcesApi>;
+
+  describe("when an org admin has set a session store", () => {
+    const store = {
+      kind: "bucket",
+      configured: true,
+      url: "s3://acme/sessions",
+      issues_tokens: false,
+    } as SessionStore;
+    const stores = { backendUrl: "https://api.dosu.test" } as unknown as ReturnType<
+      typeof storeApi
+    >;
+    const joined = {
+      target: { name: "org", url: "https://s.test", owner: "james", token: "t" },
+      enrollment: {} as never,
+    };
+
+    beforeEach(() => {
+      vi.mocked(storeApi).mockReturnValue(stores);
+    });
+
+    it("joins it instead of offering the menu", async () => {
+      vi.mocked(orgStore).mockResolvedValueOnce(store);
+      vi.mocked(joinOrgStore).mockResolvedValueOnce(joined);
+      const cfg = makeCfg();
+
+      expect(await stepChooseSessionStorage(cfg)).toBe("bucket");
+      expect(orgStore).toHaveBeenCalledWith(stores);
+      expect(joinOrgStore).toHaveBeenCalledWith(cfg, stores, store);
+      expect(p.select).not.toHaveBeenCalled();
+      const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
+      expect(said).toContain("Sessions ship to the org's bucket s3://acme/sessions as james");
+    });
+
+    it("enrolls under a spinner when Dosu mints the token", async () => {
+      const hostedStore = { ...store, kind: "hosted", issues_tokens: true } as SessionStore;
+      vi.mocked(orgStore).mockResolvedValueOnce(hostedStore);
+      vi.mocked(joinOrgStore).mockResolvedValueOnce(joined);
+
+      expect(await stepChooseSessionStorage(makeCfg())).toBe("hosted");
+      const spinner = vi.mocked(p.spinner).mock.results[0]?.value;
+      expect(spinner.start).toHaveBeenCalledWith("Enrolling you in the org's session store...");
+      expect(spinner.stop).toHaveBeenCalledWith("Sessions ship to Dosu's sessiondb as james");
+    });
+
+    it("ships nothing when the join is cancelled or refused, and says how to retry", async () => {
+      vi.mocked(orgStore).mockResolvedValueOnce(store);
+      vi.mocked(joinOrgStore).mockResolvedValueOnce(null);
+      expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
+      expect(vi.mocked(p.log.info).mock.calls.join(" ")).toContain("dosu sources store join");
+
+      const hostedStore = { ...store, kind: "hosted", issues_tokens: true } as SessionStore;
+      vi.mocked(orgStore).mockResolvedValueOnce(hostedStore);
+      vi.mocked(joinOrgStore).mockRejectedValueOnce(new CliUsageError("bob is taken"));
+      expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
+      const spinner = vi.mocked(p.spinner).mock.results.at(-1)?.value;
+      expect(spinner.stop).toHaveBeenCalledWith("Could not join the org's session store", 1);
+      expect(vi.mocked(p.log.warn).mock.calls.join(" ")).toContain("bob is taken");
+
+      vi.mocked(orgStore).mockResolvedValueOnce(store);
+      vi.mocked(joinOrgStore).mockRejectedValueOnce(new CliUsageError("no key"));
+      expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
+
+      vi.mocked(orgStore).mockResolvedValueOnce(store);
+      vi.mocked(joinOrgStore).mockRejectedValueOnce(new Error("disk full"));
+      await expect(stepChooseSessionStorage(makeCfg())).rejects.toThrow("disk full");
+    });
+  });
 
   it("offers Dosu's sessiondb first, your own server, your own bucket, or not now", async () => {
     vi.mocked(sourcesApi).mockReturnValue(api);

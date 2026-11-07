@@ -32,6 +32,7 @@ import {
 } from "../sources/server-wizard";
 import { confirm, isCancel } from "../tui/prompts";
 import { formatAge, printResult, printTable, truncate } from "./output";
+import { storeCommand } from "./sources-store";
 
 export function sourcesCommand(): Command {
   const cmd = new Command("sources").description(
@@ -42,6 +43,7 @@ export function sourcesCommand(): Command {
   cmd.addCommand(statusCommand());
   cmd.addCommand(syncCommand());
   cmd.addCommand(disconnectCommand());
+  cmd.addCommand(storeCommand());
   return cmd;
 }
 
