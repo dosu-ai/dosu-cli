@@ -68,6 +68,13 @@ function calls(): Array<{ method: string; path: string; body?: Record<string, un
   }));
 }
 
+/** The body of the one `PUT /v1/memory/store` sent (setup reads the store first). */
+function put(): Record<string, unknown> | undefined {
+  const puts = calls().filter((c) => c.method === "PUT");
+  expect(puts).toHaveLength(1);
+  return puts[0]?.body;
+}
+
 function script(answers: Record<string, unknown>): void {
   const answer = async (opts: { message: string }) => {
     if (!(opts.message in answers)) throw new Error(`unscripted prompt: ${opts.message}`);
@@ -130,6 +137,7 @@ describe("sources store setup", () => {
   it("sets Dosu's sessiondb with --hosted", async () => {
     await dosu("setup", "--hosted");
     expect(calls()).toEqual([
+      { method: "GET", path: "/v1/memory/store?deployment_id=dep1" },
       { method: "PUT", path: "/v1/memory/store", body: { deployment_id: "dep1", kind: "hosted" } },
     ]);
     expect(out.join("\n")).toContain("The org's sessions go to Dosu's sessiondb.");
@@ -145,7 +153,7 @@ describe("sources store setup", () => {
       "--yes",
       ...READ,
     );
-    expect(calls()[0]?.body).toEqual({
+    expect(put()).toEqual({
       deployment_id: "dep1",
       kind: "bucket",
       bucket_kind: "s3",
@@ -181,7 +189,7 @@ describe("sources store setup", () => {
       "acct",
       "--json",
     );
-    expect(calls()[0]?.body).toEqual({
+    expect(put()).toEqual({
       deployment_id: "dep1",
       kind: "server",
       server_url: "https://sessions.acme.test",
@@ -212,7 +220,7 @@ describe("sources store setup", () => {
       json({ ...STORE, ...body, kind: "server", server_url: body?.server_url }),
     );
     await dosu("setup");
-    const body = calls()[0]?.body;
+    const body = put();
     expect(body).toMatchObject({ kind: "server", endpoint: "https://minio.acme.test" });
     expect(body).not.toHaveProperty("token_secret");
     expect(out.join("\n")).toContain("SESSIONDB_TOKENS");
@@ -231,8 +239,8 @@ describe("sources store setup", () => {
       "Cloudflare account id": " acct ",
     });
     await dosu("setup", ...READ);
-    expect(calls()[0]?.body).toMatchObject({ bucket_kind: "r2", account_id: "acct" });
-    expect(calls()[0]?.body).not.toHaveProperty("region");
+    expect(put()).toMatchObject({ bucket_kind: "r2", account_id: "acct" });
+    expect(put()).not.toHaveProperty("region");
   });
 
   it("takes an r2 endpoint instead of an account", async () => {
@@ -245,8 +253,8 @@ describe("sources store setup", () => {
       "--yes",
       ...READ,
     );
-    expect(calls()[0]?.body).toMatchObject({ endpoint: "https://acct.r2.cloudflarestorage.com" });
-    expect(calls()[0]?.body).not.toHaveProperty("account_id");
+    expect(put()).toMatchObject({ endpoint: "https://acct.r2.cloudflarestorage.com" });
+    expect(put()).not.toHaveProperty("account_id");
   });
 
   it("refuses contradictory or half-given flags before calling Dosu", async () => {
@@ -258,14 +266,56 @@ describe("sources store setup", () => {
     );
     await expect(
       dosu("setup", "--bucket", "s3://b", "--token-secret", "s", "--yes", ...READ),
-    ).rejects.toThrow("a bucket store has no tokens");
+    ).rejects.toThrow("only a server store has one");
+    await expect(dosu("setup", "--hosted", "--clear-token-secret")).rejects.toThrow(
+      "only a server store has one",
+    );
+    await expect(
+      dosu("setup", "--server", "https://s.test", "--token-secret", "s", "--clear-token-secret"),
+    ).rejects.toThrow("contradict");
     await expect(dosu("setup", "--bucket", "gs://b", "--yes", ...READ)).rejects.toThrow(
       "not a bucket URL: gs://b",
     );
     await expect(dosu("setup", "--server", "ftp://s", "--yes", ...READ)).rejects.toThrow(
       "not a server URL: ftp://s",
     );
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+  });
+
+  it("offers to keep the secret Dosu has for the same server, and clears it only when asked", async () => {
+    const current = {
+      ...STORE,
+      kind: "server",
+      server_url: "https://sessions.acme.test",
+      issues_tokens: true,
+    };
+    dosuAnswers((method, body) => json(method === "PUT" ? { ...current, ...body } : current));
+    const keep = "The server's SESSIONDB_TOKEN_SECRET (blank: keep the one Dosu has)";
+    script({
+      "Where should the org's sessions go?": "server",
+      "Server URL": "https://sessions.acme.test",
+      "The bucket the server writes": "s3://acme-sessions/agents",
+      "AWS region": "us-east-1",
+      "S3-compatible endpoint (blank for AWS)": "",
+      [keep]: "",
+    });
+    await dosu("setup", ...READ);
+    expect(put()).not.toHaveProperty("token_secret");
+    expect(put()).not.toHaveProperty("clear_token_secret");
+
+    fetchImpl.mockClear();
+    vi.mocked(p.text).mockClear();
+    await dosu(
+      "setup",
+      "--server",
+      "https://sessions.acme.test",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--clear-token-secret",
+      ...READ,
+    );
+    expect(put()).toMatchObject({ clear_token_secret: true });
+    expect(vi.mocked(p.text).mock.calls.map(([o]) => o.message)).not.toContain(keep);
   });
 
   it("tells a member that only an admin sets the store", async () => {

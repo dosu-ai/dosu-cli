@@ -226,8 +226,11 @@ export interface SetStoreRequest {
   access_key_id?: string;
   secret_access_key?: string;
   session_token?: string;
-  /** The server's `SESSIONDB_TOKEN_SECRET`, so Dosu mints member tokens. */
+  /** The server's `SESSIONDB_TOKEN_SECRET`, so Dosu mints member tokens. Omitted, a server
+   * store keeps the one it has for the same server URL. */
   token_secret?: string;
+  /** Forget the token secret: members' tokens are the admin's to issue again. */
+  clear_token_secret?: boolean;
 }
 
 /** What enrolling gives this member: where to ship or write, a token when Dosu minted one, and

@@ -135,7 +135,8 @@ instead; the rest is the same.
 ## Security
 
 - Members hold only what they write with. The read key and the issuer secret stay in the backend.
-- Rotating the read key is one `PUT /store`, not one reconnect per member.
+- Rotating the read key is one `PUT /store`, not one reconnect per member. Setting the store again
+  without a token secret keeps the one Dosu has for the same server; `--clear-token-secret` drops it.
 - A pasted token or bucket key is the admin's to scope and revoke. Dosu's minted tokens expire
   (90 days) and are renewed by `dosu sync`, as for hosted today.
 
