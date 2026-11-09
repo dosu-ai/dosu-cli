@@ -271,6 +271,57 @@ describe("createJSONProvider (base)", () => {
   });
 });
 
+// --- Claude Code: a relocated config dir ---
+
+describe("ClaudeProvider", () => {
+  let tempDir: string;
+  let origHome: string | undefined;
+  let origConfigDir: string | undefined;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "dosu-claude-test-"));
+    origHome = process.env.HOME;
+    origConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.HOME = join(tempDir, "home");
+    mkdirSync(process.env.HOME, { recursive: true });
+  });
+
+  afterEach(() => {
+    process.env.HOME = origHome;
+    if (origConfigDir !== undefined) {
+      process.env.CLAUDE_CONFIG_DIR = origConfigDir;
+    } else {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("global install writes CLAUDE_CONFIG_DIR/.claude.json, never ~/.claude.json, when it is set", async () => {
+    const { ClaudeProvider } = await import("./claude");
+    const configDir = join(tempDir, "profile");
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const provider = ClaudeProvider();
+
+    provider.install(makeCfg(), true);
+
+    expect(provider.globalConfigPath()).toBe(join(configDir, ".claude.json"));
+    const config = loadJSONConfig(join(configDir, ".claude.json"));
+    expect((config.mcpServers as Record<string, unknown>).dosu).toBeDefined();
+    expect(existsSync(join(tempDir, "home", ".claude.json"))).toBe(false);
+  });
+
+  it.each([
+    undefined,
+    "",
+  ])("CLAUDE_CONFIG_DIR %j falls back to ~/.claude.json, as in Claude Code", async (value) => {
+    const { ClaudeProvider } = await import("./claude");
+    if (value === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = value;
+
+    expect(ClaudeProvider().globalConfigPath()).toBe(join(tempDir, "home", ".claude.json"));
+  });
+});
+
 // --- 2. Codex provider (TOML-based) ---
 
 describe("CodexProvider", () => {
