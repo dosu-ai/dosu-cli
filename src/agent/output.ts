@@ -14,10 +14,12 @@ export function emitJSONLine(value: unknown): void {
   console.log(JSON.stringify(value));
 }
 
-/** The user must act out-of-band: the agent relays `url`, then re-runs `resume_command`. */
+/** The user must act out-of-band: the agent relays `url` (and `user_code`, which the user types on
+ * that page), then re-runs `resume_command`. */
 export function emitNeedUserAction(opts: {
   step: string;
   url: string;
+  user_code?: string;
   ticket: string;
   resume_command: string;
   expires_in: number;
@@ -27,6 +29,7 @@ export function emitNeedUserAction(opts: {
     step: opts.step,
     status: "need_user_action",
     url: opts.url,
+    user_code: opts.user_code,
     ticket: opts.ticket,
     resume_command: opts.resume_command,
     expires_in: opts.expires_in,

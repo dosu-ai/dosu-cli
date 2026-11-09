@@ -224,6 +224,7 @@ describe("runAgentSetup", () => {
       ticket: "tkt-1",
       expires_in: 600,
       url: "https://app.dosu.dev/cli/auth?ticket=tkt-1",
+      user_code: "BCDF-GHJK",
     });
 
     const code = await runAgentSetup({ tool: "claude" });
@@ -236,7 +237,9 @@ describe("runAgentSetup", () => {
       status: "need_user_action",
       ticket: "tkt-1",
       url: "https://app.dosu.dev/cli/auth?ticket=tkt-1",
+      user_code: "BCDF-GHJK",
       resume_command: "npx @dosu/cli@latest setup --agent --tool claude --login-ticket tkt-1",
+      agent_next_steps: expect.stringContaining("the code BCDF-GHJK"),
     });
   });
 

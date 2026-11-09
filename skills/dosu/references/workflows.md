@@ -10,7 +10,7 @@ dosu setup --agent --tool <tool-id>
 
 Read every NDJSON event:
 
-1. On `need_user_action`, give the returned URL to the user and stop.
+1. On `need_user_action`, give the user the returned URL and `user_code` (they type the code on that page), then stop.
 2. After the user confirms sign-in, run the returned `resume_command` verbatim.
 3. On `pending`, wait for the user and repeat that command.
 4. On `multiple_deployments`, list MCP deployments, let the user choose, and retry with `--deployment <id>`.
