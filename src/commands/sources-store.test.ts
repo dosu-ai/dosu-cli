@@ -208,7 +208,8 @@ describe("sources store setup", () => {
     script({
       "Where should the org's sessions go?": "server",
       "Server URL": "https://sessions.acme.test",
-      "The bucket the server writes": "s3://acme-sessions/agents",
+      "The bucket the server writes: which service?": "s3",
+      "The bucket the server writes: name": "acme-sessions/agents",
       "AWS region": "us-east-1",
       "S3-compatible endpoint (blank for AWS)": "https://minio.acme.test",
       "Dosu's read-only keys (GetObject + ListBucket): access key id": "AKIDREAD",
@@ -228,14 +229,16 @@ describe("sources store setup", () => {
     const asks = vi.mocked(p.text).mock.calls.map(([opts]) => opts);
     expect(asks[0]?.validate?.("ftp://x")).toContain("https://");
     expect(asks[0]?.validate?.("https://ok.test")).toBeUndefined();
-    expect(asks[1]?.validate?.("gs://x")).toContain("s3://");
+    expect(asks[1]?.validate?.("gs://x")).toContain("bucket[/prefix]");
     expect(asks[1]?.validate?.("s3://ok")).toBeUndefined();
+    expect(asks[1]?.validate?.("ok/agents")).toBeUndefined();
   });
 
   it("asks an r2 bucket for its account, not a region", async () => {
     script({
       "Where should the org's sessions go?": "bucket",
-      "Bucket URL": "r2://acme-sessions/agents",
+      "Bucket: which service?": "r2",
+      "Bucket: name": "acme-sessions/agents",
       "Cloudflare account id": " acct ",
     });
     await dosu("setup", ...READ);
@@ -294,7 +297,8 @@ describe("sources store setup", () => {
     script({
       "Where should the org's sessions go?": "server",
       "Server URL": "https://sessions.acme.test",
-      "The bucket the server writes": "s3://acme-sessions/agents",
+      "The bucket the server writes: which service?": "s3",
+      "The bucket the server writes: name": "acme-sessions/agents",
       "AWS region": "us-east-1",
       "S3-compatible endpoint (blank for AWS)": "",
       [keep]: "",

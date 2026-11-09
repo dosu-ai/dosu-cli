@@ -10,7 +10,7 @@ import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { type FakeS3, fakeS3 } from "../shipper/fake-s3.test-utils";
 import * as p from "../tui/prompts";
-import { defaultOwner, normalizeBucketUrl, runBucketWizard } from "./bucket-wizard";
+import { bucketUrlOf, defaultOwner, normalizeBucketUrl, runBucketWizard } from "./bucket-wizard";
 
 vi.mock("node:os", async (importOriginal) => {
   const os = await importOriginal<typeof import("node:os")>();
@@ -116,6 +116,13 @@ describe("helpers", () => {
     expect(normalizeBucketUrl("s3://")).toBeUndefined();
   });
 
+  it("makes a picked service's URL out of a bucket name, dropping that service's own scheme", () => {
+    expect(bucketUrlOf("r2", " acme/sessions/ ")).toBe("r2://acme/sessions");
+    expect(bucketUrlOf("s3", "s3://acme")).toBe("s3://acme");
+    expect(bucketUrlOf("s3", "r2://acme")).toBeUndefined();
+    expect(bucketUrlOf("s3", "")).toBeUndefined();
+  });
+
   it("falls back to 'me' for a user name with nothing usable, or none at all", () => {
     vi.mocked(userInfo).mockReturnValueOnce({ username: "@@@" } as ReturnType<typeof userInfo>);
     expect(defaultOwner()).toBe("me");
@@ -188,7 +195,8 @@ describe("runBucketWizard", () => {
     const s3 = fakeS3("https://acct.r2.cloudflarestorage.com", "acme");
     const w = world(s3);
     script({
-      "Bucket URL": "r2://acme/sessions",
+      "Bucket: which service?": "r2",
+      "Bucket: name": "acme/sessions",
       "Cloudflare account id": "acct",
       "Write keys (this machine): access key id": "AKIDWRITE",
       "Write keys (this machine): secret access key": "writesecret",
@@ -247,7 +255,7 @@ describe("runBucketWizard", () => {
     const w = world(s3);
     const keys = ["AKIDWRONG", "AKIDWRITE"];
     script({
-      "Bucket URL": ["s3://other", "s3://acme"],
+      "Bucket: name": ["other", "acme"],
       "AWS region": ["us-east-1", "us-east-1"],
       "S3-compatible endpoint (blank for AWS)": [ENDPOINT, ENDPOINT],
       "Write keys (this machine): access key id": keys,
@@ -257,8 +265,10 @@ describe("runBucketWizard", () => {
       "Name for this target": "mine",
       "Let Dosu read the bucket and learn from the sessions in it?": false,
     });
+    const nexts = ["bucket", "keys"];
     vi.mocked(p.select).mockImplementation((async (opts: { message: string }) => {
-      const next = ["bucket", "keys"][vi.mocked(p.select).mock.calls.length - 1];
+      if (opts.message === "Bucket: which service?") return "s3";
+      const next = nexts.shift();
       if (next === "keys") s3.deny = false;
       return opts.message === "What now?" ? next : undefined;
     }) as typeof p.select);
@@ -266,7 +276,8 @@ describe("runBucketWizard", () => {
     const result = await runBucketWizard(loadConfig(), {}, {}, w.fetch);
 
     expect(result?.target).toMatchObject({ url: "s3://acme", access_key_id: "AKIDWRITE" });
-    expect(asked().filter((m) => m === "Bucket URL")).toHaveLength(2);
+    expect(asked().filter((m) => m === "Bucket: which service?")).toHaveLength(2);
+    expect(asked().filter((m) => m === "Bucket: name")).toHaveLength(2);
   });
 
   it("returns null when the user cancels after a refusal", async () => {
@@ -340,7 +351,8 @@ describe("runBucketWizard", () => {
     const s3 = fakeS3(ENDPOINT, "acme");
     const w = world(s3);
     script({
-      "Bucket URL": "s3://acme",
+      "Bucket: which service?": "s3",
+      "Bucket: name": "acme",
       "AWS region": "us-east-1",
       "S3-compatible endpoint (blank for AWS)": ENDPOINT,
       "Write keys (this machine): access key id": "AKIDWRITE",
@@ -356,8 +368,10 @@ describe("runBucketWizard", () => {
         .mocked(p.text)
         .mock.calls.map(([opts]) => opts)
         .find((opts) => opts.message === message)?.validate as (v: string) => string | undefined;
-    expect(validator("Bucket URL")("https://acme")).toMatch(/s3:\/\/bucket/);
-    expect(validator("Bucket URL")("r2://acme/x")).toBeUndefined();
+    expect(validator("Bucket: name")("https://acme")).toMatch(/bucket\[\/prefix\]/);
+    expect(validator("Bucket: name")("r2://acme")).toMatch(/bucket\[\/prefix\]/);
+    expect(validator("Bucket: name")("acme/x")).toBeUndefined();
+    expect(validator("Bucket: name")("s3://acme/x")).toBeUndefined();
     expect(validator("Your folder in the bucket (owner)")("a/b")).toMatch(/one path segment/);
     expect(validator("Your folder in the bucket (owner)")("james")).toBeUndefined();
     expect(validator("Name for this target")("-x")).toMatch(/letters/);
