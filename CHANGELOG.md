@@ -1,3 +1,10 @@
+# [0.67.0-sessions.5](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.4...v0.67.0-sessions.5) (2026-11-09)
+
+
+### Features
+
+* org session store (CLI): join from dosu setup, dosu sources store setup|status|join ([#312](https://github.com/dosu-ai/dosu-cli/issues/312)) ([b9fe97a](https://github.com/dosu-ai/dosu-cli/commit/b9fe97a3c1b449fa617f699e344f05afaa3f0db0))
+
 # [0.67.0-sessions.4](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.3...v0.67.0-sessions.4) (2026-11-06)
 
 
