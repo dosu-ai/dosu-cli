@@ -1,3 +1,10 @@
+# [0.67.0-beta.13](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.12...v0.67.0-beta.13) (2026-11-09)
+
+
+### Bug Fixes
+
+* **mcp:** add Dosu to CLAUDE_CONFIG_DIR/.claude.json when Claude Code is relocated (beta) ([#315](https://github.com/dosu-ai/dosu-cli/issues/315)) ([b7e4276](https://github.com/dosu-ai/dosu-cli/commit/b7e4276195b9bd8c2cb1aa6944b475b93eb5989f))
+
 # [0.67.0-beta.12](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.11...v0.67.0-beta.12) (2026-11-06)
 
 
