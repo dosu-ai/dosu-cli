@@ -5,9 +5,9 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { saveConfig } from "../config/config";
+import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
-import type { SessionStore } from "../sources/api";
+import { type SessionStore, storeApi } from "../sources/api";
 import { joinOrgStore } from "../sources/store";
 import * as p from "../tui/prompts";
 import { sourcesCommand } from "./sources";
@@ -325,6 +325,22 @@ describe("sources store setup", () => {
     );
     dosuAnswers(() => json({ detail: "bucket refused" }, 422));
     await expect(dosu("setup", "--hosted")).rejects.toThrow("bucket refused");
+  });
+});
+
+describe("storeApi", () => {
+  it("enrolls with the owner only when one is named", async () => {
+    const api = storeApi(loadConfig());
+    await api?.enroll("james");
+    await api?.enroll();
+    expect(calls()).toEqual([
+      {
+        method: "POST",
+        path: "/v1/memory/store/enroll",
+        body: { deployment_id: "dep1", owner: "james" },
+      },
+      { method: "POST", path: "/v1/memory/store/enroll", body: { deployment_id: "dep1" } },
+    ]);
   });
 });
 
