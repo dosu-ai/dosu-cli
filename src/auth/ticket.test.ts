@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const { mockGetWebAppURL, mockGetBackendURL } = vi.hoisted(() => ({
   mockGetWebAppURL: vi.fn(() => "https://app.dosu.dev"),
@@ -48,6 +56,15 @@ function filesUnder(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name));
+}
+
+/** Give one test an empty config dir of its own, so it sees only the files it creates. */
+function useFreshConfigDir(): void {
+  const previous = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosu-ticket-test-"));
+  onTestFinished(() => {
+    process.env.XDG_CONFIG_HOME = previous;
+  });
 }
 
 describe("buildTicketAuthURL", () => {
@@ -324,5 +341,33 @@ describe("exchangeTicket", () => {
 
     expect(await exchangeTicket("abandoned")).toEqual({ status: "expired" });
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "null",
+    "42",
+  ])("treats a corrupted verifier file (%s) as no login and clears it later", async (content) => {
+    useFreshConfigDir();
+    await mintAs("corrupted");
+    const [saved] = filesUnder(getConfigDir());
+    writeFileSync(saved as string, content);
+
+    expect(await exchangeTicket("corrupted")).toEqual({ status: "expired" });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    await mintAs("next");
+    expect(existsSync(saved as string)).toBe(false);
+  });
+
+  it("leaves another process's half-written verifier alone", async () => {
+    useFreshConfigDir();
+    await mintAs("first");
+    const [saved] = filesUnder(getConfigDir());
+    const inFlight = `${saved}.99999.tmp`;
+    writeFileSync(inFlight, "{");
+
+    await mintAs("second");
+
+    expect(existsSync(inFlight)).toBe(true);
   });
 });
