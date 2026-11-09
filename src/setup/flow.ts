@@ -298,11 +298,13 @@ export async function stepChooseSessionStorage(
           ? `Sessions are redacted here and written to your bucket ${current.url} (owner ${current.owner})${
               current.source_id ? ", which Dosu reads" : ""
             }. ${change}`
-          : current.hosted
-            ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${change}`
-            : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
-                current.source_id ? ", whose bucket Dosu reads" : ""
-              }. ${change}`,
+          : current.store
+            ? `Sessions ship to the org's session store at ${current.url} (owner ${current.owner}). ${change}`
+            : current.hosted
+              ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${change}`
+              : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
+                  current.source_id ? ", whose bucket Dosu reads" : ""
+                }. ${change}`,
       ),
     );
     if (isBucketTarget(current)) return "bucket";
@@ -499,7 +501,11 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
           isBucketTarget(server)
             ? `Sessions are redacted on this machine and written to your bucket ${server.url}`
             : `Sessions are uploaded to ${
-                server.hosted ? "Dosu's sessiondb" : `your sessiondb server ${server.url}`
+                server.store
+                  ? `the org's session store at ${server.url}`
+                  : server.hosted
+                    ? "Dosu's sessiondb"
+                    : `your sessiondb server ${server.url}`
               }, which redacts secrets before anything is stored`
         }. ${
           incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"

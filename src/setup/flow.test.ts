@@ -2940,6 +2940,20 @@ describe("stepOfferInitialSync", () => {
     expect(said).toContain("Sessions are uploaded to Dosu's sessiondb, which redacts secrets");
   });
 
+  it("names the org's store for a target enrolled in it", async () => {
+    mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(1));
+    vi.mocked(p.confirm).mockResolvedValue(false);
+
+    await stepOfferInitialSync({
+      ...makeCfg(),
+      targets: [{ ...SERVER, hosted: true, store: true }],
+      default_target: "team",
+    });
+
+    const said = vi.mocked(p.log.message).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain(`Sessions are uploaded to the org's session store at ${SERVER.url}`);
+  });
+
   it("offers no incognito command that is not installed", async () => {
     mockRunKnowledgeSync.mockResolvedValue(backlogOutcome(3));
     vi.mocked(p.confirm).mockResolvedValue(false);
@@ -3579,6 +3593,17 @@ describe("stepChooseSessionStorage", () => {
     const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
     expect(said).toContain("Dosu's sessiondb");
     expect(said).toContain("dosu setup --storage");
+  });
+
+  it("names an org store target by its server, even when Dosu minted its token", async () => {
+    const org = { ...hosted, name: "org", url: "https://sessions.acme.test", store: true };
+    const cfg = { ...makeCfg(), targets: [org], default_target: "org" };
+    saveConfig(cfg);
+
+    await stepChooseSessionStorage(cfg);
+    const said = vi.mocked(p.log.success).mock.calls.join(" ").replace(/\s+/g, " ");
+    expect(said).toContain("the org's session store at https://sessions.acme.test (owner u-42)");
+    expect(said).not.toContain("Dosu's sessiondb");
   });
 
   it("runs the server wizard when the user has a URL and token", async () => {

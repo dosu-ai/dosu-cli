@@ -93,7 +93,8 @@ backend has it configured, so nothing changes for hosted users.
 - `memory.session_store`: `org_id` (unique), `kind`, location columns as on `session_source`,
   `encrypted_read_credentials`, `encrypted_token_secret` (nullable), audit columns.
 - `memory.session_source.store_id` (nullable): which store a source was enrolled from, so
-  re-keying the store re-keys its sources, and removing a member removes their source.
+  re-keying the store re-keys its sources. (Removing a member does not yet remove their source:
+  it stays enabled and holds its folder until it is disabled.)
 - Endpoints: `GET /store`, `PUT /store` (org admins only), `POST /store/enroll`.
 - Owner names are unique per store: a second member claiming an owner already enrolled is
   refused. For minted tokens the owner is fixed by Dosu. For pasted server tokens and bucket
