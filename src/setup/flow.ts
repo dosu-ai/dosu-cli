@@ -27,10 +27,11 @@ import { allSetupProviders, type SetupProvider } from "../mcp/providers";
 import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
-import { sourcesApi } from "../sources/api";
+import { type SessionStore, type StoreApi, sourcesApi, storeApi } from "../sources/api";
 import { runBucketWizard } from "../sources/bucket-wizard";
 import { HostedUnavailable, setupHostedTarget } from "../sources/hosted";
 import { runServerWizard } from "../sources/server-wizard";
+import { describeStore, joinOrgStore, orgStore } from "../sources/store";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
@@ -297,11 +298,13 @@ export async function stepChooseSessionStorage(
           ? `Sessions are redacted here and written to your bucket ${current.url} (owner ${current.owner})${
               current.source_id ? ", which Dosu reads" : ""
             }. ${change}`
-          : current.hosted
-            ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${change}`
-            : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
-                current.source_id ? ", whose bucket Dosu reads" : ""
-              }. ${change}`,
+          : current.store
+            ? `Sessions ship to the org's session store at ${current.url} (owner ${current.owner}). ${change}`
+            : current.hosted
+              ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${change}`
+              : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
+                  current.source_id ? ", whose bucket Dosu reads" : ""
+                }. ${change}`,
       ),
     );
     if (isBucketTarget(current)) return "bucket";
@@ -313,6 +316,9 @@ export async function stepChooseSessionStorage(
       "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed. A session is redacted (by a sessiondb server, or on this machine) and stored in a bucket; Dosu reads the bucket and keeps only what it learns.",
     ),
   );
+  const stores = storeApi(cfg);
+  const store = await orgStore(stores);
+  if (store && stores) return joinStoreStep(cfg, stores, store);
   const api = sourcesApi(cfg);
   const choice = await p.select({
     message: "Where should finished sessions go?",
@@ -418,6 +424,40 @@ export async function stepChooseSessionStorage(
   }
 }
 
+/** The org's admin set where its sessions go: enroll in it rather than ask. A personal target
+ * (`dosu sources setup`) is still possible afterwards; setup just does not lead with it. */
+async function joinStoreStep(
+  cfg: Config,
+  api: StoreApi,
+  store: SessionStore,
+): Promise<"hosted" | "server" | "bucket" | "none" | null> {
+  p.log.info(wrapLog(`Your org keeps its sessions in ${describeStore(store)}.`));
+  const s = p.spinner();
+  if (store.issues_tokens) s.start("Enrolling you in the org's session store...");
+  try {
+    const joined = await joinOrgStore(cfg, api, store);
+    if (!joined) {
+      p.log.info(
+        wrapLog(`Nothing ships until you join. ${info("dosu sources store join")} tries again.`),
+      );
+      return null;
+    }
+    const done = `Sessions ship to ${describeStore(store)} as ${joined.target.owner}`;
+    if (store.issues_tokens) s.stop(done);
+    else p.log.success(wrapLog(done));
+    return store.kind;
+  } catch (err) {
+    if (!(err instanceof CliUsageError)) throw err;
+    if (store.issues_tokens) s.stop("Could not join the org's session store", 1);
+    p.log.warn(
+      wrapLog(
+        `${err.message}\n${info("dosu sources store join")} tries again; nothing ships until then.`,
+      ),
+    );
+    return "none";
+  }
+}
+
 /** Offer to ship the last 30 days of sessions after install. Shipping is on by default, so the
  * choice is between backfilling now and starting from here: declining settles the backlog as
  * skipped by the user, or the first session-end hook would ship it anyway. The backlog is only
@@ -461,7 +501,11 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
           isBucketTarget(server)
             ? `Sessions are redacted on this machine and written to your bucket ${server.url}`
             : `Sessions are uploaded to ${
-                server.hosted ? "Dosu's sessiondb" : `your sessiondb server ${server.url}`
+                server.store
+                  ? `the org's session store at ${server.url}`
+                  : server.hosted
+                    ? "Dosu's sessiondb"
+                    : `your sessiondb server ${server.url}`
               }, which redacts secrets before anything is stored`
         }. ${
           incognito ? `Run ${incognito} in a session to keep it out, or run` : "Run"

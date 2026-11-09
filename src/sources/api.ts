@@ -106,7 +106,8 @@ export class SourcesApiError extends Error {
  * holds the sync lock, so a backend that never answers must not hold it with them. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
-type Call = <T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown) => Promise<T>;
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Call = <T>(method: Method, path: string, body?: unknown) => Promise<T>;
 
 interface Caller {
   deploymentId: string;
@@ -116,7 +117,7 @@ interface Caller {
 
 /** A caller for one `/v1/memory/<resource>` collection with this install's login, or undefined
  * when it cannot call Dosu: OSS mode, no API key or deployment, or no absolute backend URL. */
-function backendCaller(cfg: Config, resource: "sources" | "imports"): Caller | undefined {
+function backendCaller(cfg: Config, resource: "sources" | "imports" | "store"): Caller | undefined {
   const account = cfg.active_account?.target;
   const backendUrl = getBackendURL().replace(/\/$/, "");
   if (
@@ -130,11 +131,7 @@ function backendCaller(cfg: Config, resource: "sources" | "imports"): Caller | u
   const base = `${backendUrl}/v1/memory/${resource}`;
   const apiKey = account.api_key;
 
-  const call: Call = async <T>(
-    method: "GET" | "POST" | "DELETE",
-    path: string,
-    body?: unknown,
-  ): Promise<T> => {
+  const call: Call = async <T>(method: Method, path: string, body?: unknown): Promise<T> => {
     const response = await fetch(`${base}${path}`, {
       method,
       headers: {
@@ -173,6 +170,121 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
     sync: (id) => call("POST", `/${encodeURIComponent(id)}/sync`),
     disconnect: (id) => call("DELETE", `/${encodeURIComponent(id)}`),
   };
+}
+
+// --- the org's session store ---------------------------------------------------
+// `/v1/memory/store`: where the org keeps its members' sessions, set once by an org admin with
+// Dosu's read key to it. A member enrolls for their own folder and never holds that key.
+
+/** `hosted`: Dosu's sessiondb. `server`: the org's own sessiondb server. `bucket`: members write
+ * the bucket directly, redacting on their machine. */
+export type StoreKind = "hosted" | "server" | "bucket";
+
+interface StoreMember {
+  user_id: string;
+  owner: string;
+  source_id: string;
+  enabled: boolean;
+  last_synced_at: string | null;
+  last_error: string | null;
+}
+
+/** The org's store as a member sees it: where, and what enrolling will ask for. Never a key. */
+export interface SessionStore {
+  kind: StoreKind;
+  /** False: the org set none and gets Dosu's hosted sessiondb. */
+  configured: boolean;
+  server_url: string | null;
+  /** The bucket sessions land in, `s3://bucket/prefix`. */
+  url: string | null;
+  bucket_kind: SourceKind | null;
+  bucket: string | null;
+  prefix: string;
+  region: string | null;
+  account_id: string | null;
+  endpoint: string | null;
+  /** Dosu mints each member's token, so enrolling asks for nothing. */
+  issues_tokens: boolean;
+  updated_at: string | null;
+  /** The caller's own enrollment. */
+  owner: string | null;
+  source_id: string | null;
+  /** Who has enrolled; only for org admins. */
+  members: StoreMember[] | null;
+}
+
+export interface SetStoreRequest {
+  kind: StoreKind;
+  server_url?: string;
+  bucket_kind?: SourceKind;
+  bucket?: string;
+  prefix?: string;
+  region?: string;
+  account_id?: string;
+  endpoint?: string;
+  /** Dosu's read-only key to the bucket. */
+  access_key_id?: string;
+  secret_access_key?: string;
+  session_token?: string;
+  /** The server's `SESSIONDB_TOKEN_SECRET`, so Dosu mints member tokens. Omitted, a server
+   * store keeps the one it has for the same server URL. */
+  token_secret?: string;
+  /** Forget the token secret: members' tokens are the admin's to issue again. */
+  clear_token_secret?: boolean;
+}
+
+/** What enrolling gives this member: where to ship or write, a token when Dosu minted one, and
+ * the source Dosu reads their folder through. */
+export interface Enrollment {
+  kind: StoreKind;
+  owner: string;
+  server_url: string | null;
+  token: string | null;
+  expires_at: string | null;
+  url: string | null;
+  bucket_kind: SourceKind | null;
+  bucket: string | null;
+  prefix: string;
+  region: string | null;
+  account_id: string | null;
+  endpoint: string | null;
+  source: SourceStatus;
+}
+
+export interface StoreApi {
+  deploymentId: string;
+  backendUrl: string;
+  /** 404 when the org has none and this Dosu hosts none, or on a Dosu without stores. */
+  get(): Promise<SessionStore>;
+  /** Org admins only (403 otherwise). */
+  set(body: SetStoreRequest): Promise<SessionStore>;
+  /** Idempotent; another `owner` moves this member to that folder. */
+  enroll(owner?: string): Promise<Enrollment>;
+}
+
+/** The store client for this install's login, under the same conditions as `sourcesApi`. */
+export function storeApi(cfg: Config): StoreApi | undefined {
+  const caller = backendCaller(cfg, "store");
+  if (!caller) return undefined;
+  const { deploymentId, backendUrl, call } = caller;
+  return {
+    deploymentId,
+    backendUrl,
+    get: () => call("GET", `?deployment_id=${encodeURIComponent(deploymentId)}`),
+    set: (body) => call("PUT", "", { deployment_id: deploymentId, ...body }),
+    enroll: (owner) =>
+      call("POST", "/enroll", { deployment_id: deploymentId, ...(owner ? { owner } : {}) }),
+  };
+}
+
+export function requireStoreApi(cfg: Config): StoreApi {
+  const api = storeApi(cfg);
+  if (!api) {
+    throw new CliUsageError(
+      "not logged in to Dosu: run 'dosu setup' (the org's session store is kept by Dosu)",
+    );
+  }
+  return api;
 }
 
 // --- imports -----------------------------------------------------------------

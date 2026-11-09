@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { saveConfig } from "../config/config";
+import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { contextHookOutput } from "../memory/context-hook";
 import { makeOpencodeDb, opencodeDocument } from "../sessions/opencode.test-utils";
@@ -999,6 +999,44 @@ describe("knowledge sync to Dosu's hosted sessiondb", () => {
 
     const [upload] = fetchImpl.mock.calls.filter(([url]) => url === `${SERVER.url}/v1/sessions`);
     expect(new Headers(upload?.[1]?.headers).get("authorization")).toBe(`Bearer ${SERVER.token}`);
+  });
+
+  it("renews a token the org store minted by enrolling again", async () => {
+    saveConfig({
+      ...loadConfig(),
+      targets: [{ ...SERVER, hosted: true, store: true }],
+      default_target: "team",
+    });
+    const ships = fetchImpl.getMockImplementation();
+    fetchImpl.mockImplementation(async (url, init) => {
+      if (url === "https://api.dosu.test/v1/memory/store/enroll") {
+        return new Response(
+          JSON.stringify({
+            owner: SERVER.owner,
+            server_url: SERVER.url,
+            token: "sdb_renewed",
+            expires_at: new Date(Date.now() + 90 * 86_400_000).toISOString(),
+            source: { id: "src-1" },
+          }),
+        );
+      }
+      if (url === `${SERVER.url}/v1/me`) {
+        return new Response(JSON.stringify({ owner: SERVER.owner, storage: { url: "s3://b" } }));
+      }
+      return (ships as NonNullable<typeof ships>)(url, init);
+    });
+    const alpha = gitRepo("alpha", "git@github.com:acme/alpha.git");
+    claudeSession("aaaa", exchange(1, alpha), 30);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await dosu("sync");
+
+    expect(fetchImpl.mock.calls.some(([url]) => url.includes("/v1/memory/sources/hosted"))).toBe(
+      false,
+    );
+    const [upload] = fetchImpl.mock.calls.filter(([url]) => url === `${SERVER.url}/v1/sessions`);
+    expect(new Headers(upload?.[1]?.headers).get("authorization")).toBe("Bearer sdb_renewed");
+    expect(loadConfig().targets?.[0]).toMatchObject({ token: "sdb_renewed", store: true });
   });
 });
 
