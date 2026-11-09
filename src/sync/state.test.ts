@@ -106,6 +106,7 @@ describe("loadSyncState / saveSyncState", () => {
       last_attempt_at: "2026-08-25T11:05:00Z",
       consecutive_failures: 2,
       total_shipped: 12,
+      lookback_since: "1970-01-01T00:00:00.000Z",
       run: { pid: 4321, started_at: "2026-08-25T11:03:00Z", baseline_shipped: 7 },
       project_filter: ["/Users/me/proj"],
       paused: true,
@@ -185,6 +186,7 @@ describe("loadSyncState / saveSyncState", () => {
       schema_version: 3,
       consecutive_failures: -3,
       total_shipped: "many",
+      lookback_since: "a while ago",
       sessions: {
         "claude/good": { ...entry(), project: 42, http_status: "x", seeded: "yes" },
         "claude/bad-outcome": entry({ outcome: "studied" as never }),
@@ -195,6 +197,7 @@ describe("loadSyncState / saveSyncState", () => {
     const state = loadSyncState(configDir);
     expect(state.consecutive_failures).toBe(0);
     expect(state.total_shipped).toBeUndefined();
+    expect(state.lookback_since).toBeUndefined();
     expect(state.sessions).toEqual({ "claude/good": entry() });
   });
 
@@ -742,6 +745,7 @@ describe("resetSyncState", () => {
         last_attempt_at: "2026-09-02T23:05:00.000Z",
         consecutive_failures: 3,
         total_shipped: 40,
+        lookback_since: "2026-01-01T00:00:00.000Z",
         run: { pid: 1, started_at: "2026-09-02T23:00:00.000Z", baseline_shipped: 39 },
         repo_filter: ["github.com/me/proj"],
         project_filter: ["/Users/me/proj"],
@@ -760,6 +764,8 @@ describe("resetSyncState", () => {
     expect(state.last_attempt_at).toBeUndefined();
     expect(state.consecutive_failures).toBe(0);
     expect(state.total_shipped).toBeUndefined();
+    // It only says how far back the ledger reaches, and the ledger is gone.
+    expect(state.lookback_since).toBeUndefined();
     expect(state.run).toBeUndefined();
     expect(backoffUntil(state)).toBeNull();
     expect(state.repo_filter).toEqual(["github.com/me/proj"]);
