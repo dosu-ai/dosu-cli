@@ -34,7 +34,7 @@ import { describeServerError, isUnauthorized, isUnreachable, serverClient } from
 import { normalizeServerUrl } from "./server-wizard";
 
 /** The target's name in config when none is given: `dosu sync --target org`. */
-export const STORE_TARGET_NAME = "org";
+const STORE_TARGET_NAME = "org";
 
 const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
