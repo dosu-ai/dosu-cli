@@ -10,7 +10,14 @@ import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import { type FakeS3, fakeS3 } from "../shipper/fake-s3.test-utils";
 import * as p from "../tui/prompts";
-import { bucketUrlOf, defaultOwner, normalizeBucketUrl, runBucketWizard } from "./bucket-wizard";
+import {
+  askBucketUrl,
+  bucketUrlOf,
+  defaultOwner,
+  normalizeBucketUrl,
+  runBucketWizard,
+} from "./bucket-wizard";
+import type { Asker } from "./prompts";
 
 vi.mock("node:os", async (importOriginal) => {
   const os = await importOriginal<typeof import("node:os")>();
@@ -121,6 +128,18 @@ describe("helpers", () => {
     expect(bucketUrlOf("s3", "s3://acme")).toBe("s3://acme");
     expect(bucketUrlOf("s3", "r2://acme")).toBeUndefined();
     expect(bucketUrlOf("s3", "")).toBeUndefined();
+  });
+
+  it("refuses a bucket name the prompt's validation did not check", async () => {
+    // A given answer skips the prompt, and with it the validation.
+    const ask = {
+      select: async () => "s3",
+      text: async () => "not a bucket",
+      confirm: async () => true,
+    } as unknown as Asker;
+    await expect(askBucketUrl(ask, undefined)).rejects.toThrow(
+      new CliUsageError("not a bucket name: not a bucket"),
+    );
   });
 
   it("falls back to 'me' for a user name with nothing usable, or none at all", () => {
