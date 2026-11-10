@@ -120,7 +120,7 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu docs` | Manage documents (list, create, update, import, publish) |
 | `dosu threads` | List and manage conversation threads |
 | `dosu review` | Document review workflow for the selected Library, plus `review notifications` to route a Library's or Agent's reviews to a Slack channel |
-| `dosu sources` | Manage connected data sources (list, connect, create, sync, update) and the org's session store (`store setup`, `store status`, `store join`) |
+| `dosu sources` | Manage connected data sources (list, connect, create, sync, update) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |
 | `dosu members` | Invite organization members |
@@ -130,8 +130,6 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu skill` | Install / update / remove the bundled Dosu agent skills |
 
 Run `dosu <command> --help` for subcommands and flags.
-
-An org admin can run `dosu sources store setup` to choose where the org's sessions go: Dosu-hosted storage, the org's sessiondb server, or an S3 / R2 bucket. When choosing session storage during `dosu setup`, members join the configured org store instead of choosing storage themselves. Hosted stores and servers configured to issue tokens enroll members without questions; other servers require an admin-issued token, and bucket stores ask for a folder and write credentials. Members never need Dosu's read key. Use `dosu sources store join` to enroll directly and `dosu sources store status` to see the store and your folder; org admins also see the enrolled members.
 
 ### Agent skills
 
@@ -170,7 +168,7 @@ For coding agents and CI, `setup` has a non-interactive mode:
 dosu setup --agent --tool claude
 ```
 
-Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt.
+Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt. Run `--check <ticket>` in the same CLI environment and with the same configuration directory as `--request`; a ticket requested elsewhere is treated as expired.
 
 ### Studying sessions: status line and incognito
 
