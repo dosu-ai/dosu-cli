@@ -16,6 +16,7 @@ import * as p from "../tui/prompts";
 import { sourcesApi } from "./api";
 import { bucketOfStorage, type ConnectResult, connectBucketToDosu, preflight } from "./connect";
 import {
+  type Asker,
   asker,
   askKeyPair,
   envCredentials,
@@ -57,6 +58,46 @@ const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export function normalizeBucketUrl(value: string): string | undefined {
   const url = value.trim().replace(/\/+$/, "");
   return BUCKET_URL_RE.test(url) ? url : undefined;
+}
+
+const BUCKET_NAME_RE = /^[^/\s:]+(?:\/\S*)?$/;
+
+/** `bucket[/prefix]` typed after picking `scheme`, as that scheme's URL; the scheme's own
+ * `s3://`/`r2://` pasted in front is dropped. Undefined when it is not a bucket name. */
+export function bucketUrlOf(scheme: "s3" | "r2", value: string): string | undefined {
+  const name = value.trim().replace(new RegExp(`^${scheme}://`), "");
+  return BUCKET_NAME_RE.test(name) ? normalizeBucketUrl(`${scheme}://${name}`) : undefined;
+}
+
+/** The bucket as a URL: which service it is on, then its name and prefix. A URL given up front
+ * (a flag, or the org's store) is returned as is. */
+export async function askBucketUrl(
+  ask: Asker,
+  given: string | undefined,
+  what = "Bucket",
+): Promise<string> {
+  if (given !== undefined) return given;
+  const scheme = await ask.select(
+    {
+      message: `${what}: which service?`,
+      options: [
+        { value: "s3" as const, label: "Amazon S3", hint: "or S3-compatible: MinIO, RustFS…" },
+        { value: "r2" as const, label: "Cloudflare R2" },
+      ],
+    },
+    undefined,
+  );
+  const name = await ask.text(
+    {
+      message: `${what}: name`,
+      placeholder: "my-bucket, or my-bucket/sessions for a prefix",
+      validate: (value) => (bucketUrlOf(scheme, value) ? undefined : "bucket[/prefix]"),
+    },
+    undefined,
+  );
+  const url = bucketUrlOf(scheme, name);
+  if (!url) throw new CliUsageError(`not a bucket name: ${name}`);
+  return url;
 }
 
 /** This machine's user name as an owner: one path segment of letters, digits, `.`, `_`, `-`. */
@@ -140,17 +181,7 @@ async function wizard(
   let write: KeyPair | undefined = input.write;
   let owner: string | undefined;
   for (;;) {
-    url ??= normalizeBucketUrl(
-      await ask.text(
-        {
-          message: "Bucket URL",
-          placeholder: "s3://my-bucket/sessions or r2://my-bucket/sessions",
-          validate: (value) =>
-            normalizeBucketUrl(value) ? undefined : "s3://bucket[/prefix] or r2://bucket[/prefix]",
-        },
-        input.bucket,
-      ),
-    );
+    url ??= normalizeBucketUrl(await askBucketUrl(ask, input.bucket));
     if (!url) throw new CliUsageError(`not a bucket URL: ${input.bucket}`);
     const r2 = url.startsWith("r2://");
 

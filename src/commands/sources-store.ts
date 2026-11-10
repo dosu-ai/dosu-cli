@@ -14,7 +14,7 @@ import {
   SourcesApiError,
   type StoreKind,
 } from "../sources/api";
-import { normalizeBucketUrl } from "../sources/bucket-wizard";
+import { askBucketUrl, normalizeBucketUrl } from "../sources/bucket-wizard";
 import { bucketOfStorage } from "../sources/connect";
 import { asker, askKeyPair, envCredentials, type KeyPair, required } from "../sources/prompts";
 import { normalizeServerUrl } from "../sources/server-wizard";
@@ -113,14 +113,10 @@ async function storeRequest(
     serverUrl = normalizeServerUrl(given);
     if (!serverUrl) throw new CliUsageError(`not a server URL: ${given}`);
   }
-  const givenBucket = await ask.text(
-    {
-      message: kind === "server" ? "The bucket the server writes" : "Bucket URL",
-      placeholder: "s3://my-bucket/sessions or r2://my-bucket/sessions",
-      validate: (value) =>
-        normalizeBucketUrl(value) ? undefined : "s3://bucket[/prefix] or r2://bucket[/prefix]",
-    },
+  const givenBucket = await askBucketUrl(
+    ask,
     opts.bucket,
+    kind === "server" ? "The bucket the server writes" : "Bucket",
   );
   const url = normalizeBucketUrl(givenBucket);
   if (!url) throw new CliUsageError(`not a bucket URL: ${givenBucket}`);
