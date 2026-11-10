@@ -122,33 +122,33 @@ export type CliDataSource = {
 }
 
 export type CliDataSourceAzureDevOpsRepository = {
-	created_at: string | null
+	created_at: string
 	default_branch: string | null
-	external_id: string | null
-	id: string | null
+	external_id: string
+	id: string
 	is_disabled: boolean | null
-	name: string | null
-	org_id: string | null
-	organization: string | null
-	project_id: string | null
-	project_name: string | null
-	remote_url: string | null
+	name: string
+	org_id: string
+	organization: string
+	project_id: string
+	project_name: string
+	remote_url: string
 	size: number | null
-	updated_at: string | null
+	updated_at: string
 	user_id: string | null
-	web_url: string | null
+	web_url: string
 }
 
 export type CliDataSourceGithubRepository = {
-	config: unknown | null
-	created_at: string | null
-	description: string | null
+	config: unknown
+	created_at: string
+	description: string
 	discussion_categories: Array<string> | null
 	discussions_enabled: boolean | null
 	fork_parent_slug: string | null
-	git_url: string | null
+	git_url: string
 	installation_id: number | null
-	is_fork: boolean | null
+	is_fork: boolean
 	is_private: boolean | null
 	is_suspended: boolean | null
 	issues_enabled: boolean | null
@@ -156,74 +156,74 @@ export type CliDataSourceGithubRepository = {
 	last_indexed_commit_sha: string | null
 	latest_event_id: number | null
 	metadata: unknown | null
-	name: string | null
+	name: string
 	owner_avatar_url: string | null
 	owner_name: string | null
 	paygated?: boolean
-	repository_id: number | null
-	slug: string | null
+	repository_id: number
+	slug: string
 	stargazer_count: number | null
-	updated_at: string | null
+	updated_at: string
 }
 
 export type CliDataSourceGitlabProject = {
 	archived: boolean | null
 	avatar_url: string | null
-	created_at: string | null
+	created_at: string
 	default_branch: string | null
 	description: string | null
-	external_id: number | null
+	external_id: number
 	forks_count: number | null
 	http_url_to_repo: string | null
-	id: string | null
+	id: string
 	last_activity_at: string | null
-	name: string | null
+	name: string
 	namespace_id: number | null
 	namespace_name: string | null
 	namespace_path: string | null
-	nango_connection_id: string | null
-	org_id: string | null
+	nango_connection_id: string
+	org_id: string
 	owner_id: number | null
 	owner_username: string | null
-	path_with_namespace: string | null
+	path_with_namespace: string
 	paygated?: boolean
 	ssh_url_to_repo: string | null
 	star_count: number | null
-	updated_at: string | null
+	updated_at: string
 	user_id: string | null
 	visibility: string | null
-	web_url: string | null
+	web_url: string
 }
 
 export type CliDataSourceSlackChannel = {
-	archived: boolean | null
-	channel_id: string | null
-	channel_type: 'im' | 'mpim' | 'group' | 'channel' | null
+	archived: boolean
+	channel_id: string
+	channel_type: 'im' | 'mpim' | 'group' | 'channel'
 	description: string | null
 	enterprise_id: string | null
-	id: string | null
+	id: string
 	installation_id: string | null
 	is_private: boolean | null
 	name: string | null
 	org_id: string | null
-	team_id: string | null
+	team_id: string
 	team_name: string | null
 	topic: string | null
 }
 
 export type CliDataSourceTeamsChannel = {
 	conversation_reference: unknown | null
-	created_at: string | null
+	created_at: string
 	description: string | null
-	display_name: string | null
-	external_id: string | null
-	external_team_id: string | null
-	id: string | null
-	membership_type: 'standard' | 'private' | 'shared' | null
-	org_connection_id: string | null
+	display_name: string
+	external_id: string
+	external_team_id: string
+	id: string
+	membership_type: 'standard' | 'private' | 'shared'
+	org_connection_id: string
 	org_id: string | null
 	org_name: string | null
-	updated_at: string | null
+	updated_at: string
 }
 
 export type CliDataSourceWebWebsite = {
@@ -380,6 +380,7 @@ export type CliLibrarySourceMonitor = {
 	monitored_paths: Array<string>
 	no_update_behavior: 'emoji' | 'comment' | 'silent'
 	provider_slug: 'github' | 'gitlab' | 'azure_devops'
+	review_trigger: 'opened_and_merged' | 'merged' | 'every_push'
 	setup_required: boolean
 	source_name: string
 }
@@ -578,22 +579,22 @@ export type CliSlackChannel = {
 }
 
 export type CliSlackChannelRow = {
-	archived?: boolean | null
-	channel_id?: string | null
-	channel_type?: 'im' | 'mpim' | 'group' | 'channel' | null
+	archived?: boolean
+	channel_id?: string
+	channel_type?: 'im' | 'mpim' | 'group' | 'channel'
 	description?: string | null
 	enterprise_id?: string | null
-	id?: string | null
+	id?: string
 	installation_id?: string | null
 	is_private?: boolean | null
 	name?: string | null
 	org_id?: string | null
-	team_id?: string | null
+	team_id?: string
 	team_name?: string | null
 	topic?: string | null
 }
 
-export declare const CLI_CONTRACT_HASH: 'dd33222d64a5'
+export declare const CLI_CONTRACT_HASH: '0e10b97c1d69'
 
 export type AgentsAddAdminsInput = {
 	deployment_id: string
@@ -1100,6 +1101,7 @@ export type LibrariesMonitorsUpdateInput = {
 	enabled?: boolean
 	monitored_paths?: Array<string>
 	no_update_behavior?: 'emoji' | 'comment' | 'silent'
+	review_trigger?: 'opened_and_merged' | 'merged' | 'every_push'
 	space_id: string
 }
 
@@ -1322,9 +1324,11 @@ export type OrganizationGetOrganizationsOutput = Array<{
 	avatar_url: string | null
 	created_at: string
 	customer_id: string | null
+	deactivated_at?: string | null
 	name: string
 	org_id: string
 	pro_trial_ends_at: string | null
+	reactivated_at?: string | null
 	user_id: string
 	user_role: 'OWNER' | 'ADMIN' | 'MEMBER'
 }>
