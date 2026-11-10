@@ -1,3 +1,10 @@
+# [0.67.0-sessions.6](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.5...v0.67.0-sessions.6) (2026-11-10)
+
+
+### Features
+
+* **sources:** pick S3 or R2 before naming the bucket ([#313](https://github.com/dosu-ai/dosu-cli/issues/313)) ([bf0c61c](https://github.com/dosu-ai/dosu-cli/commit/bf0c61c461b2132850d5d5f673e45b88ddf85808))
+
 # [0.67.0-sessions.5](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.4...v0.67.0-sessions.5) (2026-11-09)
 
 
