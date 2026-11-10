@@ -1,3 +1,10 @@
+# [0.69.0](https://github.com/dosu-ai/dosu-cli/compare/v0.68.6...v0.69.0) (2026-11-10)
+
+
+### Features
+
+* **auth:** bind login tickets to this CLI with PKCE and show a login code ([#316](https://github.com/dosu-ai/dosu-cli/issues/316)) ([3815fd0](https://github.com/dosu-ai/dosu-cli/commit/3815fd02b8ec3599d8b3c08764e4b1b6b724b018))
+
 ## [0.68.6](https://github.com/dosu-ai/dosu-cli/compare/v0.68.5...v0.68.6) (2026-11-03)
 
 
