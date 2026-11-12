@@ -1,3 +1,10 @@
+# [0.67.0-sessions.8](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.7...v0.67.0-sessions.8) (2026-11-12)
+
+
+### Bug Fixes
+
+* **setup:** admins on the hosted default choose the store; 'ships nothing' stops shipping ([#321](https://github.com/dosu-ai/dosu-cli/issues/321)) ([627145a](https://github.com/dosu-ai/dosu-cli/commit/627145a79caf07e34edb5055350b9d819d6fe2a1))
+
 # [0.67.0-sessions.7](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.6...v0.67.0-sessions.7) (2026-11-12)
 
 
