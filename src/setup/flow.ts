@@ -292,19 +292,16 @@ export async function stepChooseSessionStorage(
   const current = targets.find((t) => t.name === cfg.default_target) ?? targets[0];
   if (current && !opts.storage) {
     const change = `${info("dosu setup --storage")} changes that.`;
+    const reads = current.source_id ? ", which Dosu reads" : "";
     p.log.success(
       wrapLog(
         isBucketTarget(current)
-          ? `Sessions are redacted here and written to the bucket ${current.url} (owner ${current.owner})${
-              current.source_id ? ", which Dosu reads" : ""
-            }. ${change}`
+          ? `Sessions ship to the bucket ${current.url} as ${current.owner}${reads}. ${change}`
           : current.store
-            ? `Sessions ship to the org's session store at ${current.url} (owner ${current.owner}). ${change}`
+            ? `Sessions ship to the org's session store at ${current.url} as ${current.owner}. ${change}`
             : current.hosted
-              ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${change}`
-              : `Sessions ship through the sessiondb server ${current.url} (owner ${current.owner})${
-                  current.source_id ? ", whose bucket Dosu reads" : ""
-                }. ${change}`,
+              ? `Sessions ship to Dosu's sessiondb. ${change}`
+              : `Sessions ship to the sessiondb server ${current.url} as ${current.owner}${reads}. ${change}`,
       ),
     );
     if (isBucketTarget(current)) return "bucket";
@@ -313,7 +310,7 @@ export async function stepChooseSessionStorage(
   logger.info("setup", "Step: choose session storage");
   p.log.message(
     wrapLog(
-      "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed. Two questions: where your org's sessions live, and whether this machine ships its own there.",
+      "Dosu memory learns from finished agent sessions. Two questions: where your org keeps them, and whether this machine ships its own.",
     ),
   );
   const stores = storeApi(cfg);
@@ -336,7 +333,7 @@ export async function stepChooseSessionStorage(
   if ("cancelled" in decided) {
     p.log.info(
       wrapLog(
-        `The org's session store is not set; nothing ships until it is. ${info("dosu sources setup")} tries again.`,
+        `Nothing ships until the org's session store is set. ${info("dosu sources setup")} tries again.`,
       ),
     );
     return null;
@@ -370,9 +367,7 @@ async function joinStoreStep(
   if (p.isCancel(ship)) return null;
   if (!ship) {
     p.log.info(
-      wrapLog(
-        `This machine ships nothing; its agents still get Dosu's MCP server. ${info("dosu sources store join")} ships from here later.`,
-      ),
+      wrapLog(`This machine ships nothing. ${info("dosu sources setup")} ships from here later.`),
     );
     return "none";
   }
@@ -382,7 +377,7 @@ async function joinStoreStep(
     const joined = await joinOrgStore(cfg, api, store);
     if (!joined) {
       p.log.info(
-        wrapLog(`Nothing ships until you join. ${info("dosu sources store join")} tries again.`),
+        wrapLog(`Nothing ships until you join. ${info("dosu sources setup")} tries again.`),
       );
       return null;
     }
@@ -395,7 +390,7 @@ async function joinStoreStep(
     if (store.issues_tokens) s.stop("Could not join the org's session store", 1);
     p.log.warn(
       wrapLog(
-        `${err.message}\n${info("dosu sources store join")} tries again; nothing ships until then.`,
+        `${err.message}\n${info("dosu sources setup")} tries again; nothing ships until then.`,
       ),
     );
     return "none";

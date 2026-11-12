@@ -37,7 +37,7 @@ export function bucketOfStorage(
 /** What the admin reads before giving Dosu a key: read-only is enough, and why a write key to
  * the same bucket matters. */
 export const READ_KEY_NOTE =
-  "Dosu needs its own READ-ONLY key to the org's bucket (GetObject + ListBucket). Anything written under the prefix reaches the org's memory, so a key that can write there can add to it; Dosu still redacts every session before it is stored.";
+  "Dosu needs its own read-only key to the org's bucket (GetObject + ListBucket).";
 
 /** `POST /detect`'s body for `location`. */
 export function detectBody(location: BucketLocation, read: KeyPair): DetectRequest {

@@ -3456,7 +3456,7 @@ describe("stepChooseSessionStorage", () => {
       expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
       expect(joinOrgStore).not.toHaveBeenCalled();
       expect(logged("info")).toContain("This machine ships nothing");
-      expect(logged("info")).toContain("dosu sources store join");
+      expect(logged("info")).toContain("dosu sources setup");
 
       vi.mocked(decideStore).mockResolvedValueOnce({ store });
       vi.mocked(p.confirm).mockResolvedValueOnce(Symbol("cancel") as never);
@@ -3479,7 +3479,7 @@ describe("stepChooseSessionStorage", () => {
       vi.mocked(decideStore).mockResolvedValueOnce({ store });
       vi.mocked(joinOrgStore).mockResolvedValueOnce(null);
       expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
-      expect(logged("info")).toContain("dosu sources store join");
+      expect(logged("info")).toContain("dosu sources setup");
 
       const hostedStore = { ...store, kind: "hosted", issues_tokens: true } as SessionStore;
       vi.mocked(decideStore).mockResolvedValueOnce({ store: hostedStore });
@@ -3506,7 +3506,7 @@ describe("stepChooseSessionStorage", () => {
     );
     const info = logged("info");
     expect(info).toContain("read as codex");
-    expect(info).toContain("a write key to it can add to that memory");
+    expect(info).toContain("A write key to the bucket can add to the org's memory");
     expect(info).not.toContain("Your org keeps its sessions in");
     expect(confirmed()).toEqual(["Ship this machine's sessions there?"]);
   });
@@ -3523,7 +3523,7 @@ describe("stepChooseSessionStorage", () => {
   it("stops setup when the admin cancels the first question, and carries on past Dosu's refusal", async () => {
     vi.mocked(decideStore).mockResolvedValueOnce({ cancelled: true });
     expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
-    expect(logged("info")).toContain("The org's session store is not set");
+    expect(logged("info")).toContain("Nothing ships until the org's session store is set");
 
     vi.mocked(decideStore).mockRejectedValueOnce(new CliUsageError("Could not ask Dosu: HTTP 503"));
     expect(await stepChooseSessionStorage(makeCfg())).toBe("none");
@@ -3552,7 +3552,7 @@ describe("stepChooseSessionStorage", () => {
 
     await stepChooseSessionStorage(cfg);
     expect(logged("success")).toContain(
-      "the org's session store at https://sessions.acme.test (owner u-42)",
+      "the org's session store at https://sessions.acme.test as u-42",
     );
     expect(logged("success")).not.toContain("Dosu's sessiondb");
   });
@@ -3575,9 +3575,7 @@ describe("stepChooseSessionStorage", () => {
       expect(logged("success")).toContain(target.url);
       expect(logged("success").includes("Dosu reads")).toBe("source_id" in target);
     }
-    expect(logged("success")).toContain(
-      "redacted here and written to the bucket s3://acme/sessions",
-    );
+    expect(logged("success")).toContain("Sessions ship to the bucket s3://acme/sessions as james");
 
     const cfg = { ...makeCfg(), targets: [server], default_target: "team" };
     vi.mocked(decideStore).mockResolvedValueOnce({ store });

@@ -97,7 +97,7 @@ async function runStoreSetup(opts: StoreSetupOptions): Promise<void> {
 function setupCommand(): Command {
   return new Command("setup")
     .description(
-      "Set where the org's sessions live (org admins): Dosu's sessiondb (--hosted), the org's sessiondb server (--server, with the bucket it writes), or the org's bucket (--bucket), which members write directly and other tools (Datadog, CI, scripts) can drop raw logs in. Dosu gets a READ-ONLY key to the bucket and says what is there before the store is set (--agent names the raw files' format instead of detecting it per file); members never see that key. Anything written into the bucket reaches the org's memory, so a write key to it can add to that memory. Every member's 'dosu setup' then asks whether their machine ships there",
+      "Org admins: set where the org's sessions live: Dosu's sessiondb (--hosted), the org's sessiondb server (--server with --bucket) or the org's bucket (--bucket). Dosu checks a bucket with a read-only key before setting it",
     )
     .option("--hosted", "Dosu's sessiondb")
     .option("--server <url>", "The org's sessiondb server, https://sessions.example.com")

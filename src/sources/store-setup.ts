@@ -388,17 +388,17 @@ export function storeNotes(store: SessionStore): string[] {
   if (store.kind === "bucket") {
     notes.push(
       store.raw_source_id
-        ? `Dosu reads members' folders and the raw logs other tools drop beside them (Datadog, CI, scripts), ${
+        ? `Dosu reads members' folders and other tools' raw logs (${
             store.raw_agent ? `read as ${store.raw_agent}` : "each file's format detected"
-          }.`
+          }).`
         : "Dosu reads members' folders.",
-      "Anything written into the bucket reaches the org's memory, so a write key to it can add to that memory; Dosu still redacts every session.",
-      `Give each member a write key scoped to ${store.url}/owners/<their folder>/ by bucket policy; one shared key lets members read each other's folders.`,
+      "A write key to the bucket can add to the org's memory; Dosu still redacts every session.",
+      `Scope each member's write key to ${store.url}/owners/<their folder>/.`,
     );
   } else if (store.kind === "server" && !store.issues_tokens) {
-    notes.push("Give each member a token of their own from the server's SESSIONDB_TOKENS.");
+    notes.push("Give each member their own token from the server's SESSIONDB_TOKENS.");
   }
-  notes.push("Members run 'dosu setup' (or 'dosu sources store join') to enroll.");
+  notes.push("Members run 'dosu setup' to join.");
   return notes;
 }
 
@@ -406,7 +406,7 @@ export function storeNotes(store: SessionStore): string[] {
 function noStoreMessage(cfg: Config): string {
   const org = cfg.active_account?.target?.org_id;
   const page = org ? `${getWebAppURL()}/${org}/sources` : getWebAppURL();
-  return `Your org has no session store yet, so there is nowhere for your agents' sessions to go and Dosu cannot learn from them. Only an org admin chooses where the org's sessions live: by running ${info("dosu sources store setup")}, or under Session store on the Sources page:\n  ${page}\nThen run ${info("dosu setup")} again.`;
+  return `Your org has no session store yet, so your sessions have nowhere to go. An org admin sets one with ${info("dosu sources store setup")} or on the Sources page:\n  ${page}\nThen run ${info("dosu setup")} again.`;
 }
 
 /** Where this machine's sessions would go, per the rules at the top: the store (and whether this

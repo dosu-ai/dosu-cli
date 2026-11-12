@@ -254,7 +254,7 @@ async function runSetup(opts: SetupOptions): Promise<void> {
   // Step 1: where the org's sessions live; only an admin with no store yet is asked.
   const decided = await decideStore(cfg, stores, sourcesApi(cfg), { ...choice, yes }, {}, say);
   if ("cancelled" in decided) {
-    console.log("Cancelled; the org's session store is unchanged and nothing was saved.");
+    console.log("Cancelled; nothing saved.");
     return;
   }
   if ("noStore" in decided) {
@@ -276,9 +276,7 @@ async function runSetup(opts: SetupOptions): Promise<void> {
       return;
     }
     console.log(
-      `${pc.green("✓")} This machine ships nothing; Dosu reads what other machines${
-        store.kind === "bucket" ? " and tools" : ""
-      } write to ${describeStore(store)}. 'dosu sources setup' again ships from here.`,
+      `${pc.green("✓")} This machine ships nothing. 'dosu sources setup' ships from here later.`,
     );
     return;
   }
@@ -328,7 +326,7 @@ function setupCommand(): Command {
   return new Command("setup")
     .alias("add")
     .description(
-      "Two questions. Where do the org's sessions live? That is the org's session store, set by an org admin: an org that has one (or uses Dosu's sessiondb by default) skips the question, and an admin with none answers it for the whole org: Dosu's sessiondb (--hosted), the org's sessiondb server (--server, with the --bucket it writes), or the org's bucket (--bucket: Dosu gets a READ-ONLY key and says what is there first; --agent names the format of the raw files other tools drop in it). Then: does this machine ship its own sessions there (--ship, the default, or --no-ship)? For a bucket, shipping keeps a write key to your own folder on this machine only. Anything written into the org's bucket reaches the org's memory, so a write key to it can add to that memory; Dosu still redacts every session. Every answer can be a flag; --yes never prompts",
+      "Ship this machine's sessions to the org's session store. If the org has none, an org admin picks it first: Dosu's sessiondb (--hosted), the org's sessiondb server (--server) or the org's bucket (--bucket). --no-ship ships nothing from here; --yes never prompts",
     )
     .option("--hosted", "Org admins: the org's sessions live in Dosu's sessiondb")
     .option(

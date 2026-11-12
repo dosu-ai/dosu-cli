@@ -389,12 +389,12 @@ describe("sources setup: shipping to the org's bucket", () => {
     expect(out.join("\n")).not.toContain("writesecret");
   });
 
-  it("--no-ship says Dosu reads what other machines and tools write there", async () => {
+  it("--no-ship says how to ship from here later", async () => {
     configure([]);
     org({ store: BUCKET_STORE });
     await dosu("setup", "--no-ship");
     expect(out.join("\n")).toContain(
-      "This machine ships nothing; Dosu reads what other machines and tools write to the org's bucket s3://acme-sessions/agents.",
+      "This machine ships nothing. 'dosu sources setup' ships from here later.",
     );
   });
 
@@ -453,7 +453,7 @@ describe("sources setup: no store, a member", () => {
     configure([]);
     org({ admin: false });
     await expect(dosu("setup", "--yes")).rejects.toThrow(
-      /Only an org admin chooses where the org's sessions live: by running .*dosu sources store setup/,
+      /Your org has no session store yet.*An org admin sets one with .*dosu sources store setup/s,
     );
     expect(steps()).toEqual(["GET /v1/memory/store"]);
     expect(loadConfig().targets ?? []).toEqual([]);
@@ -474,7 +474,7 @@ describe("sources setup: interactively", () => {
     configure([]);
     org({ admin: false });
     await dosu("setup");
-    expect(out.join("\n")).toContain("Only an org admin chooses where the org's sessions live");
+    expect(out.join("\n")).toContain("Your org has no session store yet");
     expect(loadConfig().targets ?? []).toEqual([]);
   });
 
@@ -483,9 +483,7 @@ describe("sources setup: interactively", () => {
     org({ store: HOSTED_DEFAULT, admin: true });
     script({ "Where do sessions live?": CANCEL });
     await dosu("setup");
-    expect(out.join("\n")).toContain(
-      "Cancelled; the org's session store is unchanged and nothing was saved.",
-    );
+    expect(out.join("\n")).toContain("Cancelled; nothing saved.");
     expect(steps()).toEqual(["GET /v1/memory/store"]);
   });
 
@@ -517,7 +515,7 @@ describe("sources setup: interactively", () => {
     expect(calls()[2]?.body).toMatchObject({ access_key_id: "AKIDREAD" });
     const text = out.join("\n");
     expect(text).toContain("each file's format detected");
-    expect(text).toContain("Dosu reads what other machines and tools write to");
+    expect(text).toContain("This machine ships nothing.");
   });
 });
 
@@ -567,7 +565,7 @@ describe("sources setup: no store, an org admin", () => {
     expect(text).toContain("s3://acme-sessions/agents: 4 raw files (all read as codex)");
     expect(text).toContain("The org's sessions go to the org's bucket s3://acme-sessions/agents.");
     expect(text).toContain("read as codex");
-    expect(text).toContain("a write key to it can add to that memory");
+    expect(text).toContain("A write key to the bucket can add to the org's memory");
     expect(text).toContain("Sessions ship to the org's bucket s3://acme-sessions/agents as james.");
     expect(loadConfig().targets?.[0]).toMatchObject({ name: "org", access_key_id: "AKIDWRITE" });
   });
