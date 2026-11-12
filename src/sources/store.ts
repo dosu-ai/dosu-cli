@@ -133,6 +133,25 @@ function enrollError(err: unknown): CliUsageError {
   );
 }
 
+/** This machine ships nothing: forget every target it shipped to, and the default, so neither
+ * `dosu sync` nor the hooks ship from it any more. Its connections in Dosu stay, with what was
+ * read. Returns where it shipped. */
+export function stopShipping(cfg: Config): string[] {
+  const urls = configuredTargets(cfg).map((t) => t.url);
+  if (urls.length === 0) return urls;
+  cfg.targets = [];
+  delete cfg.default_target;
+  saveConfig(cfg);
+  logger.info("sources", `stopped shipping to ${urls.join(", ")}`);
+  return urls;
+}
+
+/** What this machine is told when it ships nothing: where it no longer ships, and how to start. */
+export function shipsNothing(stopped: string[], command: string): string {
+  const where = stopped.length > 0 ? `; it no longer ships to ${stopped.join(", ")}` : "";
+  return `This machine ships nothing${where}. ${command} ships from here later.`;
+}
+
 /** Save `target`, replacing one of the same name, and make it the default when `makeDefault`. */
 function saveTarget(cfg: Config, target: SessionTarget, makeDefault: boolean): void {
   const others = configuredTargets(cfg).filter((t) => t.name !== target.name);

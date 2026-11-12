@@ -314,8 +314,22 @@ describe("sources setup: an org with a store", () => {
     org({ store: BUCKET_STORE });
     await dosu("setup", "--no-ship", "--json");
     expect(steps()).toEqual(["GET /v1/memory/store"]);
-    expect(JSON.parse(out.join("\n"))).toEqual({ store: { ...BUCKET_STORE, can_set: false }, ship: false });
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      store: { ...BUCKET_STORE, can_set: false },
+      ship: false,
+    });
     expect(loadConfig().targets ?? []).toEqual([]);
+  });
+
+  it("--no-ship stops this machine shipping where it did", async () => {
+    configure([SERVER]);
+    org({ store: BUCKET_STORE });
+    await dosu("setup", "--no-ship");
+    expect(loadConfig().targets ?? []).toEqual([]);
+    expect(loadConfig().default_target).toBeUndefined();
+    expect(out.join("\n")).toContain(
+      "This machine ships nothing; it no longer ships to https://sessions.example.com.",
+    );
   });
 
   it("refuses flags that would change the org's store, whoever runs it", async () => {
@@ -357,7 +371,10 @@ describe("sources setup: flags that only restate the org's store", () => {
       "--no-ship",
       "--json",
     );
-    expect(JSON.parse(out.join("\n"))).toEqual({ store: { ...BUCKET_STORE, can_set: false }, ship: false });
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      store: { ...BUCKET_STORE, can_set: false },
+      ship: false,
+    });
 
     const server: SessionStore = { ...HOSTED_DEFAULT, kind: "server", configured: true };
     org({ store: server });
