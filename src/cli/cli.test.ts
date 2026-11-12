@@ -58,7 +58,7 @@ describe("CLI", () => {
   it("describes session capture in the root help", () => {
     const description = createProgram().description();
     expect(description).toMatch(/sessions/);
-    expect(description).toMatch(/sessiondb server/);
+    expect(description).toMatch(/session store/);
   });
 
   it("does not expose the deleted product commands", () => {

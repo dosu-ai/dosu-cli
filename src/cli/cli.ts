@@ -118,7 +118,7 @@ export function createProgram(): Command {
   program
     .name("dosu")
     .description(
-      "Dosu CLI - capture your coding-agent sessions for Dosu memory through your sessiondb server",
+      "Dosu CLI - Dosu MCP for your coding agents, and their finished sessions shipped to your org's session store for Dosu memory",
     )
     .version(getVersionString(), "-v, --version")
     .helpCommand("help [command]", "Show help for a command")
