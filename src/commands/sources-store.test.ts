@@ -427,6 +427,81 @@ describe("sources store setup: the bucket's raw files", () => {
   });
 });
 
+describe("sources store setup: when Dosu cannot look at the bucket", () => {
+  /** Dosu answering each `POST /detect` in turn from `answers`; every other call with the store. */
+  function detectAnswers(...answers: Array<() => Response>): void {
+    fetchImpl.mockImplementation(async (url, init) => {
+      if (url.endsWith("/detect")) return (answers.shift() as () => Response)();
+      const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+      return json(init?.method === "PUT" ? { ...STORE, ...body } : STORE);
+    });
+  }
+  const BUCKET = ["--bucket", "s3://acme-sessions/agents", "--region", "us-east-1"];
+  const detects = () => calls().filter((c) => c.path === "/v1/memory/sources/detect");
+
+  it("says why under --yes: not an admin, Dosu refused, or Dosu unreachable", async () => {
+    detectAnswers(() => json({ detail: "admins only" }, 403));
+    await expect(dosu("setup", ...BUCKET, "--yes", ...READ)).rejects.toThrow(
+      "only an org admin can set the org's session store",
+    );
+    detectAnswers(() => json({ detail: "busy" }, 503));
+    await expect(dosu("setup", ...BUCKET, "--yes", ...READ)).rejects.toThrow(
+      "Dosu did not look at the bucket",
+    );
+    detectAnswers(() => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(dosu("setup", ...BUCKET, "--yes", ...READ)).rejects.toThrow(
+      "Could not reach Dosu: fetch failed",
+    );
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+  });
+
+  it("interactively, takes a different read-only key after a bad one, then sets the store", async () => {
+    detectAnswers(
+      () => json({ detail: "AccessDenied" }, 422),
+      () => json(detection),
+    );
+    script({
+      "S3-compatible endpoint (blank for AWS)": "",
+      "What now?": "keys",
+      "Dosu's read-only keys (GetObject + ListBucket): access key id": "AKIDREAD2",
+      "Dosu's read-only keys (GetObject + ListBucket): secret access key": "readsecret2",
+      "Make it the org's session store?": "yes",
+    });
+    await dosu("setup", ...BUCKET, ...READ);
+    expect(detects().map((c) => c.body?.access_key_id)).toEqual(["AKIDREAD", "AKIDREAD2"]);
+    expect(put()).toMatchObject({ kind: "bucket", access_key_id: "AKIDREAD2" });
+  });
+
+  it("interactively, tries again after Dosu failed, or cancels and sets nothing", async () => {
+    detectAnswers(
+      () => json({ detail: "busy" }, 503),
+      () => json(detection),
+    );
+    script({
+      "S3-compatible endpoint (blank for AWS)": "",
+      "What now?": "retry",
+      "Make it the org's session store?": "yes",
+    });
+    await dosu("setup", ...BUCKET, ...READ);
+    expect(detects()).toHaveLength(2);
+    expect(put()).toMatchObject({ kind: "bucket" });
+
+    fetchImpl.mockClear();
+    out = [];
+    detectAnswers(() => json({ detail: "busy" }, 503));
+    script({ "S3-compatible endpoint (blank for AWS)": "", "What now?": "cancel" });
+    await dosu("setup", ...BUCKET, ...READ);
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+    expect(out.join("\n")).toContain("Cancelled; the org's session store is unchanged.");
+  });
+
+  it("needs a kind of store under --yes", async () => {
+    await expect(dosu("setup", "--yes")).rejects.toThrow("say where the org's sessions live");
+  });
+});
+
 describe("storeApi", () => {
   it("enrolls with the owner only when one is named", async () => {
     const api = storeApi(loadConfig());
