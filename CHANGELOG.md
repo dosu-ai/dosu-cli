@@ -1,3 +1,10 @@
+# [0.67.0-sessions.7](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.6...v0.67.0-sessions.7) (2026-11-12)
+
+
+### Features
+
+* **sources:** a bucket is always the org's store; one setup path ([#320](https://github.com/dosu-ai/dosu-cli/issues/320)) ([811e704](https://github.com/dosu-ai/dosu-cli/commit/811e704bc1079270d19a1919b893058ad427a5d2))
+
 # [0.67.0-sessions.6](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-sessions.5...v0.67.0-sessions.6) (2026-11-10)
 
 
