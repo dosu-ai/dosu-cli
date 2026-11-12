@@ -97,12 +97,12 @@ export async function orgStore(api: StoreApi | undefined): Promise<SessionStore 
   return "store" in found && found.store.configured ? found.store : undefined;
 }
 
-/** Whether this login is an org admin, who alone sets where the org's sessions live. Dosu lists
- * a store's members only to org admins, so a store an admin set says it; with none set, Dosu
- * cannot say, and the caller is taken for a member (the hosted default, or "ask an admin"). An
- * admin sets the store then with `dosu sources store setup`. */
+/** Whether this login is an org admin, who alone sets where the org's sessions live: Dosu says
+ * so (`can_set`), the hosted default included. An older Dosu only lists a set store's members
+ * to admins, so there an admin on the hosted default reads as a member. With no store at all
+ * Dosu cannot say, and the caller is sent to `dosu sources store setup`. */
 export function isOrgAdmin(store?: SessionStore): boolean {
-  return Boolean(store?.members);
+  return Boolean(store?.can_set || store?.members);
 }
 
 /** An enrollment's minted token, in the shape the hosted renewal reads. */

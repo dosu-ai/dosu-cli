@@ -294,8 +294,11 @@ export interface SessionStore {
   /** The caller's own enrollment. */
   owner: string | null;
   source_id: string | null;
-  /** Who has enrolled; only for org admins. */
+  /** Who has enrolled; only for org admins, once a store is set. */
   members: StoreMember[] | null;
+  /** Whether the caller may set the org's store (an org admin), the hosted default included.
+   * Absent from a Dosu older than it. */
+  can_set?: boolean;
   /** A bucket store: the connection that converts the raw files other tools drop in it, and the
    * format it reads them as (null: each file's is detected). */
   raw_source_id?: string | null;
