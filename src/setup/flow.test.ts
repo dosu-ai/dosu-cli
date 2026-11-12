@@ -3464,6 +3464,30 @@ describe("stepChooseSessionStorage", () => {
       expect(await stepChooseSessionStorage(makeCfg())).toBeNull();
     });
 
+    it("under --storage, saying no stops this machine shipping where it did", async () => {
+      const shipping = {
+        kind: "bucket" as const,
+        name: "org",
+        url: "s3://acme/sessions",
+        owner: "james",
+        access_key_id: "AKID",
+        secret_access_key: "secret",
+      };
+      const cfg = { ...makeCfg(), targets: [shipping], default_target: "org" };
+      saveConfig(cfg);
+      vi.mocked(decideStore).mockResolvedValueOnce({ store });
+      vi.mocked(p.confirm).mockResolvedValueOnce(false);
+
+      expect(await stepChooseSessionStorage(cfg, { storage: true })).toBe("none");
+
+      const saved = loadConfig();
+      expect(saved.targets ?? []).toEqual([]);
+      expect(saved.default_target).toBeUndefined();
+      expect(logged("info")).toContain(
+        "This machine ships nothing; it no longer ships to s3://acme/sessions.",
+      );
+    });
+
     it("enrolls under a spinner when Dosu mints the token", async () => {
       const hostedStore = { ...store, kind: "hosted", issues_tokens: true } as SessionStore;
       vi.mocked(decideStore).mockResolvedValueOnce({ store: hostedStore });

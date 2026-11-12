@@ -260,8 +260,11 @@ function org(options: { store?: SessionStore; admin?: boolean }) {
     }
     if (path.startsWith("/v1/memory/store")) {
       if (!store) return json({ detail: "no session store" }, 404);
-      // Dosu lists the store's members to org admins only.
-      return json(options.admin ? { ...store, members: store.members ?? [] } : store);
+      // As Dosu answers: whether the caller may set the store, and its members to org admins
+      // only, once one is set (the hosted default has no member list).
+      const admin = Boolean(options.admin);
+      const members = admin && store.configured ? (store.members ?? []) : null;
+      return json({ ...store, members, can_set: admin });
     }
     return json({ detail: "unexpected" }, 500);
   });
@@ -311,8 +314,22 @@ describe("sources setup: an org with a store", () => {
     org({ store: BUCKET_STORE });
     await dosu("setup", "--no-ship", "--json");
     expect(steps()).toEqual(["GET /v1/memory/store"]);
-    expect(JSON.parse(out.join("\n"))).toEqual({ store: BUCKET_STORE, ship: false });
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      store: { ...BUCKET_STORE, can_set: false },
+      ship: false,
+    });
     expect(loadConfig().targets ?? []).toEqual([]);
+  });
+
+  it("--no-ship stops this machine shipping where it did", async () => {
+    configure([SERVER]);
+    org({ store: BUCKET_STORE });
+    await dosu("setup", "--no-ship");
+    expect(loadConfig().targets ?? []).toEqual([]);
+    expect(loadConfig().default_target).toBeUndefined();
+    expect(out.join("\n")).toContain(
+      "This machine ships nothing; it no longer ships to https://sessions.example.com.",
+    );
   });
 
   it("refuses flags that would change the org's store, whoever runs it", async () => {
@@ -354,7 +371,10 @@ describe("sources setup: flags that only restate the org's store", () => {
       "--no-ship",
       "--json",
     );
-    expect(JSON.parse(out.join("\n"))).toEqual({ store: BUCKET_STORE, ship: false });
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      store: { ...BUCKET_STORE, can_set: false },
+      ship: false,
+    });
 
     const server: SessionStore = { ...HOSTED_DEFAULT, kind: "server", configured: true };
     org({ store: server });

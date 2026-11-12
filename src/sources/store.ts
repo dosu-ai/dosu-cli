@@ -97,12 +97,12 @@ export async function orgStore(api: StoreApi | undefined): Promise<SessionStore 
   return "store" in found && found.store.configured ? found.store : undefined;
 }
 
-/** Whether this login is an org admin, who alone sets where the org's sessions live. Dosu lists
- * a store's members only to org admins, so a store an admin set says it; with none set, Dosu
- * cannot say, and the caller is taken for a member (the hosted default, or "ask an admin"). An
- * admin sets the store then with `dosu sources store setup`. */
+/** Whether this login is an org admin, who alone sets where the org's sessions live: Dosu says
+ * so (`can_set`), the hosted default included. An older Dosu only lists a set store's members
+ * to admins, so there an admin on the hosted default reads as a member. With no store at all
+ * Dosu cannot say, and the caller is sent to `dosu sources store setup`. */
 export function isOrgAdmin(store?: SessionStore): boolean {
-  return Boolean(store?.members);
+  return Boolean(store?.can_set || store?.members);
 }
 
 /** An enrollment's minted token, in the shape the hosted renewal reads. */
@@ -131,6 +131,25 @@ function enrollError(err: unknown): CliUsageError {
   return new CliUsageError(
     `Could not reach Dosu to enroll you: ${err instanceof Error ? err.message : String(err)}`,
   );
+}
+
+/** This machine ships nothing: forget every target it shipped to, and the default, so neither
+ * `dosu sync` nor the hooks ship from it any more. Its connections in Dosu stay, with what was
+ * read. Returns where it shipped. */
+export function stopShipping(cfg: Config): string[] {
+  const urls = configuredTargets(cfg).map((t) => t.url);
+  if (urls.length === 0) return urls;
+  cfg.targets = [];
+  delete cfg.default_target;
+  saveConfig(cfg);
+  logger.info("sources", `stopped shipping to ${urls.join(", ")}`);
+  return urls;
+}
+
+/** What this machine is told when it ships nothing: where it no longer ships, and how to start. */
+export function shipsNothing(stopped: string[], command: string): string {
+  const where = stopped.length > 0 ? `; it no longer ships to ${stopped.join(", ")}` : "";
+  return `This machine ships nothing${where}. ${command} ships from here later.`;
 }
 
 /** Save `target`, replacing one of the same name, and make it the default when `makeDefault`. */

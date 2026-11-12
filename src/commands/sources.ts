@@ -27,7 +27,7 @@ import { bucketOfStorage, parseAgent } from "../sources/bucket";
 import { formatCounts, plural } from "../sources/detect";
 import { asker, askShip } from "../sources/prompts";
 import { bucketOfTarget } from "../sources/server-client";
-import { describeStore, joinOrgStore } from "../sources/store";
+import { describeStore, joinOrgStore, shipsNothing, stopShipping } from "../sources/store";
 import {
   decideStore,
   type StoreChoiceInput,
@@ -271,13 +271,12 @@ async function runSetup(opts: SetupOptions): Promise<void> {
   // Step 2: does this machine ship there? Named by a flag, yes unless --no-ship says otherwise.
   const ship = await askShip(asker(yes, {}), opts.ship ?? (choice.kind ? true : undefined));
   if (!ship) {
+    const stopped = stopShipping(cfg);
     if (opts.json) {
       printResult({ store, ship: false }, opts);
       return;
     }
-    console.log(
-      `${pc.green("✓")} This machine ships nothing. 'dosu sources setup' ships from here later.`,
-    );
+    console.log(`${pc.green("✓")} ${shipsNothing(stopped, "'dosu sources setup'")}`);
     return;
   }
   const joined = await joinOrgStore(cfg, stores, store, {

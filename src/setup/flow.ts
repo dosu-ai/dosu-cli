@@ -28,7 +28,7 @@ import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
 import { type SessionStore, type StoreApi, sourcesApi, storeApi } from "../sources/api";
-import { describeStore, joinOrgStore } from "../sources/store";
+import { describeStore, joinOrgStore, shipsNothing, stopShipping } from "../sources/store";
 import { decideStore, storeNotes } from "../sources/store-setup";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
@@ -366,9 +366,7 @@ async function joinStoreStep(
   });
   if (p.isCancel(ship)) return null;
   if (!ship) {
-    p.log.info(
-      wrapLog(`This machine ships nothing. ${info("dosu sources setup")} ships from here later.`),
-    );
+    p.log.info(wrapLog(shipsNothing(stopShipping(cfg), info("dosu sources setup"))));
     return "none";
   }
   const s = p.spinner();

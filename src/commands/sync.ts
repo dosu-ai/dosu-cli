@@ -24,7 +24,7 @@ function collectValues(value: string, previous: string[] = []): string[] {
 
 export function syncCommand(): Command {
   const cmd = new Command("sync")
-    .description("Ship finished local agent sessions to your sessiondb server")
+    .description("Ship finished local agent sessions to your org's session store")
     .option(
       "--target <name>",
       "Which configured server to ship to (default: the config's default_target, else the only one configured)",
@@ -372,7 +372,9 @@ function printSyncOutcome(outcome: SyncOutcome, destination: string): void {
       // Subagents' transcripts ship with their sessions; only sessions are counted here.
       const ready = outcome.readySessions - outcome.sessions.filter((s) => s.parentId).length;
       console.log(`✓ Scanned. ${ready} finished session${plural(ready)} ready to ship${inFlight}.`);
-      console.log(pc.dim("Run 'dosu setup' to point this machine at a sessiondb server."));
+      console.log(
+        pc.dim("Run 'dosu setup' to ship this machine's sessions to your org's session store."),
+      );
       break;
     }
     case "shipped":
