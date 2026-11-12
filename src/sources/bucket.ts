@@ -40,11 +40,7 @@ export const READ_KEY_NOTE =
   "Dosu needs its own READ-ONLY key to the org's bucket (GetObject + ListBucket). Anything written under the prefix reaches the org's memory, so a key that can write there can add to it; Dosu still redacts every session before it is stored.";
 
 /** `POST /detect`'s body for `location`. */
-export function detectBody(
-  location: BucketLocation,
-  read: KeyPair,
-  agent?: SourceAgent,
-): DetectRequest {
+export function detectBody(location: BucketLocation, read: KeyPair): DetectRequest {
   const { provider, bucket, prefix, region, accountId, endpoint } = location;
   return {
     kind: provider === "r2" ? "r2" : "s3",
@@ -54,7 +50,6 @@ export function detectBody(
     ...(accountId ? { account_id: accountId } : {}),
     ...(endpoint ? { endpoint } : {}),
     ...read,
-    ...(agent ? { agent } : {}),
   };
 }
 

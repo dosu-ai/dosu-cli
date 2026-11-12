@@ -95,21 +95,17 @@ function checkFlags(kind: StoreKind | undefined, input: StoreChoiceInput): void 
   }
 }
 
-/** Step 1's question. Dosu's sessiondb is offered only where this installation runs one. */
-function askStoreKind(ask: Asker, hostedAvailable: boolean): Promise<StoreKind> {
+/** Step 1's question. */
+function askStoreKind(ask: Asker): Promise<StoreKind> {
   return ask.select<StoreKind>(
     {
       message: "Where do sessions live?",
       options: [
-        ...(hostedAvailable
-          ? [
-              {
-                value: "hosted" as const,
-                label: "Dosu's sessiondb (recommended)",
-                hint: "nothing to run; Dosu stores the org's sessions and learns from them",
-              },
-            ]
-          : []),
+        {
+          value: "hosted" as const,
+          label: "Dosu's sessiondb (recommended)",
+          hint: "nothing to run; Dosu stores the org's sessions and learns from them",
+        },
         {
           value: "server" as const,
           label: "My own sessiondb server",
@@ -188,8 +184,7 @@ function readKey(ask: Asker, input: StoreChoiceInput): Promise<KeyPair> {
 
 /** The location as `PUT /v1/memory/store` names it. */
 function bucketFields(location: BucketLocation, read: KeyPair): SetStoreRequest {
-  const body = detectBody(location, read);
-  const { kind, agent: _agent, ...rest } = body;
+  const { kind, ...rest } = detectBody(location, read);
   return { kind: "bucket", bucket_kind: kind, ...rest };
 }
 
@@ -205,8 +200,6 @@ export interface ChooseContext {
   /** The store set now, if any: a server store keeps its token secret, and a bucket store's own
    * raw scan is told apart from another connection's. */
   current?: SessionStore;
-  /** Whether to offer Dosu's sessiondb (false when this installation runs none). */
-  hostedAvailable?: boolean;
   /** Where what Dosu found is told (default: the prompt log). */
   say?: (line: string) => void;
 }
@@ -242,7 +235,7 @@ async function choose(
         "say where the org's sessions live: --hosted (Dosu's sessiondb), --server <url> with --bucket (the org's sessiondb server and the bucket it writes) or --bucket <url> (the org's bucket)",
       );
     }
-    kind = await askStoreKind(ask, ctx.hostedAvailable ?? true);
+    kind = await askStoreKind(ask);
     checkFlags(kind, input);
   }
   if (kind === "hosted") return { body: { kind } };
@@ -468,26 +461,21 @@ export async function decideStore(
     }
     return { store };
   }
+  if (!store) return { noStore: noStoreMessage(cfg) };
   if (!isOrgAdmin(store)) {
-    if (!store) return { noStore: noStoreMessage(cfg) };
     // The hosted default: what members use until an admin sets a store.
     if (namesStore(input) && !(input.kind === "hosted" && restatesStore(input, store))) {
       throw new CliUsageError(
-        "only an org admin sets where the org's sessions live; until one does, your org uses Dosu's sessiondb ('dosu sources setup --hosted')",
+        "only an org admin sets where the org's sessions live, with 'dosu sources store setup'; until one does, your org uses Dosu's sessiondb ('dosu sources setup --hosted')",
       );
     }
     return { store };
   }
   // An admin with nothing to say under --yes keeps the hosted default as members would.
-  if (store && input.yes && !namesStore(input)) return { store };
+  if (input.yes && !namesStore(input)) return { store };
   const chosen = await chooseStore(
     input,
-    {
-      ...(sources ? { sources } : {}),
-      ...(store ? { current: store } : {}),
-      hostedAvailable: store !== undefined,
-      ...(say ? { say } : {}),
-    },
+    { ...(sources ? { sources } : {}), current: store, ...(say ? { say } : {}) },
     io,
   );
   if (!chosen) return { cancelled: true };
