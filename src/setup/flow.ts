@@ -28,10 +28,8 @@ import { refreshConfiguredProviders } from "../mcp/refresh";
 import { sessionLineage } from "../sessions/lineage";
 import type { AgentSession } from "../sessions/scan";
 import { type SessionStore, type StoreApi, sourcesApi, storeApi } from "../sources/api";
-import { runBucketWizard } from "../sources/bucket-wizard";
-import { HostedUnavailable, setupHostedTarget } from "../sources/hosted";
-import { runServerWizard } from "../sources/server-wizard";
-import { describeStore, joinOrgStore, orgStore } from "../sources/store";
+import { describeStore, joinOrgStore } from "../sources/store";
+import { decideStore, storeNotes } from "../sources/store-setup";
 import { getStatuslineAgent, StatuslineConflictError } from "../statusline/agents";
 import { spawnDetachedSelf } from "../sync/detach";
 import {
@@ -276,14 +274,16 @@ function setupOutroMessage(mcpCompleted: boolean): string {
   return `${brand("\u2714")} You're all set!\n\n${steps.join("\n")}`;
 }
 
-/** Where finished sessions are kept: a bucket, written by a sessiondb server (which redacts and
- * normalizes them) or by this machine itself; Dosu reads that bucket and keeps only what it
- * learns. Dosu runs a server, and picking it is a single call to the login (nothing to paste);
- * a team that wants the transcripts in a bucket of its own runs its own server and gives the
- * user a URL and a token, or gives each person a key to write the bucket directly.
+/** Where finished sessions are kept, in two questions. "Where do sessions live?" is the org's
+ * session store, which only an org admin sets: an org with one (or using Dosu's hosted sessiondb
+ * by default) skips it, and an admin with none answers it for the whole org (Dosu's sessiondb,
+ * the org's own sessiondb server, or the org's bucket, which Dosu looks at with a read-only key
+ * first). Then "Ship this machine's sessions there?": yes enrolls this machine in the store (a
+ * minted token, an admin-issued one, or for a bucket a write key kept only here); no leaves the
+ * machine shipping nothing (MCP only, or its sessions come from CI).
  * A target already set up is shown and kept unless `--storage` asks again. Returns null when
  * the user cancelled the flow mid-way (nothing was saved), so setup stops where they did;
- * "none" when they chose to ship nowhere for now. */
+ * "none" when this machine ships nowhere for now. */
 export async function stepChooseSessionStorage(
   cfg: Config,
   opts: Pick<SetupOptions, "storage"> = {},
@@ -295,14 +295,14 @@ export async function stepChooseSessionStorage(
     p.log.success(
       wrapLog(
         isBucketTarget(current)
-          ? `Sessions are redacted here and written to your bucket ${current.url} (owner ${current.owner})${
+          ? `Sessions are redacted here and written to the bucket ${current.url} (owner ${current.owner})${
               current.source_id ? ", which Dosu reads" : ""
             }. ${change}`
           : current.store
             ? `Sessions ship to the org's session store at ${current.url} (owner ${current.owner}). ${change}`
             : current.hosted
               ? `Sessions ship to Dosu's sessiondb, which Dosu learns from. ${change}`
-              : `Sessions ship through your sessiondb server ${current.url} (owner ${current.owner})${
+              : `Sessions ship through the sessiondb server ${current.url} (owner ${current.owner})${
                   current.source_id ? ", whose bucket Dosu reads" : ""
                 }. ${change}`,
       ),
@@ -313,125 +313,69 @@ export async function stepChooseSessionStorage(
   logger.info("setup", "Step: choose session storage");
   p.log.message(
     wrapLog(
-      "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed. A session is redacted (by a sessiondb server, or on this machine) and stored in a bucket; Dosu reads the bucket and keeps only what it learns.",
+      "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed. Two questions: where your org's sessions live, and whether this machine ships its own there.",
     ),
   );
   const stores = storeApi(cfg);
-  const store = await orgStore(stores);
-  if (store && stores) return joinStoreStep(cfg, stores, store);
-  const api = sourcesApi(cfg);
-  const choice = await p.select({
-    message: "Where should finished sessions go?",
-    options: [
-      ...(api
-        ? [
-            {
-              value: "hosted" as const,
-              label: "Dosu's sessiondb (recommended)",
-              hint: "nothing to set up; Dosu stores your sessions and learns from them",
-            },
-          ]
-        : []),
-      {
-        value: "server" as const,
-        label: api ? "My own sessiondb server" : "My sessiondb server",
-        hint: "a URL and a token; the transcripts stay in a bucket you own",
-      },
-      {
-        value: "bucket" as const,
-        label: "My bucket (S3 / R2)",
-        hint: "a bucket URL and a write key; redacted on this machine, no server to run",
-      },
-      { value: "none" as const, label: "Not now", hint: "nothing ships until one is set up" },
-    ],
-  });
-  if (p.isCancel(choice)) return null;
-  if (choice === "none") {
-    p.log.info(
+  if (!stores) {
+    p.log.warn(wrapLog(`Not logged in to Dosu; nothing ships until ${info("dosu setup")} is.`));
+    return "none";
+  }
+  let decided: Awaited<ReturnType<typeof decideStore>>;
+  try {
+    decided = await decideStore(cfg, stores, sourcesApi(cfg), {});
+  } catch (err) {
+    if (!(err instanceof CliUsageError)) throw err;
+    p.log.warn(
       wrapLog(
-        `Nothing ships until then. ${info("dosu sources setup")} sets it up later${
-          api ? ` (${info("--hosted")} for Dosu's)` : ""
-        }.`,
+        `${err.message}\n${info("dosu sources setup")} tries again; nothing ships until then.`,
       ),
     );
     return "none";
   }
-  if (choice === "hosted" && api) {
-    const s = p.spinner();
-    s.start("Setting you up on Dosu's sessiondb...");
-    try {
-      const { target } = await setupHostedTarget(cfg, api);
-      s.stop(`Sessions ship to Dosu's sessiondb as ${target.owner}`);
-      p.log.info(
-        wrapLog(
-          "Secrets are redacted before anything is stored, and Dosu learns from a session within a few minutes of its upload. dosu knowledge transcripts disable stops shipping altogether.",
-        ),
-      );
-      return "hosted";
-    } catch (err) {
-      if (!(err instanceof CliUsageError)) throw err;
-      s.stop(
-        err instanceof HostedUnavailable
-          ? "Dosu does not host a sessiondb"
-          : "Dosu could not set it up",
-        1,
-      );
-      p.log.warn(
-        wrapLog(
-          `${err.message}\n${
-            err instanceof HostedUnavailable
-              ? `Your own server works instead: ${info("dosu sources setup --server <url> --token <token>")}.`
-              : `${info("dosu sources setup --hosted")} tries again; nothing ships until then.`
-          }`,
-        ),
-      );
-      return "none";
-    }
+  if ("cancelled" in decided) {
+    p.log.info(
+      wrapLog(
+        `The org's session store is not set; nothing ships until it is. ${info("dosu sources setup")} tries again.`,
+      ),
+    );
+    return null;
   }
-  if (choice === "bucket") {
-    try {
-      const result = await runBucketWizard(cfg);
-      if (!result) {
-        p.log.info(
-          wrapLog(
-            `No bucket set up; nothing ships until then. ${info("dosu sources setup --bucket <url>")} tries again.`,
-          ),
-        );
-        return null;
-      }
-      return "bucket";
-    } catch (err) {
-      if (!(err instanceof CliUsageError)) throw err;
-      p.log.warn(wrapLog(`${err.message}\nNothing ships until a bucket is set up.`));
-      return "none";
-    }
-  }
-  try {
-    const result = await runServerWizard(cfg);
-    if (!result) {
-      p.log.info(
-        wrapLog(
-          `No server set up; nothing ships until then. ${info("dosu sources setup --server <url>")} tries again.`,
-        ),
-      );
-      return null;
-    }
-    return "server";
-  } catch (err) {
-    if (!(err instanceof CliUsageError)) throw err;
-    p.log.warn(wrapLog(`${err.message}\nNothing ships until a server is set up.`));
+  if ("noStore" in decided) {
+    p.log.warn(wrapLog(decided.noStore));
     return "none";
   }
+  if (decided.set) {
+    p.log.success(wrapLog(`The org's sessions go to ${describeStore(decided.store)}.`));
+    for (const note of storeNotes(decided.store)) p.log.info(wrapLog(note));
+  }
+  return joinStoreStep(cfg, stores, decided.store, !decided.set);
 }
 
-/** The org's admin set where its sessions go: enroll in it rather than ask. A personal target
- * (`dosu sources setup`) is still possible afterwards; setup just does not lead with it. */
+/** Where the org's sessions go is settled, so only the second question is left: whether this
+ * machine ships there. Yes enrolls in the store. */
 async function joinStoreStep(
   cfg: Config,
   api: StoreApi,
   store: SessionStore,
+  sayWhere: boolean,
 ): Promise<"hosted" | "server" | "bucket" | "none" | null> {
-  p.log.info(wrapLog(`Your org keeps its sessions in ${describeStore(store)}.`));
+  if (sayWhere) p.log.info(wrapLog(`Your org keeps its sessions in ${describeStore(store)}.`));
+  const ship = await p.confirm({
+    message: "Ship this machine's sessions there?",
+    active: "Yes",
+    inactive: "No, this machine ships nothing",
+    initialValue: true,
+  });
+  if (p.isCancel(ship)) return null;
+  if (!ship) {
+    p.log.info(
+      wrapLog(
+        `This machine ships nothing; its agents still get Dosu's MCP server. ${info("dosu sources store join")} ships from here later.`,
+      ),
+    );
+    return "none";
+  }
   const s = p.spinner();
   if (store.issues_tokens) s.start("Enrolling you in the org's session store...");
   try {
@@ -499,7 +443,7 @@ export async function stepOfferInitialSync(cfg: Config): Promise<void> {
         "Dosu memory learns from finished agent sessions: where things live, commands that work, approaches that failed, so the next agent starts from what the last one learned.",
         `${
           isBucketTarget(server)
-            ? `Sessions are redacted on this machine and written to your bucket ${server.url}`
+            ? `Sessions are redacted on this machine and written to the bucket ${server.url}`
             : `Sessions are uploaded to ${
                 server.store
                   ? `the org's session store at ${server.url}`

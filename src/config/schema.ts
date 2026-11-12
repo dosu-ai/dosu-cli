@@ -45,8 +45,9 @@ export interface ServerTarget {
   owner: string;
   /** The bearer token (`sdb_…`). The config file is 0600. */
   token: string;
-  /** The Dosu source the server's bucket is connected as (`dosu sources connect`); absent when
-   * the bucket is only an archive. `dosu sync` nudges it after shipping. */
+  /** The Dosu connection that reads this target's folder (its enrollment in the org's store, or
+   * one made before buckets were the org's); absent when Dosu reads nothing through it. `dosu
+   * sync` nudges it after shipping. */
   source_id?: string;
   /** Dosu's own sessiondb: the token came from the Dosu login (`POST /v1/memory/sources/hosted`)
    * rather than a server's `.env`, and is renewed from it before `token_expires_at`. */

@@ -25,7 +25,8 @@ it the same way, and say so when they skip it. The sync scans the last 30 days o
 ones its ledger has no answer for, applies the repo scope and pause switch from
 `~/.config/dosu-cli/knowledge-sync.json`, and ships each one's raw transcript to a
 [sessiondb server](https://github.com/dosu-ai/sessiondb): Dosu's own, or one the team runs
-(`dosu sources setup --hosted` or `--server`; see "Where sessions are stored" in the README).
+(the org's session store, which an org admin sets; `dosu sources setup` joins it; see "Where
+sessions live" in the README).
 The server redacts and normalizes it, decides whether it is
 worth keeping and how much of it is new, and writes it to the bucket; Dosu reads the bucket and
 learns from each session there. This machine holds a token, never a bucket credential, and the

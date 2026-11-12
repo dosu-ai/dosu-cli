@@ -1074,7 +1074,7 @@ describe("knowledge sync to a bucket target", () => {
 });
 
 describe("knowledge sync to a server whose bucket is connected as a Dosu source", () => {
-  /** `source_id` is what `dosu sources connect` would have kept on the target. */
+  /** `source_id` is what enrolling in the org's store keeps on the target. */
   function configureTarget(sourceId?: string): void {
     saveConfig({
       ...makeTestConfig({

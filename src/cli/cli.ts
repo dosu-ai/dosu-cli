@@ -3,7 +3,6 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
 import { Client } from "../client/client";
-import { importsCommand } from "../commands/imports";
 import { knowledgeCommand } from "../commands/knowledge";
 import { memoryCommand } from "../commands/memory";
 import { projectCommand } from "../commands/project";
@@ -459,7 +458,6 @@ export function createProgram(): Command {
   program.addCommand(syncCommand()); // `dosu knowledge sync` stays as the hook command.
   for (const cmd of storeCommands()) program.addCommand(cmd);
   program.addCommand(sourcesCommand());
-  program.addCommand(importsCommand());
   program.addCommand(upgradeCommand());
 
   // setup

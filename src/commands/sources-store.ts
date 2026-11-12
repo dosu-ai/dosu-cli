@@ -1,24 +1,17 @@
-/** `dosu sources store`: the org's session store. An org admin says once where the org keeps its
- * sessions and gives Dosu its read key (`setup`); each member's `dosu setup` then enrolls for
- * their own folder (`join` does it again by hand), and `status` shows the store and, to an admin,
- * who has enrolled. */
+/** `dosu sources store`: the org's session store, the only place sessions go. An org admin says
+ * once where the org keeps its sessions and gives Dosu its read key (`setup`; for a bucket, Dosu
+ * looks first and the admin confirms or names the raw files' format); each member's `dosu setup`
+ * then enrolls for their own folder (`join` does it again by hand), and `status` shows the store
+ * and, to an admin, who has enrolled. */
 
 import { Command } from "commander";
 import pc from "picocolors";
 import { CliUsageError } from "../cli/errors";
 import { loadConfig } from "../config/config";
-import {
-  requireStoreApi,
-  type SessionStore,
-  type SetStoreRequest,
-  SourcesApiError,
-  type StoreKind,
-} from "../sources/api";
-import { askBucketUrl, normalizeBucketUrl } from "../sources/bucket-wizard";
-import { bucketOfStorage } from "../sources/connect";
-import { asker, askKeyPair, envCredentials, type KeyPair, required } from "../sources/prompts";
-import { normalizeServerUrl } from "../sources/server-wizard";
+import { requireStoreApi, type SessionStore, SourcesApiError, sourcesApi } from "../sources/api";
+import { parseAgent } from "../sources/bucket";
 import { describeStore, joinOrgStore, orgStore } from "../sources/store";
+import { chooseStore, setStore, storeKindOf, storeNotes } from "../sources/store-setup";
 import { formatAge, printResult, printTable } from "./output";
 
 export function storeCommand(): Command {
@@ -44,167 +37,67 @@ interface StoreSetupOptions {
   readSecretAccessKey?: string;
   tokenSecret?: string;
   clearTokenSecret?: boolean;
+  agent?: string;
   yes?: boolean;
   json?: boolean;
 }
 
-/** The kind the flags name, or undefined when they name none (the wizard asks). */
-function kindOf(opts: StoreSetupOptions): StoreKind | undefined {
-  if (opts.hosted && (opts.server || opts.bucket)) {
-    throw new CliUsageError("--hosted is Dosu's: --server and --bucket are for the org's own");
-  }
-  if (opts.hosted) return "hosted";
-  if (opts.server) return "server";
-  if (opts.bucket) return "bucket";
-  return undefined;
-}
-
-/** What `PUT /v1/memory/store` is sent, from flags first and questions for the rest. */
-async function storeRequest(
-  opts: StoreSetupOptions,
-  current: SessionStore | undefined,
-): Promise<SetStoreRequest> {
+async function runStoreSetup(opts: StoreSetupOptions): Promise<void> {
   if (Boolean(opts.readAccessKeyId) !== Boolean(opts.readSecretAccessKey)) {
     throw new CliUsageError("--read-access-key-id and --read-secret-access-key go together");
   }
-  if (opts.tokenSecret && opts.clearTokenSecret) {
-    throw new CliUsageError("--token-secret and --clear-token-secret contradict");
-  }
-  const ask = asker(opts.yes ?? false, {});
-  const kind =
-    kindOf(opts) ??
-    (await ask.select<StoreKind>(
-      {
-        message: "Where should the org's sessions go?",
-        options: [
-          { value: "hosted", label: "Dosu's sessiondb", hint: "nothing to run; Dosu stores them" },
-          {
-            value: "server",
-            label: "Our sessiondb server",
-            hint: "it redacts and writes our bucket; members ship to it",
-          },
-          {
-            value: "bucket",
-            label: "Our bucket (S3 / R2)",
-            hint: "members redact on their machine and write it directly",
-          },
-        ],
+  const kind = storeKindOf(opts);
+  const agent = parseAgent(opts.agent);
+  const cfg = loadConfig();
+  const api = requireStoreApi(cfg);
+  const current = await orgStore(api);
+  const sources = sourcesApi(cfg);
+  const chosen = await chooseStore(
+    {
+      ...(kind ? { kind } : {}),
+      ...(opts.server ? { server: opts.server } : {}),
+      ...(opts.bucket ? { bucket: opts.bucket } : {}),
+      ...(opts.region ? { region: opts.region } : {}),
+      ...(opts.accountId ? { accountId: opts.accountId } : {}),
+      ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
+      ...(opts.readAccessKeyId && opts.readSecretAccessKey
+        ? {
+            read: {
+              access_key_id: opts.readAccessKeyId,
+              secret_access_key: opts.readSecretAccessKey,
+            },
+          }
+        : {}),
+      ...(opts.tokenSecret ? { tokenSecret: opts.tokenSecret } : {}),
+      ...(opts.clearTokenSecret ? { clearTokenSecret: true } : {}),
+      ...(agent ? { agent } : {}),
+      ...(opts.yes || opts.json ? { yes: true } : {}),
+    },
+    {
+      ...(sources ? { sources } : {}),
+      ...(current ? { current } : {}),
+      say: (line) => {
+        if (!opts.json) console.log(line);
       },
-      undefined,
-    ));
-  if (kind === "hosted") {
-    if (opts.tokenSecret || opts.clearTokenSecret) {
-      throw new CliUsageError("the token secret is a server's: only a server store has one");
-    }
-    return { kind };
-  }
-
-  let serverUrl: string | undefined;
-  if (kind === "server") {
-    const given = await ask.text(
-      {
-        message: "Server URL",
-        placeholder: "https://sessions.example.com",
-        validate: (value) =>
-          normalizeServerUrl(value) ? undefined : "An https:// URL (http:// only to localhost)",
-      },
-      opts.server,
-    );
-    serverUrl = normalizeServerUrl(given);
-    if (!serverUrl) throw new CliUsageError(`not a server URL: ${given}`);
-  }
-  const givenBucket = await askBucketUrl(
-    ask,
-    opts.bucket,
-    kind === "server" ? "The bucket the server writes" : "Bucket",
+    },
   );
-  const url = normalizeBucketUrl(givenBucket);
-  if (!url) throw new CliUsageError(`not a bucket URL: ${givenBucket}`);
-  const r2 = url.startsWith("r2://");
-  let region: string | undefined;
-  let accountId: string | undefined;
-  let endpoint = opts.endpoint;
-  if (r2) {
-    if (!endpoint) {
-      accountId = (
-        await ask.text(
-          { message: "Cloudflare account id", validate: required("The account id") },
-          opts.accountId,
-        )
-      ).trim();
-    }
-  } else {
-    region = (
-      await ask.text(
-        { message: "AWS region", initialValue: "us-east-1", validate: required("The region") },
-        opts.region,
-      )
-    ).trim();
-    endpoint ??= (
-      await ask.text(
-        {
-          message: "S3-compatible endpoint (blank for AWS)",
-          placeholder: "https://minio.internal:9000",
-          initialValue: "",
-        },
-        undefined,
-      )
-    ).trim();
+  if (!chosen) {
+    console.log("Cancelled; the org's session store is unchanged.");
+    return;
   }
-  // The URL matched normalizeBucketUrl, which bucketOfStorage parses.
-  const parsed = bucketOfStorage({ url, ...(endpoint ? { endpoint } : {}) }) as NonNullable<
-    ReturnType<typeof bucketOfStorage>
-  >;
-  const read: KeyPair =
-    (opts.readAccessKeyId && opts.readSecretAccessKey
-      ? { access_key_id: opts.readAccessKeyId, secret_access_key: opts.readSecretAccessKey }
-      : undefined) ??
-    envCredentials("DOSU_SOURCE") ??
-    (await askKeyPair(ask, "Dosu's read-only keys (GetObject + ListBucket)", undefined));
-
-  let tokenSecret = opts.clearTokenSecret
-    ? undefined
-    : (opts.tokenSecret ?? process.env.DOSU_STORE_TOKEN_SECRET);
-  // Dosu keeps the secret it has when this is the same server and none is given.
-  const keeps =
-    current?.kind === "server" && current.issues_tokens && current.server_url === serverUrl;
-  if (kind === "server" && tokenSecret === undefined && !opts.clearTokenSecret && !opts.yes) {
-    tokenSecret =
-      (
-        await ask.text(
-          {
-            message: keeps
-              ? "The server's SESSIONDB_TOKEN_SECRET (blank: keep the one Dosu has)"
-              : "The server's SESSIONDB_TOKEN_SECRET, so Dosu signs each member's token (blank: you hand out tokens yourself)",
-            mask: true,
-            initialValue: "",
-          },
-          undefined,
-        )
-      ).trim() || undefined;
+  const store = await setStore(api, chosen.body);
+  if (opts.json) {
+    printResult(store, opts);
+    return;
   }
-  if (kind !== "server" && (tokenSecret || opts.clearTokenSecret)) {
-    throw new CliUsageError("the token secret is a server's: only a server store has one");
-  }
-  return {
-    kind,
-    ...(serverUrl ? { server_url: serverUrl } : {}),
-    bucket_kind: r2 ? "r2" : "s3",
-    bucket: parsed.bucket,
-    prefix: parsed.prefix,
-    ...(region ? { region } : {}),
-    ...(accountId ? { account_id: accountId } : {}),
-    ...(endpoint ? { endpoint } : {}),
-    ...read,
-    ...(tokenSecret ? { token_secret: tokenSecret } : {}),
-    ...(opts.clearTokenSecret ? { clear_token_secret: true } : {}),
-  };
+  console.log(`${pc.green("✓")} The org's sessions go to ${describeStore(store)}.`);
+  for (const note of storeNotes(store)) console.log(pc.dim(`  ${note}`));
 }
 
 function setupCommand(): Command {
   return new Command("setup")
     .description(
-      "Set where the org's sessions go (org admins): Dosu's sessiondb (--hosted), the org's sessiondb server (--server, with the bucket it writes), or a bucket members write directly (--bucket). Dosu gets a read-only key to the bucket; members never see it. Every member's 'dosu setup' then enrolls for their own folder",
+      "Set where the org's sessions live (org admins): Dosu's sessiondb (--hosted), the org's sessiondb server (--server, with the bucket it writes), or the org's bucket (--bucket), which members write directly and other tools (Datadog, CI, scripts) can drop raw logs in. Dosu gets a READ-ONLY key to the bucket and says what is there before the store is set (--agent names the raw files' format instead of detecting it per file); members never see that key. Anything written into the bucket reaches the org's memory, so a write key to it can add to that memory. Every member's 'dosu setup' then asks whether their machine ships there",
     )
     .option("--hosted", "Dosu's sessiondb")
     .option("--server <url>", "The org's sessiondb server, https://sessions.example.com")
@@ -221,6 +114,10 @@ function setupCommand(): Command {
     )
     .option("--read-secret-access-key <secret>", "Secret for --read-access-key-id")
     .option(
+      "--agent <name>",
+      "A bucket store: the format of every raw file other tools drop in it, overriding Dosu's per-file detection (claude-code, cursor, codex, opencode, pi, gemini-cli, atif, datadog-trajectory, trajectory)",
+    )
+    .option(
       "--token-secret <secret>",
       "The server's SESSIONDB_TOKEN_SECRET, so Dosu signs member tokens (or DOSU_STORE_TOKEN_SECRET). Omitted, Dosu keeps the one it has for the same server",
     )
@@ -230,37 +127,7 @@ function setupCommand(): Command {
     )
     .option("-y, --yes", "Never prompt; every answer comes from flags, environment or defaults")
     .option("--json", "Output as JSON")
-    .action(async (opts: StoreSetupOptions) => {
-      const api = requireStoreApi(loadConfig());
-      const current = await orgStore(api);
-      const body = await storeRequest({ ...opts, yes: opts.yes || opts.json }, current);
-      let store: SessionStore;
-      try {
-        store = await api.set(body);
-      } catch (err) {
-        if (err instanceof SourcesApiError && err.status === 403) {
-          throw new CliUsageError("only an org admin can set the org's session store");
-        }
-        throw err;
-      }
-      if (opts.json) {
-        printResult(store, opts);
-        return;
-      }
-      console.log(`${pc.green("✓")} The org's sessions go to ${describeStore(store)}.`);
-      if (store.kind === "bucket") {
-        console.log(
-          pc.dim(
-            `  Give each member a write key scoped to ${store.url}/owners/<their folder>/ by bucket policy; one shared key lets members read each other's folders.`,
-          ),
-        );
-      } else if (store.kind === "server" && !store.issues_tokens) {
-        console.log(
-          pc.dim("  Give each member a token of their own from the server's SESSIONDB_TOKENS."),
-        );
-      }
-      console.log(pc.dim("  Members run 'dosu setup' (or 'dosu sources store join') to enroll."));
-    });
+    .action(runStoreSetup);
 }
 
 // --- status ------------------------------------------------------------------
@@ -290,6 +157,13 @@ function statusCommand(): Command {
         `${describeStore(store)}${store.configured ? "" : " (the default; no admin has set one)"}`,
       );
       if (store.url) console.log(pc.dim(`  bucket: ${store.url}`));
+      if (store.kind === "bucket" && store.raw_source_id) {
+        console.log(
+          pc.dim(
+            `  raw logs other tools drop in it: ${store.raw_agent ? `read as ${store.raw_agent}` : "each file's format detected"}`,
+          ),
+        );
+      }
       console.log(
         pc.dim(
           store.issues_tokens

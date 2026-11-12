@@ -3,7 +3,7 @@
  * from it, so what one of them can reach, the other can too. */
 
 import { CliUsageError } from "../cli/errors";
-import { normalizeServerUrl } from "./server-wizard";
+import { normalizeServerUrl } from "./server-client";
 
 export interface EnvServer {
   url: string;

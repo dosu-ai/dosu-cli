@@ -1,18 +1,18 @@
-/** `dosu sources connect|status|sync|disconnect` against a faked `/v1/memory/sources` and a
- * faked sessiondb server (which says what bucket it writes): what each sends, what it prints,
- * and what it keeps in config.json. */
+/** `dosu sources setup|status|list|sync|disconnect` against a faked Dosu (`/v1/memory/store`,
+ * `/v1/memory/sources`), a faked sessiondb server and an in-memory bucket: where setup sends a
+ * machine's sessions (always the org's store, set only by an org admin), what each command sends
+ * and prints, and what it keeps in config.json. */
 
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
 import type { BucketTarget, ServerTarget, SessionTarget } from "../config/schema";
 import { fakeS3 } from "../shipper/fake-s3.test-utils";
-import type { SourceStatus } from "../sources/api";
-import { parseStdinCredentials, sourcesCommand, wizardInputFromOptions } from "./sources";
+import type { Detection, Enrollment, SessionStore, SourceStatus } from "../sources/api";
+import { sourcesCommand } from "./sources";
 
 let home: string;
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -77,7 +77,7 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
-/** The calls that reached Dosu (the server's storage lookups are left out). */
+/** The calls that reached Dosu (the server's and the bucket's are left out). */
 function apiCalls(): Array<[string, RequestInit?]> {
   return fetchImpl.mock.calls.filter(([url]) => url.startsWith("https://api.dosu.test"));
 }
@@ -90,15 +90,10 @@ function calls(): Array<{ method: string; path: string; body?: unknown }> {
   }));
 }
 
-/** What Dosu's own sessiondb answers `GET /v1/me`; a test changes it to refuse the token. */
-let hostedServerAnswers: () => Response = () =>
-  json({ owner: "u-42", storage: { url: "r2://sessiondb-prod/sessions", account_id: "acct" } });
-
-/** Dosu answers with `impl`; the sessiondb servers say what bucket they write. */
+/** Dosu answers with `impl`; the sessiondb server says what bucket it writes. */
 function dosuAnswers(impl: Fetch): void {
   fetchImpl.mockImplementation(async (url, init) => {
     if (url.startsWith(SERVER.url)) return json({ owner: "james", storage });
-    if (url.startsWith("https://sessiondb.dosu.test")) return hostedServerAnswers();
     return impl(url, init);
   });
 }
@@ -109,11 +104,11 @@ beforeEach(() => {
   vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
   vi.stubEnv("DOSU_DEV", undefined);
   vi.stubEnv("DOSU_BACKEND_URL_OVERRIDE", "https://api.dosu.test");
-  vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", undefined);
-  vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", undefined);
+  for (const k of ["DOSU_SOURCE", "DOSU_BUCKET"]) {
+    vi.stubEnv(`${k}_ACCESS_KEY_ID`, undefined);
+    vi.stubEnv(`${k}_SECRET_ACCESS_KEY`, undefined);
+  }
   storage = { ...SERVER_STORAGE };
-  hostedServerAnswers = () =>
-    json({ owner: "u-42", storage: { url: "r2://sessiondb-prod/sessions", account_id: "acct" } });
   fetchImpl = vi.fn<Fetch>();
   dosuAnswers(async () => json({ sources: [] }));
   vi.stubGlobal("fetch", fetchImpl);
@@ -142,262 +137,222 @@ function savedSourceId(): string | undefined {
   return loadConfig().targets?.find((t) => t.name === "team")?.source_id;
 }
 
-describe("sources setup --hosted", () => {
-  const HOSTED = {
-    server_url: "https://sessiondb.dosu.test/",
-    token: "eyJ.hosted.token",
-    owner: "u-42",
-    expires_at: "2027-01-30T00:00:00.000Z",
-    source: source({
-      id: "22222222-2222-4222-8222-222222222222",
-      name: "Dosu sessiondb",
-      kind: "r2",
-      bucket: "sessiondb-prod",
-      prefix: "sessions",
-      owner: "u-42",
-      url: "r2://sessiondb-prod/sessions",
-      region: null,
-      account_id: "acct",
-    }),
-  };
+// --- setup: the org's store ----------------------------------------------------
 
-  it("asks Dosu once, tries the token on Dosu's server, and saves the default target; nothing pasted", async () => {
+const ENDPOINT = "http://s3.test:9000";
+const HOSTED_SERVER = "https://sessiondb.dosu.test";
+
+const BUCKET_STORE: SessionStore = {
+  kind: "bucket",
+  configured: true,
+  server_url: null,
+  url: "s3://acme-sessions/agents",
+  bucket_kind: "s3",
+  bucket: "acme-sessions",
+  prefix: "agents",
+  region: "us-east-1",
+  account_id: null,
+  endpoint: ENDPOINT,
+  issues_tokens: false,
+  updated_at: null,
+  owner: null,
+  source_id: null,
+  members: null,
+};
+
+/** What an org with no store of its own gets where the installation runs a sessiondb. */
+const HOSTED_DEFAULT: SessionStore = {
+  ...BUCKET_STORE,
+  kind: "hosted",
+  configured: false,
+  server_url: HOSTED_SERVER,
+  url: "r2://sessiondb/sessions",
+  endpoint: null,
+  issues_tokens: true,
+};
+
+const FOUND: Detection = {
+  sessiondb: false,
+  layout_created_by: null,
+  raw_files: 4,
+  agents: { codex: 4 },
+  undetected: [],
+  dated_prefix: null,
+  scan_raw: true,
+  raw_scanned_by: null,
+  raw_unavailable: null,
+};
+
+/** Dosu, its hosted sessiondb and the org's bucket: `store` is the org's (undefined: 404, no
+ * store and no hosted sessiondb, until an admin's PUT sets one), `admin` whether the login is an
+ * org admin, which Dosu says by listing the store's members. */
+function org(options: { store?: SessionStore; admin?: boolean }) {
+  let store = options.store;
+  const s3 = fakeS3(ENDPOINT, "acme-sessions");
+  fetchImpl.mockImplementation(async (url, init) => {
+    if (url.startsWith(ENDPOINT)) return s3.fetch(url, init);
+    if (url.startsWith(HOSTED_SERVER)) {
+      return json({ owner: "o-org1.u-42", storage: { url: "r2://sessiondb/sessions" } });
+    }
+    const method = init?.method ?? "GET";
+    const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+    const path = url.replace("https://api.dosu.test", "");
+    if (path === "/v1/memory/sources/detect") return json(FOUND);
+    if (path === "/v1/memory/store/enroll") {
+      if (!store) return json({ detail: "no session store" }, 404);
+      const enrollment: Enrollment = {
+        kind: store.kind,
+        owner: (body.owner as string | undefined) ?? "o-org1.u-42",
+        server_url: store.server_url,
+        token: store.issues_tokens ? "minted" : null,
+        expires_at: store.issues_tokens ? "2027-02-01T00:00:00Z" : null,
+        url: store.url,
+        bucket_kind: store.bucket_kind,
+        bucket: store.bucket,
+        prefix: store.prefix,
+        region: store.region,
+        account_id: store.account_id,
+        endpoint: store.endpoint,
+        source: source({ id: "src-member", owner: (body.owner as string) ?? "o-org1.u-42" }),
+      };
+      return json(enrollment, 201);
+    }
+    if (path.startsWith("/v1/memory/store") && method === "PUT") {
+      const { deployment_id: _d, access_key_id: _a, secret_access_key: _s, agent, ...rest } = body;
+      store = {
+        ...BUCKET_STORE,
+        ...(rest as Partial<SessionStore>),
+        configured: true,
+        url:
+          body.kind === "hosted"
+            ? HOSTED_DEFAULT.url
+            : `${body.bucket_kind}://${body.bucket}${body.prefix ? `/${body.prefix}` : ""}`,
+        server_url: body.kind === "hosted" ? HOSTED_SERVER : null,
+        issues_tokens: body.kind === "hosted",
+        members: [],
+        raw_source_id: body.kind === "bucket" ? "src-raw" : null,
+        raw_agent: (agent as string | undefined) ?? null,
+      };
+      return json(store);
+    }
+    if (path.startsWith("/v1/memory/store")) {
+      if (!store) return json({ detail: "no session store" }, 404);
+      // Dosu lists the store's members to org admins only.
+      return json(options.admin ? { ...store, members: store.members ?? [] } : store);
+    }
+    return json({ detail: "unexpected" }, 500);
+  });
+  return s3;
+}
+
+const WRITE = ["--write-access-key-id", "AKIDWRITE", "--write-secret-access-key", "writesecret"];
+const READ = ["--read-access-key-id", "AKIDREAD", "--read-secret-access-key", "readsecret"];
+
+/** Dosu's calls, as `METHOD path` without the query. */
+function steps(): string[] {
+  return calls().map((c) => `${c.method} ${c.path.split("?")[0]}`);
+}
+
+describe("sources setup: an org with a store", () => {
+  it("a member ships to the org's bucket: their folder is claimed, the write key tried, the target saved", async () => {
     configure([]);
-    dosuAnswers(async () => json(HOSTED, 201));
+    const s3 = org({ store: BUCKET_STORE });
 
-    await dosu("setup", "--hosted");
+    await dosu("setup", "--owner", "james", ...WRITE, "--yes");
 
-    expect(calls()).toEqual([
-      { method: "POST", path: "/v1/memory/sources/hosted", body: { deployment_id: "dep1" } },
-    ]);
-    // The token went to the server it is for, as a pasted one would.
-    const [serverUrl, serverInit] = fetchImpl.mock.calls.find(([url]) =>
-      url.startsWith("https://sessiondb.dosu.test"),
-    ) as [string, RequestInit];
-    expect(serverUrl).toBe("https://sessiondb.dosu.test/v1/me");
-    expect(new Headers(serverInit.headers).get("authorization")).toBe("Bearer eyJ.hosted.token");
+    expect(steps()).toEqual(["GET /v1/memory/store", "POST /v1/memory/store/enroll"]);
+    expect(calls()[1]?.body).toEqual({ deployment_id: "dep1", owner: "james" });
+    expect([...s3.objects.keys()]).toContain("agents/owners/james/.probe");
     const cfg = loadConfig();
     expect(cfg.targets).toEqual([
       {
-        name: "dosu",
-        url: "https://sessiondb.dosu.test",
-        owner: "u-42",
-        token: "eyJ.hosted.token",
-        source_id: HOSTED.source.id,
-        hosted: true,
-        token_expires_at: "2027-01-30T00:00:00.000Z",
-      },
+        kind: "bucket",
+        name: "org",
+        url: "s3://acme-sessions/agents",
+        owner: "james",
+        region: "us-east-1",
+        endpoint: ENDPOINT,
+        access_key_id: "AKIDWRITE",
+        secret_access_key: "writesecret",
+        source_id: "src-member",
+      } satisfies BucketTarget,
     ]);
-    expect(cfg.default_target).toBe("dosu");
-    expect(out.join("\n")).toContain("Sessions ship to Dosu's sessiondb as u-42");
-    expect(out.join("\n")).not.toContain("--target");
+    expect(cfg.default_target).toBe("org");
+    expect(out.join("\n")).toContain(
+      "Sessions ship to the org's bucket s3://acme-sessions/agents as james.",
+    );
   });
 
-  it("keeps an existing server as the default unless asked, and replaces an earlier hosted target in place", async () => {
-    configure([SERVER, { ...SERVER, name: "dosu", hosted: true, token: "old" }]);
-    saveConfig({ ...loadConfig(), default_target: "team" });
-    dosuAnswers(async () => json(HOSTED, 201));
-
-    await dosu("setup", "--hosted");
-
-    const cfg = loadConfig();
-    expect(cfg.targets?.map((t) => [t.name, (t as ServerTarget).token])).toEqual([
-      ["team", "sdb_test"],
-      ["dosu", "eyJ.hosted.token"],
-    ]);
-    expect(cfg.default_target).toBe("team");
-    expect(out.join("\n")).toContain("'dosu sync --target dosu'");
-  });
-
-  it("--json prints the target without its token, and the source", async () => {
+  it("--no-ship joins nothing, and --json says so", async () => {
     configure([]);
-    dosuAnswers(async () => json(HOSTED, 201));
-
-    await dosu("setup", "--hosted", "--json");
-
-    const printed = JSON.parse(out.join("\n"));
-    expect(printed.target).toMatchObject({ name: "dosu", token: "***", hosted: true });
-    expect(printed.source.id).toBe(HOSTED.source.id);
-  });
-
-  it("says so when this Dosu hosts no sessiondb, and when it could not set one up", async () => {
-    configure([]);
-    dosuAnswers(async () => json({ detail: "this Dosu has no hosted sessiondb" }, 404));
-    await expect(dosu("setup", "--hosted")).rejects.toThrow(
-      /does not host a sessiondb; sessions need your own server/,
-    );
-    dosuAnswers(async () =>
-      json({ detail: "Dosu's sessiondb is misconfigured: SESSIONDB_TOKEN_SECRET" }, 503),
-    );
-    await expect(dosu("setup", "--hosted")).rejects.toThrow(
-      /could not set up its sessiondb for you: HTTP 503: Dosu's sessiondb is misconfigured/,
-    );
+    org({ store: BUCKET_STORE });
+    await dosu("setup", "--no-ship", "--json");
+    expect(steps()).toEqual(["GET /v1/memory/store"]);
+    expect(JSON.parse(out.join("\n"))).toEqual({ store: BUCKET_STORE, ship: false });
     expect(loadConfig().targets ?? []).toEqual([]);
   });
 
-  it("saves nothing when Dosu's server refuses the token it was minted, or is down", async () => {
+  it("refuses flags that would change the org's store, whoever runs it", async () => {
     configure([]);
-    dosuAnswers(async () => json(HOSTED, 201));
-    hostedServerAnswers = () =>
-      json({ error: { code: "unauthorized", message: "a valid token is required" } }, 401);
-    await expect(dosu("setup", "--hosted")).rejects.toThrow(
-      /did not accept the token Dosu minted; that is Dosu's to fix/,
-    );
-    hostedServerAnswers = () => json({ owner: "u-7", storage: { url: "r2://x" } });
-    await expect(dosu("setup", "--hosted")).rejects.toThrow(/read the token as u-7, not u-42/);
-    hostedServerAnswers = () => {
-      throw new TypeError("fetch failed");
-    };
-    await expect(dosu("setup", "--hosted")).rejects.toThrow(/Nothing was saved; try again later/);
-    expect(loadConfig().targets ?? []).toEqual([]);
-  });
-
-  it("needs a login, and is not combined with a server of your own", async () => {
-    configure([], false);
-    await expect(dosu("setup", "--hosted")).rejects.toThrow(/not logged in to Dosu/);
-    configure([]);
-    await expect(dosu("setup", "--hosted", "--server", "https://x.example.com")).rejects.toThrow(
-      /--hosted is Dosu's server/,
-    );
-    expect(apiCalls()).toEqual([]);
+    org({ store: BUCKET_STORE, admin: true });
+    for (const flags of [
+      ["--bucket", "s3://mine"],
+      ["--hosted"],
+      ["--bucket", "s3://acme-sessions/agents", "--agent", "codex", ...READ],
+    ]) {
+      await expect(dosu("setup", ...flags, "--yes")).rejects.toThrow(
+        "the org's sessions already go to the org's bucket s3://acme-sessions/agents; an org admin changes that with 'dosu sources store setup'",
+      );
+    }
+    expect(steps().filter((s) => !s.startsWith("GET"))).toEqual([]);
   });
 });
 
-describe("sources setup --bucket", () => {
-  const ENDPOINT = "http://s3.test:9000";
-  const BUCKET: BucketTarget = {
-    kind: "bucket",
-    name: "mine",
-    url: "s3://acme-sessions/agents",
-    owner: "james",
-    region: "us-east-1",
-    endpoint: ENDPOINT,
-    access_key_id: "AKIDWRITE",
-    secret_access_key: "writesecret",
-  };
-
-  /** The bucket answers its own requests; Dosu answers the rest with `impl`. */
-  function bucketAnswers(impl: Fetch) {
-    const s3 = fakeS3(ENDPOINT, "acme-sessions");
-    fetchImpl.mockImplementation(async (url, init) =>
-      url.startsWith(ENDPOINT) ? s3.fetch(url, init) : impl(url, init),
-    );
-    return s3;
-  }
-
-  it("checks the write key against the bucket, saves the target, and connects it with Dosu's own keys", async () => {
+describe("sources setup: no store, a member", () => {
+  it("uses Dosu's sessiondb where it runs: enrolled, the minted token tried, nothing pasted", async () => {
     configure([]);
-    const s3 = bucketAnswers(async (_url, init) =>
-      init?.method === "POST" ? json(source({ endpoint: ENDPOINT }), 201) : json({ sources: [] }),
-    );
+    org({ store: HOSTED_DEFAULT, admin: false });
 
-    await dosu(
-      "setup",
-      "--bucket",
-      "s3://acme-sessions/agents",
-      "--endpoint",
-      ENDPOINT,
-      "--owner",
-      "james",
-      "--write-access-key-id",
-      "AKIDWRITE",
-      "--write-secret-access-key",
-      "writesecret",
-      "--read-access-key-id",
-      "AKIDREAD",
-      "--read-secret-access-key",
-      "readsecret",
-      "--name",
-      "mine",
-      "--json",
-    );
+    await dosu("setup", "--yes", "--json");
 
-    expect([...s3.objects.keys()]).toContain("agents/owners/james/.probe");
-    const cfg = loadConfig();
-    expect(cfg.targets).toEqual([{ ...BUCKET, source_id: source().id }]);
-    expect(cfg.default_target).toBe("mine");
-    const posts = calls().filter((c) => c.method === "POST");
-    expect(posts).toEqual([
-      {
-        method: "POST",
-        path: "/v1/memory/sources",
-        body: expect.objectContaining({
-          kind: "s3",
-          bucket: "acme-sessions",
-          prefix: "agents",
-          owner: "james",
-          endpoint: ENDPOINT,
-          access_key_id: "AKIDREAD",
-          secret_access_key: "readsecret",
-        }),
-      },
-    ]);
-    const printed = out.join("\n");
-    expect(printed).toContain('"secret_access_key": "***"');
-    expect(printed).not.toContain("writesecret");
-  });
-
-  it("connect on a bucket target tells Dosu about that bucket, asking no server", async () => {
-    configure([BUCKET]);
-    bucketAnswers(async (_url, init) =>
-      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
-    );
-
-    await dosu("connect", "--access-key-id", "AKIDREAD", "--secret-access-key", "readsecret");
-
-    expect(calls().find((c) => c.method === "POST")?.body).toMatchObject({
-      kind: "s3",
-      bucket: "acme-sessions",
-      prefix: "agents",
-      owner: "james",
-      region: "us-east-1",
-      endpoint: ENDPOINT,
-      access_key_id: "AKIDREAD",
+    expect(steps()).toEqual(["GET /v1/memory/store", "POST /v1/memory/store/enroll"]);
+    const printed = JSON.parse(out.join("\n"));
+    expect(printed.target).toMatchObject({
+      name: "org",
+      url: HOSTED_SERVER,
+      owner: "o-org1.u-42",
+      token: "***",
+      store: true,
+      hosted: true,
     });
-    expect(fetchImpl.mock.calls.some(([url]) => url.startsWith(SERVER.url))).toBe(false);
-    expect(loadConfig().targets?.[0]?.source_id).toBe(source().id);
+    expect(out.join("\n")).not.toContain("minted");
+    expect(loadConfig().targets?.[0]).toMatchObject({ token: "minted", source_id: "src-member" });
   });
 
-  it("status finds a bucket target's source by its own URL and owner", async () => {
-    configure([BUCKET]);
-    bucketAnswers(async () => json({ sources: [source()] }));
-
-    await dosu("status");
-
-    expect(out.join("\n")).toContain("mine → s3://acme-sessions/agents");
-  });
-
-  it("--server prints its target with the token masked, as --bucket masks the write secret", async () => {
+  it("cannot choose a bucket: only an org admin sets where sessions live", async () => {
     configure([]);
-    dosuAnswers(async (_url, init) =>
-      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    org({ store: HOSTED_DEFAULT, admin: false });
+    await expect(dosu("setup", "--bucket", "s3://mine", ...READ, "--yes")).rejects.toThrow(
+      "only an org admin sets where the org's sessions live",
     );
-
-    await dosu(
-      "setup",
-      "--server",
-      SERVER.url,
-      "--token",
-      "sdb_secret",
-      "--read-access-key-id",
-      "AKIDREAD",
-      "--read-secret-access-key",
-      "readsecret",
-      "--json",
-    );
-
-    const printed = out.join("\n");
-    expect(printed).toContain('"token": "***"');
-    expect(printed).not.toContain("sdb_secret");
+    expect(steps().filter((s) => !s.startsWith("GET"))).toEqual([]);
   });
 
-  it("without --json, starts Dosu's first read of the new bucket source", async () => {
+  it("is told an org admin must choose, and exits non-zero, when there is nowhere at all", async () => {
     configure([]);
-    vi.stubEnv("DOSU_BUCKET_ACCESS_KEY_ID", "AKIDWRITE");
-    vi.stubEnv("DOSU_BUCKET_SECRET_ACCESS_KEY", "writesecret");
-    bucketAnswers(async (_url, init) =>
-      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
+    org({ admin: false });
+    await expect(dosu("setup", "--yes")).rejects.toThrow(
+      /Only an org admin chooses where the org's sessions live: by running .*dosu sources store setup/,
     );
+    expect(steps()).toEqual(["GET /v1/memory/store"]);
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
+});
+
+describe("sources setup: no store, an org admin", () => {
+  it("sets the org's bucket after Dosu looked (with --agent), then ships this machine to its own folder", async () => {
+    configure([]);
+    const s3 = org({ store: HOSTED_DEFAULT, admin: true });
 
     await dosu(
       "setup",
@@ -407,163 +362,102 @@ describe("sources setup --bucket", () => {
       "us-east-1",
       "--endpoint",
       ENDPOINT,
+      ...READ,
+      "--agent",
+      "codex",
       "--owner",
       "james",
-      "--read-access-key-id",
-      "AKIDREAD",
-      "--read-secret-access-key",
-      "readsecret",
+      ...WRITE,
       "--yes",
     );
 
-    expect(loadConfig().targets?.[0]).toMatchObject({ ...BUCKET, name: "bucket" });
-    expect(calls().map((c) => `${c.method} ${c.path}`)).toContain(
-      `POST /v1/memory/sources/${source().id}/sync`,
-    );
+    expect(steps()).toEqual([
+      "GET /v1/memory/store",
+      "POST /v1/memory/sources/detect",
+      "PUT /v1/memory/store",
+      "POST /v1/memory/store/enroll",
+    ]);
+    expect(calls()[1]?.body).toMatchObject({ bucket: "acme-sessions", agent: "codex" });
+    expect(calls()[2]?.body).toEqual({
+      deployment_id: "dep1",
+      kind: "bucket",
+      bucket_kind: "s3",
+      bucket: "acme-sessions",
+      prefix: "agents",
+      region: "us-east-1",
+      endpoint: ENDPOINT,
+      access_key_id: "AKIDREAD",
+      secret_access_key: "readsecret",
+      agent: "codex",
+    });
+    expect([...s3.objects.keys()]).toContain("agents/owners/james/.probe");
+    const text = out.join("\n");
+    expect(text).toContain("s3://acme-sessions/agents: 4 raw files (all read as codex)");
+    expect(text).toContain("The org's sessions go to the org's bucket s3://acme-sessions/agents.");
+    expect(text).toContain("read as codex");
+    expect(text).toContain("a write key to it can add to that memory");
+    expect(text).toContain("Sessions ship to the org's bucket s3://acme-sessions/agents as james.");
+    expect(loadConfig().targets?.[0]).toMatchObject({ name: "org", access_key_id: "AKIDWRITE" });
   });
 
-  it("refuses --bucket with a server's flags, with --hosted, or half a write key", async () => {
-    await expect(dosu("setup", "--bucket", "s3://a", "--server", SERVER.url)).rejects.toThrow(
-      /--server and --token are for a server/,
+  it("--hosted --no-ship sets Dosu's sessiondb for the org and ships nothing from here", async () => {
+    configure([]);
+    org({ store: HOSTED_DEFAULT, admin: true });
+
+    await dosu("setup", "--hosted", "--no-ship");
+
+    expect(steps()).toEqual(["GET /v1/memory/store", "PUT /v1/memory/store"]);
+    expect(calls()[1]?.body).toEqual({ deployment_id: "dep1", kind: "hosted" });
+    expect(out.join("\n")).toContain("The org's sessions go to Dosu's sessiondb.");
+    expect(out.join("\n")).toContain("This machine ships nothing");
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
+
+  it("keeps the hosted default under --yes when it names no store", async () => {
+    configure([]);
+    org({ store: HOSTED_DEFAULT, admin: true });
+    await dosu("setup", "--yes", "--no-ship");
+    expect(steps().filter((s) => !s.startsWith("GET"))).toEqual([]);
+  });
+
+  it("is sent to 'dosu sources store setup' when Dosu has no store to offer at all", async () => {
+    configure([]);
+    org({ admin: true });
+    await expect(dosu("setup", "--yes")).rejects.toThrow(/dosu sources store setup/);
+    expect(steps()).toEqual(["GET /v1/memory/store"]);
+  });
+});
+
+describe("sources setup: flags", () => {
+  it("refuses what does not go together, before calling Dosu", async () => {
+    await expect(dosu("setup", "--hosted", "--bucket", "s3://a")).rejects.toThrow(
+      /--hosted is Dosu's/,
     );
-    await expect(dosu("setup", "--hosted", "--bucket", "s3://a")).rejects.toThrow(/--bucket/);
-    await expect(
-      dosu("setup", "--bucket", "s3://a", "--write-access-key-id", "AKID"),
-    ).rejects.toThrow(/go together/);
+    await expect(dosu("setup", "--hosted", "--token", "sdb_x")).rejects.toThrow(
+      /--hosted is Dosu's sessiondb/,
+    );
+    await expect(dosu("setup", "--write-access-key-id", "AKID")).rejects.toThrow(/go together/);
+    await expect(dosu("setup", "--read-access-key-id", "AKID")).rejects.toThrow(/go together/);
+    await expect(dosu("setup", "--agent", "notepad")).rejects.toThrow(/--agent must be one of/);
+    await expect(dosu("setup", "--hosted", "--agent", "codex")).rejects.toThrow(
+      /it goes with --bucket/,
+    );
+    expect(apiCalls()).toEqual([]);
+  });
+
+  it("needs a login", async () => {
+    configure([], false);
+    await expect(dosu("setup", "--hosted")).rejects.toThrow(/not logged in to Dosu/);
   });
 });
 
 describe("sources connect", () => {
-  it("registers the target with the keys given, and keeps the source id on it", async () => {
-    dosuAnswers(async (_url, init) =>
-      init?.method === "POST"
-        ? json(source({ layout_created_by: "dosu-cli/1.0" }), 201)
-        : json({ sources: [] }),
-    );
-
-    await dosu("connect", "--access-key-id", "AKIAREAD", "--secret-access-key", "readsecret");
-
-    expect(calls()).toEqual([
-      { method: "GET", path: "/v1/memory/sources?deployment_id=dep1" },
-      {
-        method: "POST",
-        path: "/v1/memory/sources",
-        body: {
-          deployment_id: "dep1",
-          kind: "s3",
-          bucket: "acme-sessions",
-          prefix: "agents",
-          owner: "james",
-          region: "us-east-1",
-          access_key_id: "AKIAREAD",
-          secret_access_key: "readsecret",
-          name: "team",
-        },
-      },
-    ]);
-    expect(apiCalls()[1]?.[1]?.headers).toMatchObject({ "X-Dosu-API-Key": "sk_test" });
-    expect(savedSourceId()).toBe(source().id);
-    expect(out.join("\n")).toContain('Source "team" connected');
-    expect(out.join("\n")).toContain("keys from flags");
-    expect(out.join("\n")).toContain("layout written by dosu-cli/1.0");
-  });
-
-  it("takes Dosu's keys from DOSU_SOURCE_*, with --lag and --name", async () => {
-    dosuAnswers(async (_url, init) =>
-      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
-    );
-    vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
-    vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
-
-    await dosu("connect", "--lag", "60", "--name", "acme bucket");
-
-    expect(calls()[1]?.body).toMatchObject({
-      access_key_id: "AKIAENV",
-      secret_access_key: "envsecret",
-      lag_seconds: 60,
-      name: "acme bucket",
-    });
-    expect(out.join("\n")).toContain("keys from DOSU_SOURCE_* environment");
-  });
-
-  it("--endpoint tells Dosu to read through a different endpoint than the server writes to", async () => {
-    storage = { ...SERVER_STORAGE, endpoint: "http://127.0.0.1:9000" };
-    dosuAnswers(async (_url, init) =>
-      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
-    );
-
-    await dosu(
-      "connect",
-      "--endpoint",
-      "http://minio.internal:9000",
-      "--access-key-id",
-      "AKIAREAD",
-      "--secret-access-key",
-      "readsecret",
-    );
-
-    expect(calls()[1]?.body).toMatchObject({ endpoint: "http://minio.internal:9000" });
-  });
-
-  it("reads the keys from stdin with --read-credentials-stdin", async () => {
-    dosuAnswers(async (_url, init) =>
-      init?.method === "POST" ? json(source(), 201) : json({ sources: [] }),
-    );
-    vi.spyOn(process, "stdin", "get").mockReturnValue(
-      Readable.from(["AKIASTDIN\nstdinsecret\n"]) as unknown as typeof process.stdin,
-    );
-
-    await dosu("connect", "--read-credentials-stdin");
-
-    expect(calls()[1]?.body).toMatchObject({
-      access_key_id: "AKIASTDIN",
-      secret_access_key: "stdinsecret",
-    });
-  });
-
-  it("says where the keys can come from when none were given", async () => {
-    await expect(dosu("connect")).rejects.toThrow(/no credentials for Dosu to read the bucket/);
-    expect(calls().map((c) => c.method)).toEqual(["GET"]);
-  });
-
-  it("reports an already-connected target instead of connecting it twice", async () => {
-    dosuAnswers(async () => json({ sources: [source()] }));
-
-    await dosu("connect");
-
-    expect(calls().map((c) => c.method)).toEqual(["GET"]);
-    expect(savedSourceId()).toBe(source().id);
-    expect(out.join("\n")).toContain("already connected");
-  });
-
-  it("turns the backend's refusal into the exact reason", async () => {
-    dosuAnswers(async (_url, init) =>
-      init?.method === "POST"
-        ? json({ detail: "AccessDenied listing owners/james/changes/" }, 400)
-        : json({ sources: [] }),
-    );
+  it("is gone: a bucket is the org's, set by an org admin", async () => {
     await expect(
-      dosu("connect", "--access-key-id", "AKIAREAD", "--secret-access-key", "readsecret"),
-    ).rejects.toThrow(/could not read s3:\/\/acme-sessions\/agents with .*AccessDenied/);
-    expect(savedSourceId()).toBeUndefined();
-  });
-
-  it("refuses a server that writes a folder on its own disk: Dosu cannot read that", async () => {
-    storage = { url: "file:///srv/sessions" };
-    vi.stubEnv("DOSU_SOURCE_ACCESS_KEY_ID", "AKIAENV");
-    vi.stubEnv("DOSU_SOURCE_SECRET_ACCESS_KEY", "envsecret");
-    await expect(dosu("connect")).rejects.toThrow(/not a bucket Dosu can read/);
-    expect(calls().map((c) => c.method)).toEqual(["GET"]);
-  });
-
-  it("needs a login: a source is Dosu reading on your behalf", async () => {
-    configure([SERVER], false);
-    await expect(dosu("connect")).rejects.toThrow(/not logged in to Dosu/);
-  });
-
-  it("asks for --target when several are configured", async () => {
-    configure([SERVER, { ...SERVER, name: "other", url: "https://other.example.com" }]);
-    await expect(dosu("connect")).rejects.toThrow(/several targets are configured \(team, other\)/);
+      dosu("connect", "--bucket", "s3://acme/logs", "--access-key-id", "x"),
+    ).rejects.toThrow(/'dosu sources connect' is gone: a bucket is always the org's/);
+    expect(apiCalls()).toEqual([]);
+    expect(sourcesCommand().helpInformation()).not.toMatch(/^\s+connect\b/m);
   });
 });
 
@@ -599,10 +493,12 @@ describe("sources status", () => {
 
     expect(calls()).toEqual([{ method: "GET", path: `/v1/memory/sources/${source().id}` }]);
     const text = out.join("\n");
-    expect(text).toContain("Target:     team → s3://acme-sessions/agents");
-    expect(text).toContain("Last sync:  3m ago · 4 processed");
-    expect(text).toContain("Cursor:     2026-10-22T00:00:00.000Z-abc");
-    expect(text).toContain("Behind:     2 changes · re-reads 300s of lag");
+    expect(text).toContain("Bucket:     team → s3://acme-sessions/agents");
+    expect(text).toContain(
+      "Folder:     owners/james/ · read 3m ago · 4 processed · 2 changes behind",
+    );
+    expect(text).toContain("Cursor:     2026-10-22T00:00:00.000Z-abc · re-reads 300s of lag");
+    expect(text).toContain("Raw files:  not read by this connection");
     expect(text).toContain("Last error: ReadTimeout (1 in a row)");
     expect(text).toMatch(/published\s+ingested\s+owners\/james\/changes/);
   });
@@ -627,8 +523,28 @@ describe("sources status", () => {
       url.endsWith("/gone") ? json({ detail: "not found" }, 404) : json({ sources: [] }),
     );
 
-    await expect(dosu("status")).rejects.toThrow(/is not connected to Dosu/);
+    await expect(dosu("status")).rejects.toThrow(/Dosu reads nothing through target team/);
     expect(savedSourceId()).toBeUndefined();
+  });
+
+  it("status finds a bucket target's source by its own URL and owner", async () => {
+    configure([
+      {
+        kind: "bucket",
+        name: "mine",
+        url: "s3://acme-sessions/agents",
+        owner: "james",
+        region: "us-east-1",
+        access_key_id: "AKIDWRITE",
+        secret_access_key: "writesecret",
+      },
+    ]);
+    dosuAnswers(async () => json({ sources: [source()] }));
+
+    await dosu("status");
+
+    expect(out.join("\n")).toContain("mine → s3://acme-sessions/agents");
+    expect(fetchImpl.mock.calls.some(([url]) => url.startsWith(SERVER.url))).toBe(false);
   });
 
   it("--all lists every source under the login", async () => {
@@ -658,7 +574,7 @@ describe("sources sync and disconnect", () => {
       ["GET", `/v1/memory/sources/${source().id}`],
       ["POST", `/v1/memory/sources/${source().id}/sync`],
     ]);
-    expect(out.join("\n")).toContain('Sync queued for "team"');
+    expect(out.join("\n")).toContain('Read queued for "team"');
   });
 
   it("disconnect --yes deletes the source and drops the id from config", async () => {
@@ -678,56 +594,155 @@ describe("sources sync and disconnect", () => {
   });
 });
 
-describe("parseStdinCredentials", () => {
-  it("accepts two lines, three lines, and JSON in either casing", () => {
-    expect(parseStdinCredentials("id\nsecret\n")).toEqual({
-      access_key_id: "id",
-      secret_access_key: "secret",
-    });
-    expect(parseStdinCredentials("id\nsecret\ntoken")).toEqual({
-      access_key_id: "id",
-      secret_access_key: "secret",
-      session_token: "token",
-    });
-    expect(
-      parseStdinCredentials('{"accessKeyId":"id","secretAccessKey":"secret","sessionToken":"t"}'),
-    ).toEqual({ access_key_id: "id", secret_access_key: "secret", session_token: "t" });
+describe("sources status and list: the folder and the raw files", () => {
+  const RAW_SOURCE = source({
+    id: "33333333-3333-4333-8333-333333333333",
+    name: "ci logs",
+    owner: "",
+    url: "s3://acme/ci",
+    scan_raw: true,
+    files: 12,
+    sessions: 9,
+    raw_synced_at: new Date(Date.now() - 2 * 60_000).toISOString(),
+    raw_listed: 14,
+    raw_imported: 3,
+    raw_remaining: 2,
+    raw_error: "AccessDenied: GetObject",
+    raw_error_count: 2,
+    recent_files: [
+      {
+        key: "ci/run-1.jsonl",
+        agent: "codex",
+        session_id: "s1",
+        size: 10,
+        shipped_bytes: 10,
+        outcome: "imported",
+        detail: null,
+        content_hash: null,
+        imported_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+      {
+        key: "ci/odd.jsonl",
+        agent: null,
+        session_id: "s2",
+        size: 10,
+        shipped_bytes: 0,
+        outcome: "unreadable",
+        detail: "no format matched",
+        content_hash: null,
+        imported_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+    ],
   });
 
-  it("rejects what it cannot read", () => {
-    expect(() => parseStdinCredentials("only-one-line")).toThrow(/line 1 .* line 2/);
-    expect(() => parseStdinCredentials("{not json")).toThrow(/not valid JSON/);
-    expect(() => parseStdinCredentials('{"access_key_id":"id"}')).toThrow(/needs access_key_id/);
-  });
-});
+  it("--source shows a connection with no target: its raw files, formats, last scan and error", async () => {
+    configure([]);
+    dosuAnswers(async (url) =>
+      url.endsWith(RAW_SOURCE.id) ? json(RAW_SOURCE) : json({ sources: [RAW_SOURCE] }),
+    );
 
-describe("wizardInputFromOptions", () => {
-  it("maps every flag to its wizard answer and leaves out what was not given", () => {
-    expect(wizardInputFromOptions({})).toEqual({});
-    expect(
-      wizardInputFromOptions({
-        server: "https://sessions.example.com",
-        token: "sdb_x",
-        name: "mine",
-        readAccessKeyId: "R",
-        readSecretAccessKey: "rs",
-        connect: false,
-        default: false,
-        yes: true,
+    await dosu("status", "--source", "ci logs");
+
+    const text = out.join("\n");
+    expect(text).toContain("Bucket:     s3://acme/ci");
+    expect(text).toContain("Folder:     none; only the raw files are read");
+    expect(text).toContain("Raw files:  12 files · 9 sessions · recent: codex ×1, unknown ×1");
+    expect(text).toContain("Last scan:  2m ago · 14 listed · 3 imported · 2 remaining");
+    expect(text).toContain("Raw error:  AccessDenied: GetObject (2 in a row)");
+    expect(text).toMatch(/unknown\s+unreadable\s+ci\/odd\.jsonl/);
+  });
+
+  it("with no target, the login's only connection; with several, asks which", async () => {
+    configure([]);
+    const pending = source({
+      ...RAW_SOURCE,
+      files: 0,
+      sessions: 0,
+      pending: true,
+      raw_error: null,
+      recent_files: [],
+    });
+    dosuAnswers(async (url) =>
+      url.endsWith(RAW_SOURCE.id) ? json(pending) : json({ sources: [pending] }),
+    );
+    await dosu("status");
+    expect(out.join("\n")).toContain("Raw files:  none yet · detected per file");
+    expect(out.join("\n")).toContain("Waiting for files: Dosu checks every 5 minutes.");
+
+    dosuAnswers(async () => json({ sources: [RAW_SOURCE, source()] }));
+    await expect(dosu("status")).rejects.toThrow(/2 connections; say which with --source/);
+    await expect(dosu("status", "--source", "nope")).rejects.toThrow(/no connection 'nope'/);
+    await expect(dosu("status", "--source", "x", "--target", "team")).rejects.toThrow(/give one/);
+    dosuAnswers(async () => json({ sources: [] }));
+    await expect(dosu("sync")).rejects.toThrow(/nothing connected/);
+  });
+
+  it("list shows what each connection reads, and waiting connections", async () => {
+    dosuAnswers(async () =>
+      json({
+        sources: [
+          source(),
+          RAW_SOURCE,
+          source({
+            id: "4",
+            name: "empty",
+            owner: "",
+            url: "s3://e",
+            scan_raw: true,
+            pending: true,
+          }),
+          source({
+            id: "5",
+            name: "named",
+            owner: "",
+            url: "s3://n",
+            scan_raw: true,
+            files: 1,
+            sessions: 1,
+            agent: "pi",
+          }),
+        ],
       }),
-    ).toEqual({
-      server: "https://sessions.example.com",
-      token: "sdb_x",
-      name: "mine",
-      read: { access_key_id: "R", secret_access_key: "rs" },
-      connect: false,
-      makeDefault: false,
-      yes: true,
-    });
+    );
+
+    await dosu("list");
+
+    const rows = out.join("\n").split("\n");
+    expect(rows.find((r) => r.startsWith("team"))).toMatch(/owners\/james\/\s+—\s+never\s+ok/);
+    expect(rows.find((r) => r.startsWith("ci logs"))).toMatch(
+      /—\s+12 files · 9 sessions\s+2m ago\s+raw error ×2/,
+    );
+    expect(rows.find((r) => r.startsWith("empty"))).toMatch(
+      /waiting for files\s+never\s+waiting for files/,
+    );
+    expect(rows.find((r) => r.startsWith("named"))).toContain("1 file · 1 session (pi)");
   });
 
-  it("rejects half a key pair", () => {
-    expect(() => wizardInputFromOptions({ readSecretAccessKey: "rs" })).toThrow(/go together/);
-    expect(() => wizardInputFromOptions({ readAccessKeyId: "R" })).toThrow(/go together/);
+  it("list --json, and says how to connect when there is nothing", async () => {
+    dosuAnswers(async () => json({ sources: [] }));
+    await dosu("list");
+    expect(out.join("\n")).toContain("Nothing connected.");
+    out = [];
+    await dosu("list", "--json");
+    expect(JSON.parse(out.join("\n"))).toEqual({ sources: [] });
+  });
+
+  it("disconnect --source forgets a connection no target holds", async () => {
+    configure([]);
+    dosuAnswers(async (url, init) =>
+      init?.method === "DELETE"
+        ? new Response(null, { status: 204 })
+        : url.endsWith(RAW_SOURCE.id)
+          ? json(RAW_SOURCE)
+          : json({ sources: [RAW_SOURCE] }),
+    );
+
+    await dosu("disconnect", "--source", RAW_SOURCE.id, "--yes");
+
+    expect(calls().at(-1)).toEqual({
+      method: "DELETE",
+      path: `/v1/memory/sources/${RAW_SOURCE.id}`,
+    });
+    expect(out.join("\n")).toContain('"ci logs" disconnected.');
   });
 });

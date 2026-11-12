@@ -1,7 +1,9 @@
-/** Joining the org's session store: what `dosu setup` does when an org admin has set one
- * (`dosu sources store setup`). The store says where the org keeps its sessions and holds Dosu's
- * read key; enrolling (`POST /v1/memory/store/enroll`) makes Dosu read this member's own folder
- * with it, so the member never sees that key. What the member writes with is theirs alone:
+/** Joining the org's session store: what `dosu setup` does once an org admin has set one (in
+ * `dosu setup`'s first step, `dosu sources store setup`, or the dashboard), or the org uses Dosu's
+ * hosted sessiondb by default. Sessions always go to the org's store: there is no bucket of a
+ * member's own. The store says where the org keeps its sessions and holds Dosu's read key;
+ * enrolling (`POST /v1/memory/store/enroll`) makes Dosu read this member's own folder with it, so
+ * the member never sees that key. What the member writes with is theirs alone:
  *
  * - a token Dosu mints, for a store that issues them (Dosu's sessiondb, or a server whose token
  *   secret the store holds): nothing to ask;
@@ -14,7 +16,7 @@
 
 import { CliUsageError } from "../cli/errors";
 import { type Config, saveConfig } from "../config/config";
-import type { ServerTarget, SessionTarget } from "../config/schema";
+import type { BucketTarget, ServerTarget, SessionTarget } from "../config/schema";
 import { configuredTargets } from "../config/targets";
 import { logger } from "../debug/logger";
 import { info, wrapLog } from "../setup/styles";
@@ -26,12 +28,17 @@ import {
   SourcesApiError,
   type StoreApi,
 } from "./api";
+import { bucketOfStorage } from "./bucket";
 import { defaultOwner, runBucketWizard } from "./bucket-wizard";
-import { bucketOfStorage } from "./connect";
 import { checkWithServer, targetOf } from "./hosted";
 import { asker, type KeyPair, required, WizardCancelled } from "./prompts";
-import { describeServerError, isUnauthorized, isUnreachable, serverClient } from "./server-client";
-import { normalizeServerUrl } from "./server-wizard";
+import {
+  describeServerError,
+  isUnauthorized,
+  isUnreachable,
+  normalizeServerUrl,
+  serverClient,
+} from "./server-client";
 
 /** The target's name in config when none is given: `dosu sync --target org`. */
 const STORE_TARGET_NAME = "org";
@@ -64,20 +71,38 @@ export function describeStore(store: SessionStore): string {
   return `the org's bucket ${store.url}`;
 }
 
-/** The org's store, or undefined when there is none to join: the org set none (a hosted default
- * is not one; setup offers it as before), or this Dosu predates stores, or it cannot be asked. */
+/** What Dosu says of the org's store: the store (set by an admin, or the hosted default when
+ * `configured` is false), none at all (404: no store and no hosted sessiondb to fall back on), or
+ * why it could not be asked. */
+export type StoreLookup = { store: SessionStore } | { none: true } | { error: string };
+
+export async function lookUpStore(api: StoreApi): Promise<StoreLookup> {
+  try {
+    return { store: await api.get() };
+  } catch (err) {
+    if (err instanceof SourcesApiError && err.status === 404) return { none: true };
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The store an org admin set, or undefined: none set (the hosted default is not one), or Dosu
+ * cannot be asked. */
 export async function orgStore(api: StoreApi | undefined): Promise<SessionStore | undefined> {
   if (!api) return undefined;
-  try {
-    const store = await api.get();
-    return store.configured ? store : undefined;
-  } catch (err) {
-    logger.debug(
-      "sources",
-      `no org session store: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  const found = await lookUpStore(api);
+  if ("error" in found) {
+    logger.debug("sources", `no org session store: ${found.error}`);
     return undefined;
   }
+  return "store" in found && found.store.configured ? found.store : undefined;
+}
+
+/** Whether this login is an org admin, who alone sets where the org's sessions live. Dosu lists
+ * a store's members only to org admins, so a store an admin set says it; with none set, Dosu
+ * cannot say, and the caller is taken for a member (the hosted default, or "ask an admin"). An
+ * admin sets the store then with `dosu sources store setup`. */
+export function isOrgAdmin(store?: SessionStore): boolean {
+  return Boolean(store?.members);
 }
 
 /** An enrollment's minted token, in the shape the hosted renewal reads. */
@@ -272,12 +297,10 @@ async function joinBucket(
       bucket: store.url,
       ...(store.region ? { region: store.region } : {}),
       ...(store.account_id ? { accountId: store.account_id } : {}),
-      // An s3:// store without an endpoint is AWS: no endpoint question.
-      endpoint: store.endpoint ?? "",
+      ...(store.endpoint ? { endpoint: store.endpoint } : {}),
       owner: enrollment.owner,
       ...(input.write ? { write: input.write } : {}),
       name: input.name ?? STORE_TARGET_NAME,
-      connect: false,
       ...(input.makeDefault === false ? { makeDefault: false } : {}),
       ...(input.yes ? { yes: true } : {}),
     },
@@ -285,7 +308,7 @@ async function joinBucket(
     fetchImpl,
   );
   if (!result) throw new WizardCancelled();
-  const target = { ...result.target, source_id: enrollment.source.id };
+  const target: BucketTarget = { ...result.target, source_id: enrollment.source.id };
   // The wizard already asked whether this is the default.
   saveTarget(cfg, target, false);
   p.log.info(
