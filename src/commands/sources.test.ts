@@ -6,6 +6,7 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
@@ -907,7 +908,7 @@ describe("sources status and list: the folder and the raw files", () => {
 
     await dosu("status");
 
-    const text = out.join("\n");
+    const text = stripVTControlCharacters(out.join("\n"));
     expect(text).toContain("○ ci logs");
     expect(text).toContain("Raw files:  none yet · all read as pi");
     expect(text).not.toContain("Last scan:");
