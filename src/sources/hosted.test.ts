@@ -37,7 +37,7 @@ function api(answer: () => Promise<HostedSource>): SourcesApi {
     deploymentId: "dep1",
     backendUrl: "https://api.dosu.test",
     hosted: vi.fn(answer),
-    connect: vi.fn(),
+    detect: vi.fn(),
     list: vi.fn(),
     get: vi.fn(),
     sync: vi.fn(),

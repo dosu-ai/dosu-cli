@@ -90,3 +90,17 @@ export async function askKeyPair(
   );
   return { access_key_id, secret_access_key };
 }
+
+/** Setup's second question, for every destination: does this machine ship its own sessions
+ * there? No leaves it shipping nothing (an MCP-only machine, or one whose sessions come from CI). */
+export function askShip(ask: Asker, given: boolean | undefined): Promise<boolean> {
+  return ask.confirm(
+    {
+      message: "Ship this machine's sessions there?",
+      active: "Yes",
+      inactive: "No, this machine ships nothing",
+      initialValue: true,
+    },
+    given,
+  );
+}

@@ -3,7 +3,6 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { Command } from "commander";
 import { Client } from "../client/client";
-import { importsCommand } from "../commands/imports";
 import { knowledgeCommand } from "../commands/knowledge";
 import { memoryCommand } from "../commands/memory";
 import { projectCommand } from "../commands/project";
@@ -459,16 +458,15 @@ export function createProgram(): Command {
   program.addCommand(syncCommand()); // `dosu knowledge sync` stays as the hook command.
   for (const cmd of storeCommands()) program.addCommand(cmd);
   program.addCommand(sourcesCommand());
-  program.addCommand(importsCommand());
   program.addCommand(upgradeCommand());
 
   // setup
   program
     .command("setup")
-    .description("Set up Dosu MCP for your AI tools")
+    .description("Set up Dosu MCP for your AI tools, and where their sessions ship")
     .option("--deployment <id>", "Skip to tool configuration for a specific MCP")
     .option("--mode <mode>", "Force OSS or Cloud mode, skipping the interactive prompt (oss|cloud)")
-    .option("--storage", "Ask again which sessiondb server finished sessions ship to")
+    .option("--storage", "Ask again where this machine's sessions ship")
     .action(async (opts: { deployment?: string; mode?: string; storage?: boolean }) => {
       const { runSetup } = await import("../setup/flow");
       let mode: "oss" | "cloud" | undefined;

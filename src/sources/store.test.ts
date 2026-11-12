@@ -15,7 +15,14 @@ import { type Enrollment, type SessionStore, SourcesApiError, type StoreApi } fr
 import { runBucketWizard } from "./bucket-wizard";
 import { checkWithServer } from "./hosted";
 import { serverClient } from "./server-client";
-import { describeStore, joinOrgStore, orgStore, storeTokenSource } from "./store";
+import {
+  describeStore,
+  isOrgAdmin,
+  joinOrgStore,
+  lookUpStore,
+  orgStore,
+  storeTokenSource,
+} from "./store";
 
 vi.mock("../tui/prompts", () => ({
   text: vi.fn(),
@@ -152,6 +159,34 @@ describe("orgStore", () => {
     expect(await orgStore(down)).toBeUndefined();
     const odd = storeApi(vi.fn(), () => Promise.reject("boom"));
     expect(await orgStore(odd)).toBeUndefined();
+  });
+});
+
+describe("lookUpStore", () => {
+  it("tells a store, none at all, and Dosu not answering apart", async () => {
+    expect(await lookUpStore(storeApi(vi.fn()))).toEqual({ store: BASE });
+    const none = storeApi(vi.fn(), async () => {
+      throw new SourcesApiError(404, "HTTP 404: no session store");
+    });
+    expect(await lookUpStore(none)).toEqual({ none: true });
+    const down = storeApi(vi.fn(), async () => {
+      throw new SourcesApiError(503, "HTTP 503");
+    });
+    expect(await lookUpStore(down)).toEqual({ error: "HTTP 503" });
+    expect(await lookUpStore(storeApi(vi.fn(), () => Promise.reject("boom")))).toEqual({
+      error: "boom",
+    });
+  });
+});
+
+describe("isOrgAdmin", () => {
+  it("is an admin a store lists its members to", () => {
+    expect(isOrgAdmin({ ...BASE, members: [] })).toBe(true);
+  });
+
+  it("is taken for a member otherwise: no store, or one without its members", () => {
+    expect(isOrgAdmin()).toBe(false);
+    expect(isOrgAdmin(BASE)).toBe(false);
   });
 });
 
@@ -335,7 +370,7 @@ describe("joinOrgStore: a bucket members write", () => {
     secret_access_key: "writesecret",
   };
 
-  it("claims the folder, then runs the bucket wizard with the store's bucket and no connect", async () => {
+  it("claims the folder, then asks the write key for it with the store's bucket filled in", async () => {
     vi.mocked(runBucketWizard).mockResolvedValueOnce({ target: written } as never);
     const api = storeApi(async (owner) => enrollment(owner ?? "?"));
     const write = { access_key_id: "AKIDWRITE", secret_access_key: "writesecret" };
@@ -350,11 +385,9 @@ describe("joinOrgStore: a bucket members write", () => {
     expect(vi.mocked(runBucketWizard).mock.calls[0]?.[1]).toEqual({
       bucket: "s3://acme-sessions/agents",
       region: "us-east-1",
-      endpoint: "",
       owner: "james",
       write,
       name: "org",
-      connect: false,
       makeDefault: false,
       yes: true,
     });

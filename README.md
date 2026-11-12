@@ -120,7 +120,7 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 | `dosu docs` | Manage documents (list, create, update, import, publish) |
 | `dosu threads` | List and manage conversation threads |
 | `dosu review` | Document review workflow for the selected Library, plus `review notifications` to route a Library's or Agent's reviews to a Slack channel |
-| `dosu sources` | Manage connected data sources (list, connect, create, sync, update) and the org's session store (`store setup`, `store status`, `store join`) |
+| `dosu sources` | Where the org's sessions live and whether this machine ships there (`setup`), what Dosu reads of them (`status`, `list`, `sync`, `disconnect`), and the org's session store, set by an org admin (`store setup`, `store status`, `store join`) |
 | `dosu integrations` | List and inspect platform integrations (Slack, GitHub, …) |
 | `dosu topics` | List knowledge base topics and their pages |
 | `dosu members` | Invite organization members |
@@ -131,7 +131,26 @@ Once authenticated against a deployment, you can drive the Dosu platform without
 
 Run `dosu <command> --help` for subcommands and flags.
 
-An org admin can run `dosu sources store setup` to choose where the org's sessions go: Dosu-hosted storage, the org's sessiondb server, or an S3 / R2 bucket. When choosing session storage during `dosu setup`, members join the configured org store instead of choosing storage themselves. Hosted stores and servers configured to issue tokens enroll members without questions; other servers require an admin-issued token, and bucket stores ask for a folder and write credentials. Members never need Dosu's read key. Use `dosu sources store join` to enroll directly and `dosu sources store status` to see the store and your folder; org admins also see the enrolled members.
+### Where sessions live
+
+Sessions always go to the org's **session store**, which only an org admin sets. There is no bucket of a member's own: a bucket is always the org's. `dosu setup` (and `dosu sources setup`) asks two separate questions:
+
+1. **Where do sessions live?** Only an org admin answers this, once for the whole org, and only while the org has no store: Dosu's sessiondb, the org's own sessiondb server, or the org's bucket (S3 / R2). For a bucket, the admin gives Dosu a **read-only** key; Dosu looks at what is there and says so in plain words, for example `s3://acme/team: a sessiondb store, plus 12 raw files (codex ×2, datadog-trajectory ×1 sampled; 1 file I can't tell: odd.jsonl)`, or `s3://acme/team: empty; Dosu will check it every 5 minutes`. Dosu reads whatever lands under the prefix: members' folders, and raw logs other tools drop beside them (Datadog, CI, scripts), each file's format detected on its own. The admin confirms, or names one format for every raw file (`--agent codex`). Everyone else skips the question: an org with a store ships there, an org without one uses Dosu's sessiondb where the installation runs one, and otherwise setup says that an org admin must choose (by running `dosu sources store setup`, or on the dashboard's Sources page) and ships nothing.
+2. **Ship this machine's sessions there?** Yes enrolls this machine in the store: a token Dosu mints, one the admin issued for the org's server, or for a bucket a write key to your own folder kept only on this machine; it redacts each session here and writes it under `owners/<owner>/`, the folder Dosu reads with the org's key. No (`--no-ship`): this machine ships nothing, for an MCP-only machine or one whose sessions come from CI.
+
+Anything written into the org's bucket reaches the org's memory, so a write key to that bucket is effectively a key that can add to the org's memory: scope each one to its folder by bucket policy and hand it out accordingly. Dosu still redacts every session it reads, whoever wrote it.
+
+```bash
+# An org admin, once: the org's bucket, which CI and Datadog also drop logs in.
+dosu sources store setup --bucket s3://acme/agent-logs --region us-east-1 \
+  --read-access-key-id AKIA... --read-secret-access-key ... --agent datadog-trajectory --yes
+# Each member's machine: its own folder of the org's store.
+dosu sources setup --owner jane --write-access-key-id AKIA... --write-secret-access-key ... --yes
+dosu sources list                    # each connection: its folder, raw files, last read, state
+dosu sources status --source <id>    # formats, files and sessions, "waiting for files", errors
+```
+
+`dosu sources store setup` is the admin's direct way to set or change the store (the dashboard's Sources page does the same). Hosted stores and servers configured to issue tokens enroll members without questions; other servers require an admin-issued token (`--token`), and bucket stores ask for a folder and a write key. Members never need Dosu's read key. Use `dosu sources store join` to enroll directly and `dosu sources store status` to see the store and your folder; org admins also see the enrolled members. Connections made before buckets were the org's keep being read until `dosu sources disconnect` forgets them.
 
 ### Agent skills
 

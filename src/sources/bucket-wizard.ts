@@ -1,8 +1,11 @@
-/** The "ship straight to my bucket" flow, setup's storage step and `dosu sources setup
- * --bucket`. No server: `@dosu/sessiondb` redacts and normalizes each session on this machine
- * and writes it under `owners/<owner>/` with a key this machine holds. The flow checks the key
- * by writing the bucket's layout marker and the owner's probe, saves the target, and then asks
- * Dosu to read the bucket with its own read-only keys. */
+/** A member's folder of the org's bucket store, written from this machine: what joining a bucket
+ * store asks once the folder is claimed (`dosu setup`, `dosu sources store join`). No server:
+ * `@dosu/sessiondb` redacts and normalizes each session on this machine and writes it under
+ * `owners/<owner>/` with a write key this machine keeps, checked by writing the layout marker and
+ * the owner's probe. Dosu reads the folder with the org's read-only key, which the member never
+ * sees. The bucket is the org's, set by an org admin; nothing here connects a bucket to Dosu.
+ *
+ * Also the bucket URL questions the admin's store setup asks (`askBucketUrl`). */
 
 import { userInfo } from "node:os";
 import { CliUsageError } from "../cli/errors";
@@ -13,38 +16,27 @@ import { logger } from "../debug/logger";
 import { info, wrapLog } from "../setup/styles";
 import { bucketClient } from "../shipper/target";
 import * as p from "../tui/prompts";
-import { sourcesApi } from "./api";
-import { bucketOfStorage, type ConnectResult, connectBucketToDosu, preflight } from "./connect";
 import {
   type Asker,
   asker,
   askKeyPair,
   envCredentials,
   type KeyPair,
-  required,
   WizardCancelled,
 } from "./prompts";
 import { describeServerError } from "./server-client";
 
-export interface BucketWizardResult extends ConnectResult {
-  target: BucketTarget;
-}
-
 export interface BucketWizardInput {
-  /** `s3://bucket/prefix` or `r2://bucket/prefix`. */
-  bucket?: string;
+  /** The org's bucket, `s3://bucket/prefix` or `r2://bucket/prefix`. */
+  bucket: string;
   region?: string;
   accountId?: string;
   endpoint?: string;
+  /** The folder this machine's sessions go under (`owners/<owner>/`), claimed already. */
+  owner: string;
   /** The key this machine writes with. */
   write?: KeyPair;
-  /** The folder this machine's sessions go under (`owners/<owner>/`). */
-  owner?: string;
   name?: string;
-  /** Register the bucket with Dosu (needs the login). Default: yes when logged in. */
-  connect?: boolean;
-  /** Dosu's read keys, given up front. */
-  read?: KeyPair;
   makeDefault?: boolean;
   yes?: boolean;
 }
@@ -52,7 +44,6 @@ export interface BucketWizardInput {
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 const BUCKET_URL_RE = /^(s3|r2):\/\/[^/\s]+(?:\/\S*)?$/;
-const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /** `s3://bucket/prefix` without a trailing slash, or undefined when it is not a bucket URL. */
 export function normalizeBucketUrl(value: string): string | undefined {
@@ -142,103 +133,47 @@ async function checkWrite(
   }
 }
 
+/** Save a bucket target for the member's folder, the default unless the person keeps another.
+ * Null when the person cancelled. */
 export async function runBucketWizard(
   cfg: Config,
-  input: BucketWizardInput = {},
+  input: BucketWizardInput,
   io: p.PromptIO = {},
   fetchImpl?: FetchLike,
-): Promise<BucketWizardResult | null> {
+): Promise<{ target: BucketTarget } | null> {
   try {
-    return await wizard(cfg, input, io, fetchImpl);
+    return { target: await writeTarget(cfg, asker(input.yes ?? false, io), input, io, fetchImpl) };
   } catch (err) {
     if (err instanceof WizardCancelled) return null;
     throw err;
   }
 }
 
-async function wizard(
+/** The write key this machine keeps, checked by writing the layout marker
+ * (`sessionstorage.json`) and the folder's probe; then the target is saved. */
+async function writeTarget(
   cfg: Config,
+  ask: Asker,
   input: BucketWizardInput,
   io: p.PromptIO,
   fetchImpl: FetchLike | undefined,
-): Promise<BucketWizardResult> {
-  const ask = asker(input.yes ?? false, io);
-  logger.info("sources", "bucket wizard started");
+): Promise<BucketTarget> {
+  logger.info("sources", "bucket write key step started");
   const s = p.spinner(io);
-
+  const url = normalizeBucketUrl(input.bucket);
+  if (!url) throw new CliUsageError(`not a bucket URL: ${input.bucket}`);
+  const { owner, region, accountId, endpoint } = input;
   p.log.message(
     wrapLog(
-      "Sessions are redacted and normalized on this machine, then written to your bucket with a key this machine keeps (in its 0600 config). No server is involved. Scope the key to this person's folder, <prefix>/owners/<owner>/, by bucket policy.",
+      `Sessions are redacted and normalized on this machine, then written under ${url}/owners/${owner}/ with a write key this machine keeps (in its 0600 config); Dosu reads them with the org's own read-only key. Anything written into the org's bucket reaches the org's memory, so this key can add to it: your admin scopes it to your folder by bucket policy.`,
     ),
     io,
   );
-
-  // --- the bucket, and how to reach it -----------------------------------------
-  let url: string | undefined;
-  let region: string | undefined;
-  let accountId: string | undefined;
-  let endpoint: string | undefined;
   let write: KeyPair | undefined = input.write;
-  let owner: string | undefined;
   for (;;) {
-    url ??= normalizeBucketUrl(await askBucketUrl(ask, input.bucket));
-    if (!url) throw new CliUsageError(`not a bucket URL: ${input.bucket}`);
-    const r2 = url.startsWith("r2://");
-
-    if (r2) {
-      endpoint ??= input.endpoint;
-      if (!endpoint) {
-        accountId ??= (
-          await ask.text(
-            {
-              message: "Cloudflare account id",
-              initialValue: process.env.R2_ACCOUNT_ID,
-              validate: required("The account id"),
-            },
-            input.accountId,
-          )
-        ).trim();
-      }
-    } else {
-      region ??= (
-        await ask.text(
-          {
-            message: "AWS region",
-            initialValue: process.env.AWS_REGION ?? "us-east-1",
-            validate: required("The region"),
-          },
-          input.region,
-        )
-      ).trim();
-      endpoint ??= (
-        await ask.text(
-          {
-            message: "S3-compatible endpoint (blank for AWS)",
-            placeholder: "https://minio.internal:9000",
-            initialValue: "",
-          },
-          input.endpoint,
-        )
-      ).trim();
-    }
-
     write ??=
       envCredentials("DOSU_BUCKET") ??
-      (await askKeyPair(ask, "Write keys (this machine)", undefined));
-
-    owner ??= (
-      await ask.text(
-        {
-          message: "Your folder in the bucket (owner)",
-          initialValue: defaultOwner(),
-          validate: (value) =>
-            OWNER_RE.test(value.trim()) ? undefined : "letters, digits, . _ - (one path segment)",
-        },
-        input.owner,
-      )
-    ).trim();
-    if (!OWNER_RE.test(owner)) throw new CliUsageError(`not an owner name: ${owner}`);
-
+      (await askKeyPair(ask, "Write key (this machine)", undefined));
     const candidate: BucketTarget = {
       kind: "bucket",
       name: "",
@@ -253,46 +188,33 @@ async function wizard(
     };
     s.start(`Checking ${url}...`);
     const failure = await checkWrite(candidate, fetchImpl);
-    if (failure) {
-      s.stop("The bucket did not take a write", 1);
-      if (input.yes) throw new CliUsageError(`${url}: ${failure}`);
-      p.log.error(wrapLog(`${url}: ${failure}`), io);
-      const next = await ask.select(
-        {
-          message: "What now?",
-          options: [
-            { value: "keys" as const, label: "Re-enter the write keys" },
-            { value: "bucket" as const, label: "Change the bucket" },
-            { value: "retry" as const, label: "Try again" },
-            { value: "cancel" as const, label: "Cancel" },
-          ],
-        },
-        undefined,
-      );
-      if (next === "cancel") throw new WizardCancelled();
-      if (next === "keys") write = undefined;
-      if (next === "bucket") {
-        url = region = accountId = endpoint = undefined;
-        input = {
-          ...input,
-          bucket: undefined,
-          region: undefined,
-          accountId: undefined,
-          endpoint: undefined,
-        };
-      }
-      continue;
+    if (!failure) {
+      s.stop(`${url} takes writes for ${owner}`);
+      break;
     }
-    s.stop(`${url} takes writes for ${owner}`);
-    break;
+    s.stop("The bucket did not take a write", 1);
+    if (input.yes) throw new CliUsageError(`${url}: ${failure}`);
+    p.log.error(wrapLog(`${url}: ${failure}`), io);
+    const next = await ask.select(
+      {
+        message: "What now?",
+        options: [
+          { value: "keys" as const, label: "Re-enter the write key" },
+          { value: "retry" as const, label: "Try again" },
+          { value: "cancel" as const, label: "Cancel" },
+        ],
+      },
+      undefined,
+    );
+    if (next === "cancel") throw new WizardCancelled();
+    if (next === "keys") write = undefined;
   }
 
-  // --- save the target; ship there by default ---------------------------------
   const name = (
     await ask.text(
       {
         message: "Name for this target",
-        initialValue: input.name ?? "bucket",
+        initialValue: input.name ?? "org",
         validate: (value) =>
           /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value) ? undefined : "letters, digits, . _ -",
       },
@@ -337,33 +259,5 @@ async function wizard(
     ),
     io,
   );
-
-  // --- let Dosu read the bucket ------------------------------------------------
-  // The URL matched BUCKET_URL_RE, which bucketOfStorage parses.
-  const parsed = bucketOfStorage({ url, ...(endpoint ? { endpoint } : {}) }) as NonNullable<
-    ReturnType<typeof bucketOfStorage>
-  >;
-  const api = sourcesApi(cfg);
-  let dosuUnavailable: string | undefined;
-  if (api && input.connect !== false) {
-    s.start(`Checking Dosu at ${api.backendUrl}...`);
-    dosuUnavailable = await preflight(api);
-    s.stop(
-      dosuUnavailable
-        ? `Dosu at ${api.backendUrl} cannot connect buckets`
-        : `Dosu at ${api.backendUrl} is ready`,
-      dosuUnavailable ? 1 : 0,
-    );
-    if (dosuUnavailable) p.log.warn(wrapLog(dosuUnavailable), io);
-  }
-  const connected = await connectBucketToDosu(
-    cfg,
-    api,
-    { name, url, ...parsed, owner, region, accountId, endpoint },
-    { read: input.read, connect: input.connect, yes: input.yes ?? false, dosuUnavailable },
-    ask,
-    io,
-    s,
-  );
-  return { target, ...connected };
+  return target;
 }

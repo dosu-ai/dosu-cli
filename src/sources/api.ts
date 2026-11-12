@@ -1,6 +1,10 @@
-/** The backend's `/v1/memory/sources` API: a bucket target registered as a source Dosu pulls
- * sessions from. `dosu sources connect|status|sync|disconnect` and the post-sync nudge in
- * `dosu sync` are its only callers. Authenticated like ingest: the login's API key. */
+/** The backend's `/v1/memory/sources` API: the connections Dosu reads sessions through, each a
+ * bucket prefix it reads with a read-only key (a member's folder of the org's store, the raw logs
+ * other tools drop beside it, Dosu's hosted sessiondb). There is no member connect: a bucket is
+ * the org's, set by an org admin as the org's store (`/v1/memory/store`, below), and
+ * `POST /detect` is that admin's look at it first. `dosu sources status|list|sync|disconnect`,
+ * the setup flows and the post-sync nudge in `dosu sync` are its callers. Authenticated like
+ * ingest: the login's API key. */
 
 import { CliUsageError } from "../cli/errors";
 import { type Config, MODE_OSS } from "../config/config";
@@ -8,20 +12,58 @@ import { getBackendURL, isAbsoluteHttpUrl } from "../config/constants";
 
 type SourceKind = "s3" | "r2";
 
-export interface ConnectSourceRequest {
-  deployment_id: string;
+/** The raw log formats the backend reads (its `AGENTS`); it refuses any other. */
+export const SOURCE_AGENTS = [
+  "claude-code",
+  "cursor",
+  "codex",
+  "opencode",
+  "pi",
+  "gemini-cli",
+  "atif",
+  "datadog-trajectory",
+  "trajectory",
+] as const;
+export type SourceAgent = (typeof SOURCE_AGENTS)[number];
+
+export function isSourceAgent(value: string): value is SourceAgent {
+  return (SOURCE_AGENTS as readonly string[]).includes(value);
+}
+
+/** `POST /detect` (org admins): a bucket about to become the org's store, with the read-only key
+ * Dosu would hold. */
+export interface DetectRequest {
   kind: SourceKind;
   bucket: string;
   prefix: string;
-  owner: string;
   region?: string;
   account_id?: string;
   endpoint?: string;
   access_key_id: string;
   secret_access_key: string;
   session_token?: string;
-  name?: string;
-  lag_seconds?: number;
+  /** Raw files: the format of all of them, overriding per-file detection. */
+  agent?: SourceAgent;
+}
+
+/** `POST /detect`: what is in the prefix, and what Dosu would read of it as the org's store.
+ * Stores nothing. */
+export interface Detection {
+  /** A sessiondb layout (`sessionstorage.json`) is there; who wrote its marker. */
+  sessiondb: boolean;
+  layout_created_by: string | null;
+  /** Raw files on the first listing, and the formats of a sample of them (or the named agent
+   * for all); the sampled files no format matched, by name. */
+  raw_files: number;
+  agents: Record<string, number>;
+  undetected: string[];
+  dated_prefix: string | null;
+  /** Whether the store's raw scan would convert the raw files. */
+  scan_raw: boolean;
+  /** Another connection of the org already converts this prefix's raw files. */
+  raw_scanned_by: string | null;
+  /** Why Dosu cannot import raw files here, when it cannot. */
+  raw_unavailable: string | null;
 }
 
 interface SourceChange {
@@ -34,6 +76,24 @@ interface SourceChange {
   processed_at: string;
 }
 
+/** A raw file the connection has converted, or tried to. */
+interface ImportedFile {
+  key: string;
+  /** The format it was read as; null when none matched. */
+  agent: string | null;
+  session_id: string;
+  size: number;
+  shipped_bytes: number;
+  outcome: string;
+  detail: string | null;
+  content_hash: string | null;
+  imported_at: string;
+}
+
+/** One connection. `owner` (empty: none) is the sessiondb folder it reads in place, and the
+ * cursor, `last_synced_at`, `last_error` and `last_sync_*` are that read's; `scan_raw` says it
+ * converts the prefix's raw files, and the `raw_*` fields, `files` and `sessions` are that
+ * scan's. */
 export interface SourceStatus {
   id: string;
   name: string;
@@ -57,14 +117,37 @@ export interface SourceStatus {
   last_sync_processed: number;
   last_sync_remaining: number;
   created_at: string;
+  trace_count?: number;
+  scan_raw?: boolean;
+  /** Raw files: the format named for all of them; null when each file's is detected. */
+  agent?: string | null;
+  reader_id?: string | null;
+  shards?: number;
+  dated_prefix?: string | null;
+  lookback_days?: number;
+  raw_synced_at?: string | null;
+  raw_listed?: number;
+  raw_imported?: number;
+  raw_remaining?: number;
+  raw_error?: string | null;
+  raw_error_count?: number;
+  /** Raw files the ledger holds, and how many of them stored a session. */
+  files?: number;
+  sessions?: number;
+  /** Nothing found yet: no sessiondb change read and no raw file seen. */
+  pending?: boolean;
+  /** Only on a single read. */
   layout_created_by?: string | null;
   recent?: SourceChange[];
+  recent_files?: ImportedFile[];
 }
 
 interface SyncQueued {
   id: string;
   status: "queued";
   workflow_id: string;
+  /** The folder read and one run per raw-file shard. */
+  workflow_ids?: string[];
 }
 
 /** `POST /hosted`: the login set up on Dosu's own sessiondb. The server to ship to, a token it
@@ -81,7 +164,9 @@ export interface SourcesApi {
   deploymentId: string;
   /** The Dosu this client talks to, for messages that say which one failed. */
   backendUrl: string;
-  connect(body: Omit<ConnectSourceRequest, "deployment_id">): Promise<SourceStatus>;
+  /** What is in a bucket and what Dosu would read of it as the org's store, saving nothing. Org
+   * admins only (403 otherwise); 422 when Dosu cannot read the bucket with the key. */
+  detect(body: DetectRequest): Promise<Detection>;
   /** Set this login up on Dosu's sessiondb; idempotent, and a fresh token each time. 404 on a
    * Dosu that hosts none. */
   hosted(): Promise<HostedSource>;
@@ -117,7 +202,7 @@ interface Caller {
 
 /** A caller for one `/v1/memory/<resource>` collection with this install's login, or undefined
  * when it cannot call Dosu: OSS mode, no API key or deployment, or no absolute backend URL. */
-function backendCaller(cfg: Config, resource: "sources" | "imports" | "store"): Caller | undefined {
+function backendCaller(cfg: Config, resource: "sources" | "store"): Caller | undefined {
   const account = cfg.active_account?.target;
   const backendUrl = getBackendURL().replace(/\/$/, "");
   if (
@@ -157,7 +242,7 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
   return {
     deploymentId,
     backendUrl,
-    connect: (body) => call("POST", "", { deployment_id: deploymentId, ...body }),
+    detect: (body) => call("POST", "/detect", { deployment_id: deploymentId, ...body }),
     hosted: () => call("POST", "/hosted", { deployment_id: deploymentId }),
     list: async () =>
       (
@@ -176,8 +261,8 @@ export function sourcesApi(cfg: Config): SourcesApi | undefined {
 // `/v1/memory/store`: where the org keeps its members' sessions, set once by an org admin with
 // Dosu's read key to it. A member enrolls for their own folder and never holds that key.
 
-/** `hosted`: Dosu's sessiondb. `server`: the org's own sessiondb server. `bucket`: members write
- * the bucket directly, redacting on their machine. */
+/** `hosted`: Dosu's sessiondb. `server`: the org's own sessiondb server. `bucket`: the org's
+ * bucket, which members write directly (redacting on their machine) and other tools fill. */
 export type StoreKind = "hosted" | "server" | "bucket";
 
 interface StoreMember {
@@ -211,6 +296,10 @@ export interface SessionStore {
   source_id: string | null;
   /** Who has enrolled; only for org admins. */
   members: StoreMember[] | null;
+  /** A bucket store: the connection that converts the raw files other tools drop in it, and the
+   * format it reads them as (null: each file's is detected). */
+  raw_source_id?: string | null;
+  raw_agent?: string | null;
 }
 
 export interface SetStoreRequest {
@@ -231,6 +320,9 @@ export interface SetStoreRequest {
   token_secret?: string;
   /** Forget the token secret: members' tokens are the admin's to issue again. */
   clear_token_secret?: boolean;
+  /** A bucket store: the format of every raw file other tools drop in it (omitted: detected per
+   * file). */
+  agent?: SourceAgent;
 }
 
 /** What enrolling gives this member: where to ship or write, a token when Dosu minted one, and
@@ -287,136 +379,12 @@ export function requireStoreApi(cfg: Config): StoreApi {
   return api;
 }
 
-// --- imports -----------------------------------------------------------------
-// `/v1/memory/imports`: a bucket of raw session files (an agent's own logs, a Datadog
-// Trajectory capture) that Dosu imports into its own sessiondb store and reads from there.
-// Org-level: the sessions are the org's, under whoever connected the import.
-
-/** The file formats the sessiondb SDK reads; the backend refuses any other. */
-export const IMPORT_AGENTS = [
-  "claude-code",
-  "cursor",
-  "codex",
-  "opencode",
-  "pi",
-  "gemini-cli",
-  "datadog-trajectory",
-] as const;
-export type ImportAgent = (typeof IMPORT_AGENTS)[number];
-
-export interface ConnectImportRequest {
-  deployment_id: string;
-  agent: ImportAgent;
-  kind: SourceKind;
-  bucket: string;
-  prefix: string;
-  region?: string;
-  account_id?: string;
-  endpoint?: string;
-  access_key_id: string;
-  secret_access_key: string;
-  session_token?: string;
-  name?: string;
-  shards?: number;
-  lookback_days?: number;
-}
-
-interface ImportedFile {
-  key: string;
-  session_id: string;
-  size: number;
-  shipped_bytes: number;
-  outcome: "stored" | "duplicate" | "trivial" | "rejected" | "failed";
-  detail: string | null;
-  content_hash: string | null;
-  imported_at: string;
-}
-
-export interface ImportStatus {
-  id: string;
-  name: string;
-  org: string;
-  deployment_id: string;
-  source_id: string;
-  agent: ImportAgent;
-  kind: SourceKind;
-  bucket: string;
-  prefix: string;
-  url: string;
-  region: string | null;
-  account_id: string | null;
-  endpoint: string | null;
-  shards: number;
-  dated_prefix: string | null;
-  lookback_days: number;
-  enabled: boolean;
-  last_imported_at: string | null;
-  last_error: string | null;
-  error_count: number;
-  last_run_listed: number;
-  last_run_imported: number;
-  last_run_remaining: number;
-  created_at: string;
-  files: number;
-  sessions: number;
-  files_found?: number | null;
-  recent?: ImportedFile[];
-}
-
-interface ImportQueued {
-  id: string;
-  status: "queued";
-  workflow_ids: string[];
-}
-
-export interface ImportsApi {
-  deploymentId: string;
-  backendUrl: string;
-  connect(body: Omit<ConnectImportRequest, "deployment_id">): Promise<ImportStatus>;
-  list(): Promise<ImportStatus[]>;
-  get(id: string): Promise<ImportStatus>;
-  sync(id: string): Promise<ImportQueued>;
-  disconnect(id: string): Promise<void>;
-}
-
-/** The imports client for this install's login, under the same conditions as `sourcesApi`. */
-function importsApi(cfg: Config): ImportsApi | undefined {
-  const caller = backendCaller(cfg, "imports");
-  if (!caller) return undefined;
-  const { deploymentId, backendUrl, call } = caller;
-  return {
-    deploymentId,
-    backendUrl,
-    connect: (body) => call("POST", "", { deployment_id: deploymentId, ...body }),
-    list: async () =>
-      (
-        await call<{ imports: ImportStatus[] }>(
-          "GET",
-          `?deployment_id=${encodeURIComponent(deploymentId)}`,
-        )
-      ).imports,
-    get: (id) => call("GET", `/${encodeURIComponent(id)}`),
-    sync: (id) => call("POST", `/${encodeURIComponent(id)}/sync`),
-    disconnect: (id) => call("DELETE", `/${encodeURIComponent(id)}`),
-  };
-}
-
-export function requireImportsApi(cfg: Config): ImportsApi {
-  const api = importsApi(cfg);
-  if (!api) {
-    throw new CliUsageError(
-      "not logged in to Dosu: run 'dosu setup' (an import is a bucket Dosu reads for you, so it needs your login)",
-    );
-  }
-  return api;
-}
-
 /** The client, or the usage error that says why there is none. */
 export function requireSourcesApi(cfg: Config): SourcesApi {
   const api = sourcesApi(cfg);
   if (!api) {
     throw new CliUsageError(
-      "not logged in to Dosu: run 'dosu setup' (a source is a bucket Dosu reads for you, so it needs your login)",
+      "not logged in to Dosu: run 'dosu setup' (a connection is Dosu reading sessions for your org, so it needs your login)",
     );
   }
   return api;

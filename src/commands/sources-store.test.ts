@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/config";
 import { makeTestConfig } from "../config/config.test-utils";
-import { type SessionStore, storeApi } from "../sources/api";
+import { type Detection, type SessionStore, storeApi } from "../sources/api";
 import { joinOrgStore } from "../sources/store";
 import * as p from "../tui/prompts";
 import { sourcesCommand } from "./sources";
@@ -52,9 +52,25 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
-/** Dosu answers every call with `answer`, echoing a PUT's body back as the store. */
+/** What `POST /v1/memory/sources/detect` answers. */
+let detection: Detection;
+const FOUND: Detection = {
+  sessiondb: true,
+  layout_created_by: "dosu-cli/1.0",
+  raw_files: 3,
+  agents: { codex: 2 },
+  undetected: [],
+  dated_prefix: null,
+  scan_raw: true,
+  raw_scanned_by: null,
+  raw_unavailable: null,
+};
+
+/** Dosu answers Dosu's look at a bucket with `detection`, and every other call with `answer`,
+ * echoing a PUT's body back as the store. */
 function dosuAnswers(answer: (method: string, body?: Record<string, unknown>) => Response): void {
-  fetchImpl.mockImplementation(async (_url, init) => {
+  fetchImpl.mockImplementation(async (url, init) => {
+    if (url.endsWith("/v1/memory/sources/detect")) return json(detection);
     const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
     return answer(init?.method ?? "GET", init?.body ? body : undefined);
   });
@@ -68,7 +84,8 @@ function calls(): Array<{ method: string; path: string; body?: Record<string, un
   }));
 }
 
-/** The body of the one `PUT /v1/memory/store` sent (setup reads the store first). */
+/** The body of the one `PUT /v1/memory/store` sent (setup reads the store, and looks at a bucket,
+ * first). */
 function put(): Record<string, unknown> | undefined {
   const puts = calls().filter((c) => c.method === "PUT");
   expect(puts).toHaveLength(1);
@@ -115,6 +132,7 @@ beforeEach(() => {
     }),
   );
   fetchImpl = vi.fn<Fetch>();
+  detection = { ...FOUND };
   dosuAnswers((method, body) => json(method === "PUT" ? { ...STORE, ...body } : STORE));
   vi.stubGlobal("fetch", fetchImpl);
   out = [];
@@ -143,7 +161,7 @@ describe("sources store setup", () => {
     expect(out.join("\n")).toContain("The org's sessions go to Dosu's sessiondb.");
   });
 
-  it("sends a bucket store from flags, and says how to scope member keys", async () => {
+  it("looks at a bucket store first, sends it from flags, and says how to scope member keys", async () => {
     await dosu(
       "setup",
       "--bucket",
@@ -152,6 +170,14 @@ describe("sources store setup", () => {
       "eu-west-1",
       "--yes",
       ...READ,
+    );
+    expect(calls().map((c) => `${c.method} ${c.path}`)).toEqual([
+      "GET /v1/memory/store?deployment_id=dep1",
+      "POST /v1/memory/sources/detect",
+      "PUT /v1/memory/store",
+    ]);
+    expect(out[0]).toBe(
+      "s3://acme-sessions/agents: a sessiondb store (written by dosu-cli/1.0), plus 3 raw files (codex ×2 sampled)",
     );
     expect(put()).toEqual({
       deployment_id: "dep1",
@@ -206,7 +232,7 @@ describe("sources store setup", () => {
 
   it("asks for each answer when no flags are given", async () => {
     script({
-      "Where should the org's sessions go?": "server",
+      "Where do sessions live?": "server",
       "Server URL": "https://sessions.acme.test",
       "The bucket the server writes: which service?": "s3",
       "The bucket the server writes: name": "acme-sessions/agents",
@@ -236,10 +262,11 @@ describe("sources store setup", () => {
 
   it("asks an r2 bucket for its account, not a region", async () => {
     script({
-      "Where should the org's sessions go?": "bucket",
+      "Where do sessions live?": "bucket",
       "Bucket: which service?": "r2",
       "Bucket: name": "acme-sessions/agents",
       "Cloudflare account id": " acct ",
+      "Make it the org's session store?": "yes",
     });
     await dosu("setup", ...READ);
     expect(put()).toMatchObject({ bucket_kind: "r2", account_id: "acct" });
@@ -295,7 +322,7 @@ describe("sources store setup", () => {
     dosuAnswers((method, body) => json(method === "PUT" ? { ...current, ...body } : current));
     const keep = "The server's SESSIONDB_TOKEN_SECRET (blank: keep the one Dosu has)";
     script({
-      "Where should the org's sessions go?": "server",
+      "Where do sessions live?": "server",
       "Server URL": "https://sessions.acme.test",
       "The bucket the server writes: which service?": "s3",
       "The bucket the server writes: name": "acme-sessions/agents",
@@ -322,6 +349,31 @@ describe("sources store setup", () => {
     expect(vi.mocked(p.text).mock.calls.map(([o]) => o.message)).not.toContain(keep);
   });
 
+  it("sets a first store when the org has none, and --json prints only the store", async () => {
+    dosuAnswers((method, body) =>
+      method === "PUT" ? json({ ...STORE, ...body }) : json({ detail: "no session store" }, 404),
+    );
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--region",
+      "us-east-1",
+      "--json",
+      ...READ,
+    );
+    expect(put()).toMatchObject({ kind: "bucket", bucket: "acme-sessions" });
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ kind: "bucket", bucket_kind: "s3" });
+  });
+
+  it("does not hide a failure to reach Dosu when setting the store", async () => {
+    fetchImpl.mockImplementation(async (_url, init) => {
+      if (init?.method === "PUT") throw new TypeError("fetch failed");
+      return json(STORE);
+    });
+    await expect(dosu("setup", "--hosted")).rejects.toThrow("fetch failed");
+  });
+
   it("tells a member that only an admin sets the store", async () => {
     dosuAnswers(() => json({ detail: "admins only" }, 403));
     await expect(dosu("setup", "--hosted")).rejects.toThrow(
@@ -329,6 +381,156 @@ describe("sources store setup", () => {
     );
     dosuAnswers(() => json({ detail: "bucket refused" }, 422));
     await expect(dosu("setup", "--hosted")).rejects.toThrow("bucket refused");
+  });
+});
+
+describe("sources store setup: the bucket's raw files", () => {
+  it("--agent names their format for Dosu's look and the store, and status shows it", async () => {
+    detection = { ...FOUND, agents: { "datadog-trajectory": 3 } };
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--agent",
+      "datadog-trajectory",
+      "--yes",
+      ...READ,
+    );
+    const detect = calls().find((c) => c.path === "/v1/memory/sources/detect");
+    expect(detect?.body).toMatchObject({ agent: "datadog-trajectory", bucket: "acme-sessions" });
+    expect(put()).toMatchObject({ kind: "bucket", agent: "datadog-trajectory" });
+    expect(out.join("\n")).toContain("all read as datadog-trajectory");
+
+    out = [];
+    dosuAnswers(() =>
+      json({ ...STORE, raw_source_id: "src-raw", raw_agent: "datadog-trajectory" }),
+    );
+    await dosu("status");
+    expect(out.join("\n")).toContain("raw logs other tools drop in it: read as datadog-trajectory");
+
+    out = [];
+    dosuAnswers(() => json({ ...STORE, raw_source_id: "src-raw", raw_agent: null }));
+    await dosu("status");
+    expect(out.join("\n")).toContain(
+      "raw logs other tools drop in it: each file's format detected",
+    );
+  });
+
+  it("interactively, the admin confirms what Dosu found or picks the format, or declines", async () => {
+    script({
+      "Make it the org's session store?": "agent",
+      "Which format are the raw files?": "codex",
+      "S3-compatible endpoint (blank for AWS)": "",
+    });
+    await dosu("setup", "--bucket", "s3://acme-sessions/agents", "--region", "us-east-1", ...READ);
+    expect(put()).toMatchObject({ agent: "codex" });
+
+    fetchImpl.mockClear();
+    out = [];
+    script({
+      "Make it the org's session store?": "no",
+      "S3-compatible endpoint (blank for AWS)": "",
+    });
+    await dosu("setup", "--bucket", "s3://acme-sessions/agents", "--region", "us-east-1", ...READ);
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+    expect(out.join("\n")).toContain("Cancelled; the org's session store is unchanged.");
+  });
+
+  it("refuses --agent for a store that is not a bucket, or a format Dosu does not read", async () => {
+    await expect(dosu("setup", "--hosted", "--agent", "codex")).rejects.toThrow(
+      "goes with --bucket",
+    );
+    await expect(
+      dosu("setup", "--bucket", "s3://b", "--agent", "notepad", "--yes", ...READ),
+    ).rejects.toThrow("--agent must be one of");
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+  });
+
+  it("stops before setting a bucket Dosu cannot read with the key", async () => {
+    fetchImpl.mockImplementation(async (url, init) =>
+      url.endsWith("/detect")
+        ? json({ detail: "could not read s3://acme-sessions/agents: AccessDenied" }, 422)
+        : json(init?.method === "PUT" ? STORE : STORE),
+    );
+    await expect(
+      dosu("setup", "--bucket", "s3://acme-sessions/agents", "--yes", ...READ),
+    ).rejects.toThrow("Dosu could not read s3://acme-sessions/agents with that key");
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+  });
+});
+
+describe("sources store setup: when Dosu cannot look at the bucket", () => {
+  /** Dosu answering each `POST /detect` in turn from `answers`; every other call with the store. */
+  function detectAnswers(...answers: Array<() => Response>): void {
+    fetchImpl.mockImplementation(async (url, init) => {
+      if (url.endsWith("/detect")) return (answers.shift() as () => Response)();
+      const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+      return json(init?.method === "PUT" ? { ...STORE, ...body } : STORE);
+    });
+  }
+  const BUCKET = ["--bucket", "s3://acme-sessions/agents", "--region", "us-east-1"];
+  const detects = () => calls().filter((c) => c.path === "/v1/memory/sources/detect");
+
+  it("says why under --yes: not an admin, Dosu refused, or Dosu unreachable", async () => {
+    detectAnswers(() => json({ detail: "admins only" }, 403));
+    await expect(dosu("setup", ...BUCKET, "--yes", ...READ)).rejects.toThrow(
+      "only an org admin can set the org's session store",
+    );
+    detectAnswers(() => json({ detail: "busy" }, 503));
+    await expect(dosu("setup", ...BUCKET, "--yes", ...READ)).rejects.toThrow(
+      "Dosu did not look at the bucket",
+    );
+    detectAnswers(() => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(dosu("setup", ...BUCKET, "--yes", ...READ)).rejects.toThrow(
+      "Could not reach Dosu: fetch failed",
+    );
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+  });
+
+  it("interactively, takes a different read-only key after a bad one, then sets the store", async () => {
+    detectAnswers(
+      () => json({ detail: "AccessDenied" }, 422),
+      () => json(detection),
+    );
+    script({
+      "S3-compatible endpoint (blank for AWS)": "",
+      "What now?": "keys",
+      "Dosu's read-only keys (GetObject + ListBucket): access key id": "AKIDREAD2",
+      "Dosu's read-only keys (GetObject + ListBucket): secret access key": "readsecret2",
+      "Make it the org's session store?": "yes",
+    });
+    await dosu("setup", ...BUCKET, ...READ);
+    expect(detects().map((c) => c.body?.access_key_id)).toEqual(["AKIDREAD", "AKIDREAD2"]);
+    expect(put()).toMatchObject({ kind: "bucket", access_key_id: "AKIDREAD2" });
+  });
+
+  it("interactively, tries again after Dosu failed, or cancels and sets nothing", async () => {
+    detectAnswers(
+      () => json({ detail: "busy" }, 503),
+      () => json(detection),
+    );
+    script({
+      "S3-compatible endpoint (blank for AWS)": "",
+      "What now?": "retry",
+      "Make it the org's session store?": "yes",
+    });
+    await dosu("setup", ...BUCKET, ...READ);
+    expect(detects()).toHaveLength(2);
+    expect(put()).toMatchObject({ kind: "bucket" });
+
+    fetchImpl.mockClear();
+    out = [];
+    detectAnswers(() => json({ detail: "busy" }, 503));
+    script({ "S3-compatible endpoint (blank for AWS)": "", "What now?": "cancel" });
+    await dosu("setup", ...BUCKET, ...READ);
+    expect(calls().filter((c) => c.method === "PUT")).toEqual([]);
+    expect(out.join("\n")).toContain("Cancelled; the org's session store is unchanged.");
+  });
+
+  it("needs a kind of store under --yes", async () => {
+    await expect(dosu("setup", "--yes")).rejects.toThrow("say where the org's sessions live");
   });
 });
 

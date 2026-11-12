@@ -84,9 +84,11 @@ backend has it configured, so nothing changes for hosted users.
   does today) and saves the store. `dosu sources store status` shows it, and the members enrolled.
 - **`dosu sources store join` (member):** what setup does, by hand, with `--token`, `--owner` and
   the write-key flags. Again with another `--owner` moves the member to that folder.
-- **Personal targets** stay: `dosu sources setup --server …` or `--bucket …` with no login, or for
-  someone whose org has no store. Without a login nothing is read by Dosu; with one, the
-  per-member connect (read key and all) remains possible but is no longer what setup leads with.
+- **No personal targets** (decided since): a bucket is always the org's. There is no member
+  connect (`POST /v1/memory/sources` is gone); an admin with no store sets it in `dosu setup`'s
+  first step, and a member whose org has none uses Dosu's hosted sessiondb where the installation
+  runs one, or is told that an admin must choose. Connections made before keep being read until
+  disconnected.
 
 ## Backend
 

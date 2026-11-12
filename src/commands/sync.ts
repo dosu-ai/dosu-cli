@@ -163,7 +163,7 @@ interface Shipper {
   ship: SyncDeps["ship"];
   /** What the outcome says sessions went to: the server's name and URL. */
   destination: string;
-  /** When `dosu sources connect` registered the server's bucket: the source to nudge after a run. */
+  /** When Dosu reads the target's folder (its store enrollment): the connection to nudge after a run. */
   sourceId?: string;
 }
 
