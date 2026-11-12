@@ -12,7 +12,29 @@ import { makeTestConfig } from "../config/config.test-utils";
 import type { BucketTarget, ServerTarget, SessionTarget } from "../config/schema";
 import { fakeS3 } from "../shipper/fake-s3.test-utils";
 import type { Detection, Enrollment, SessionStore, SourceStatus } from "../sources/api";
+import * as p from "../tui/prompts";
 import { sourcesCommand } from "./sources";
+
+vi.mock("../tui/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tui/prompts")>()),
+  text: vi.fn(),
+  select: vi.fn(),
+  confirm: vi.fn(),
+}));
+
+/** What a prompt answers when the person presses Ctrl-C. */
+const CANCEL = Symbol.for("dosu.prompt.cancel");
+
+/** The person's answers, by prompt; an unscripted prompt fails the test. */
+function script(answers: Record<string, unknown>): void {
+  const answer = async (opts: { message: string }) => {
+    if (!(opts.message in answers)) throw new Error(`unscripted prompt: ${opts.message}`);
+    return answers[opts.message];
+  };
+  vi.mocked(p.text).mockImplementation(answer as typeof p.text);
+  vi.mocked(p.select).mockImplementation(answer as typeof p.select);
+  vi.mocked(p.confirm).mockImplementation(answer as typeof p.confirm);
+}
 
 let home: string;
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -299,12 +321,100 @@ describe("sources setup: an org with a store", () => {
       ["--bucket", "s3://mine"],
       ["--hosted"],
       ["--bucket", "s3://acme-sessions/agents", "--agent", "codex", ...READ],
+      [
+        "--server",
+        "https://s.test",
+        "--bucket",
+        "r2://b",
+        "--account-id",
+        "a",
+        "--token-secret",
+        "s",
+      ],
     ]) {
       await expect(dosu("setup", ...flags, "--yes")).rejects.toThrow(
         "the org's sessions already go to the org's bucket s3://acme-sessions/agents; an org admin changes that with 'dosu sources store setup'",
       );
     }
     expect(steps().filter((s) => !s.startsWith("GET"))).toEqual([]);
+  });
+});
+
+describe("sources setup: flags that only restate the org's store", () => {
+  it("are fine: the bucket it is, the server it is, or Dosu's sessiondb a member uses by default", async () => {
+    configure([]);
+    org({ store: BUCKET_STORE });
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents/",
+      "--region",
+      "us-east-1",
+      "--no-ship",
+      "--json",
+    );
+    expect(JSON.parse(out.join("\n"))).toEqual({ store: BUCKET_STORE, ship: false });
+
+    const server: SessionStore = { ...HOSTED_DEFAULT, kind: "server", configured: true };
+    org({ store: server });
+    out = [];
+    await dosu("setup", "--server", `${HOSTED_SERVER}/`, "--no-ship", "--json");
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ store: { kind: "server" }, ship: false });
+
+    org({ store: HOSTED_DEFAULT, admin: false });
+    out = [];
+    await dosu("setup", "--hosted", "--no-ship", "--json");
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ store: { kind: "hosted" }, ship: false });
+    expect(steps().filter((s) => !s.startsWith("GET"))).toEqual([]);
+  });
+});
+
+describe("sources setup: shipping to the org's bucket", () => {
+  it("--json hides the write key; --name and --no-default keep the current default", async () => {
+    configure([SERVER]);
+    saveConfig({ ...loadConfig(), default_target: "team" });
+    org({ store: BUCKET_STORE });
+
+    await dosu("setup", "--owner", "james", ...WRITE, "--name", "mine", "--no-default", "--yes");
+
+    expect(loadConfig().default_target).toBe("team");
+    expect(loadConfig().targets?.map((t) => t.name)).toEqual(["team", "mine"]);
+    expect(out.join("\n")).toContain("as james ('dosu sync --target mine').");
+
+    out = [];
+    await dosu("setup", "--owner", "james", ...WRITE, "--json");
+    const printed = JSON.parse(out.join("\n"));
+    expect(printed.target).toMatchObject({ name: "org", secret_access_key: "***" });
+    expect(out.join("\n")).not.toContain("writesecret");
+  });
+
+  it("--no-ship says Dosu reads what other machines and tools write there", async () => {
+    configure([]);
+    org({ store: BUCKET_STORE });
+    await dosu("setup", "--no-ship");
+    expect(out.join("\n")).toContain(
+      "This machine ships nothing; Dosu reads what other machines and tools write to the org's bucket s3://acme-sessions/agents.",
+    );
+  });
+
+  it("saves nothing when the member cancels picking their folder", async () => {
+    configure([]);
+    org({ store: BUCKET_STORE });
+    script({ "Your folder in the bucket (owner)": CANCEL });
+    await dosu("setup", "--ship");
+    expect(out.join("\n")).toContain("Cancelled; nothing saved.");
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
+});
+
+describe("sources setup: when Dosu cannot say where sessions live", () => {
+  it("says why, and saves nothing", async () => {
+    configure([]);
+    dosuAnswers(async () => json({ detail: "busy" }, 503));
+    await expect(dosu("setup", "--yes")).rejects.toThrow(
+      "Could not ask Dosu where the org's sessions live: HTTP 503: busy",
+    );
+    expect(loadConfig().targets ?? []).toEqual([]);
   });
 });
 
@@ -346,6 +456,67 @@ describe("sources setup: no store, a member", () => {
     );
     expect(steps()).toEqual(["GET /v1/memory/store"]);
     expect(loadConfig().targets ?? []).toEqual([]);
+  });
+});
+
+describe("sources setup: interactively", () => {
+  let tty: boolean | undefined;
+  beforeEach(() => {
+    tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process.stdin, "isTTY", { value: tty, configurable: true });
+  });
+
+  it("a member is told an org admin must choose, without failing", async () => {
+    configure([]);
+    org({ admin: false });
+    await dosu("setup");
+    expect(out.join("\n")).toContain("Only an org admin chooses where the org's sessions live");
+    expect(loadConfig().targets ?? []).toEqual([]);
+  });
+
+  it("an admin who cancels the first question changes nothing", async () => {
+    configure([]);
+    org({ store: HOSTED_DEFAULT, admin: true });
+    script({ "Where do sessions live?": CANCEL });
+    await dosu("setup");
+    expect(out.join("\n")).toContain(
+      "Cancelled; the org's session store is unchanged and nothing was saved.",
+    );
+    expect(steps()).toEqual(["GET /v1/memory/store"]);
+  });
+
+  it("an admin gives Dosu's read-only key when asked, sets the bucket, and ships nothing", async () => {
+    configure([]);
+    org({ store: HOSTED_DEFAULT, admin: true });
+    script({
+      "Dosu's read-only keys (GetObject + ListBucket): access key id": "AKIDREAD",
+      "Dosu's read-only keys (GetObject + ListBucket): secret access key": "readsecret",
+      "Make it the org's session store?": "yes",
+    });
+
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--region",
+      "us-east-1",
+      "--endpoint",
+      ENDPOINT,
+      "--no-ship",
+    );
+
+    expect(steps()).toEqual([
+      "GET /v1/memory/store",
+      "POST /v1/memory/sources/detect",
+      "PUT /v1/memory/store",
+    ]);
+    expect(calls()[2]?.body).toMatchObject({ access_key_id: "AKIDREAD" });
+    const text = out.join("\n");
+    expect(text).toContain("each file's format detected");
+    expect(text).toContain("Dosu reads what other machines and tools write to");
   });
 });
 
@@ -716,6 +887,56 @@ describe("sources status and list: the folder and the raw files", () => {
       /waiting for files\s+never\s+waiting for files/,
     );
     expect(rows.find((r) => r.startsWith("named"))).toContain("1 file · 1 session (pi)");
+  });
+
+  it("a disabled connection read as one format, with errors but no scan yet", async () => {
+    configure([]);
+    const off = source({
+      ...RAW_SOURCE,
+      enabled: false,
+      agent: "pi",
+      files: 0,
+      recent_files: undefined,
+      raw_synced_at: null,
+      raw_error: "boom",
+      raw_error_count: undefined,
+      last_error: "bad key",
+      error_count: 3,
+    });
+    dosuAnswers(async (url) => (url.endsWith(off.id) ? json(off) : json({ sources: [off] })));
+
+    await dosu("status");
+
+    const text = out.join("\n");
+    expect(text).toContain("○ ci logs");
+    expect(text).toContain("Raw files:  none yet · all read as pi");
+    expect(text).not.toContain("Last scan:");
+    expect(text).toContain("Disabled: you moved to another folder");
+    expect(text).toContain("Last error: bad key (3 in a row)");
+    expect(text).toContain("Raw error:  boom (1 in a row)");
+
+    out = [];
+    dosuAnswers(async () =>
+      json({
+        sources: [
+          off,
+          source({
+            ...RAW_SOURCE,
+            id: "7",
+            name: "counted",
+            files: 2,
+            sessions: undefined,
+            raw_error_count: undefined,
+          }),
+        ],
+      }),
+    );
+    await dosu("list");
+    const rows = out.join("\n").split("\n");
+    expect(rows.find((r) => r.startsWith("ci logs"))).toContain("disabled");
+    expect(rows.find((r) => r.startsWith("counted"))).toMatch(
+      /2 files · 0 sessions .*raw error ×1/,
+    );
   });
 
   it("list --json, and says how to connect when there is nothing", async () => {

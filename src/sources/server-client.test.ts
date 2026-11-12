@@ -57,6 +57,7 @@ describe("normalizeServerUrl and bucketOfStorage", () => {
     expect(normalizeServerUrl("http://sessions.example.com")).toBeUndefined();
     expect(normalizeServerUrl("s3://bucket")).toBeUndefined();
     expect(normalizeServerUrl("example.com")).toBeUndefined();
+    expect(normalizeServerUrl("https://example.com:99999")).toBeUndefined();
   });
 
   it("reads the bucket out of a storage view", () => {
@@ -102,6 +103,27 @@ describe("bucketOfTarget", () => {
     await expect(
       bucketOfTarget({ name: "team", url: SERVER, owner: "acme", token: "sdb_x" }, fetchImpl),
     ).rejects.toThrow(/answered/);
+  });
+
+  it("keeps an S3-compatible endpoint, and says when the server never answered", async () => {
+    const minio = async () =>
+      Response.json({
+        owner: "acme",
+        storage: { url: "s3://acme/dosu", region: "us-east-1", endpoint: "https://minio.test" },
+      });
+    expect(
+      await bucketOfTarget({ name: "team", url: SERVER, owner: "acme", token: "sdb_t" }, minio),
+    ).toMatchObject({ scheme: "s3", region: "us-east-1", endpoint: "https://minio.test" });
+
+    const down = async (): Promise<Response> => {
+      throw new TypeError("fetch failed");
+    };
+    const err = await bucketOfTarget(
+      { name: "team", url: SERVER, owner: "acme", token: "sdb_t" },
+      down,
+    ).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/answered/);
   });
 
   it("refuses a server that writes a folder on its own disk", async () => {

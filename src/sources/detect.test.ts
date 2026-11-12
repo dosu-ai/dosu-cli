@@ -77,6 +77,12 @@ describe("settleDetection: what it says", () => {
     );
   });
 
+  it("a sessiondb store with no raw files beside it", async () => {
+    const t = setup({ sessiondb: true });
+    await settleDetection(t.api, BODY, { interactive: false, ask: t.ask, say: t.say });
+    expect(t.said[0]).toBe("s3://acme/team: a sessiondb store");
+  });
+
   it("raw files it won't read: another connection has them, or Dosu cannot import them", async () => {
     const taken = setup({ raw_files: 3, raw_scanned_by: "src-other" });
     await settleDetection(taken.api, BODY, { interactive: false, ask: taken.ask, say: taken.say });

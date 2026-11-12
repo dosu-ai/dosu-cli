@@ -349,6 +349,31 @@ describe("sources store setup", () => {
     expect(vi.mocked(p.text).mock.calls.map(([o]) => o.message)).not.toContain(keep);
   });
 
+  it("sets a first store when the org has none, and --json prints only the store", async () => {
+    dosuAnswers((method, body) =>
+      method === "PUT" ? json({ ...STORE, ...body }) : json({ detail: "no session store" }, 404),
+    );
+    await dosu(
+      "setup",
+      "--bucket",
+      "s3://acme-sessions/agents",
+      "--region",
+      "us-east-1",
+      "--json",
+      ...READ,
+    );
+    expect(put()).toMatchObject({ kind: "bucket", bucket: "acme-sessions" });
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ kind: "bucket", bucket_kind: "s3" });
+  });
+
+  it("does not hide a failure to reach Dosu when setting the store", async () => {
+    fetchImpl.mockImplementation(async (_url, init) => {
+      if (init?.method === "PUT") throw new TypeError("fetch failed");
+      return json(STORE);
+    });
+    await expect(dosu("setup", "--hosted")).rejects.toThrow("fetch failed");
+  });
+
   it("tells a member that only an admin sets the store", async () => {
     dosuAnswers(() => json({ detail: "admins only" }, 403));
     await expect(dosu("setup", "--hosted")).rejects.toThrow(
@@ -382,6 +407,13 @@ describe("sources store setup: the bucket's raw files", () => {
     );
     await dosu("status");
     expect(out.join("\n")).toContain("raw logs other tools drop in it: read as datadog-trajectory");
+
+    out = [];
+    dosuAnswers(() => json({ ...STORE, raw_source_id: "src-raw", raw_agent: null }));
+    await dosu("status");
+    expect(out.join("\n")).toContain(
+      "raw logs other tools drop in it: each file's format detected",
+    );
   });
 
   it("interactively, the admin confirms what Dosu found or picks the format, or declines", async () => {
