@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, alpha, beta, sessions]
+    branches: [main, alpha, beta]
   push:
-    branches: [main, alpha, beta, sessions]
+    branches: [main, alpha, beta]
 
 jobs:
   lint:
@@ -168,7 +168,7 @@ jobs:
       - build
       - windows-npm-smoke
       - macos-binary-smoke
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/sessions')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha' || github.ref == 'refs/heads/beta')
     runs-on: macos-15
     permissions:
       contents: write
