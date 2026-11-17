@@ -1,3 +1,10 @@
+# [0.67.0-beta.14](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.13...v0.67.0-beta.14) (2026-11-17)
+
+
+### Features
+
+* **sessions:** push Pi session files ([#324](https://github.com/dosu-ai/dosu-cli/issues/324)) ([dff034d](https://github.com/dosu-ai/dosu-cli/commit/dff034d04c78ee566ab6c659d7da2a55d5aee5bf))
+
 # [0.67.0-beta.13](https://github.com/dosu-ai/dosu-cli/compare/v0.67.0-beta.12...v0.67.0-beta.13) (2026-11-09)
 
 
