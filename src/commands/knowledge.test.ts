@@ -434,6 +434,14 @@ describe("knowledge sessions", () => {
     expect(mockLoadSyncState).not.toHaveBeenCalled();
   });
 
+  it("--age lists the backlog `sync --age` would ship", async () => {
+    mockListBacklog.mockReturnValue({ queued: [queuedSession], open: [] });
+
+    await run("sessions", "--queued", "--age", "90");
+
+    expect(mockListBacklog).toHaveBeenCalledWith(expect.any(Date), 90);
+  });
+
   it("--shipped alone skips the session scan", async () => {
     mockLoadSyncState.mockReturnValue(syncState);
 
@@ -963,6 +971,19 @@ describe("knowledge sync", () => {
     expect(mockSpawnDetached).toHaveBeenCalledWith(["knowledge", "sync", "--quiet", "--bootstrap"]);
   });
 
+  it("--detach forwards --age to the re-spawned run", async () => {
+    await run("sync", "--quiet", "--detach", "--bootstrap", "--age", "0");
+
+    expect(mockSpawnDetached).toHaveBeenCalledWith([
+      "knowledge",
+      "sync",
+      "--quiet",
+      "--bootstrap",
+      "--age",
+      "0",
+    ]);
+  });
+
   it("--detach without --quiet omits the flag", async () => {
     await run("sync", "--detach");
 
@@ -1129,6 +1150,36 @@ describe("knowledge sync", () => {
 
     expect(mockRunSync).toHaveBeenCalledTimes(1);
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("--flush --age 0 ships with no lookback limit", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--flush", "--age", "0");
+
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
+    expect(mockRunSync.mock.calls[0][0]).toMatchObject({ flush: true, ageDays: 0 });
+  });
+
+  it("leaves the lookback to the sync's default without --age", async () => {
+    mockRunSync.mockResolvedValue({ status: "nothing-new", readySessions: 0, inFlightSessions: 0 });
+
+    await run("sync", "--bootstrap");
+
+    expect(mockRunSync.mock.calls[0][0].ageDays).toBeUndefined();
+  });
+
+  it.each(["-1", "1.5", "abc", ""])("rejects --age %j without syncing", async (age) => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await expect(run("sync", "--age", age)).rejects.toThrow("exit");
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("must be a non-negative integer"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(mockRunSync).not.toHaveBeenCalled();
   });
 
   it("--bootstrap without a ship step stays single-shot", async () => {

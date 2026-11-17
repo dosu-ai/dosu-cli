@@ -128,9 +128,14 @@ interface IncognitoPeriod {
 
 export interface SyncState {
   schema_version: number;
-  /** The ledger, by `harness/id`. Entries age out once their session leaves the scan window,
-   * except those an agent's incognito switch settled (LedgerEntry.by_agent). */
+  /** The ledger, by `harness/id`. Entries age out once their session leaves the scan window (or
+   * goes back past lookback_since), except those an agent's incognito switch settled
+   * (LedgerEntry.by_agent). */
   sessions: Record<string, LedgerEntry>;
+  /** Where the widest `knowledge sync --age` run started (ISO), when that is before the default
+   * window: entries are kept back to it, so a later run that wide finds the sessions one already
+   * settled instead of shipping them again. Dropped with the ledger by resetSyncState. */
+  lookback_since?: string;
   last_attempt_at?: string;
   consecutive_failures: number;
   /** All-time shipped-session count — survives ledger pruning. Subagents' transcripts ship with
@@ -470,11 +475,16 @@ export function loadSyncState(configDir: string = getConfigDir()): SyncState {
   }
   const run = parseRun(raw.run);
   const totalShipped = nonNegative(raw.total_shipped);
+  const lookbackSince =
+    typeof raw.lookback_since === "string" && Number.isFinite(Date.parse(raw.lookback_since))
+      ? raw.lookback_since
+      : undefined;
   return {
     schema_version: STATE_SCHEMA_VERSION,
     sessions: parseLedger(raw.sessions),
     ...parseCommon(raw),
     ...(totalShipped !== undefined ? { total_shipped: totalShipped } : {}),
+    ...(lookbackSince ? { lookback_since: lookbackSince } : {}),
     ...(run ? { run } : {}),
   };
 }
