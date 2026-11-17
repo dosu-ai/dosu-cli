@@ -14,18 +14,25 @@ export async function runLoginRequest(opts: { json: boolean }): Promise<number> 
     const checkCommand = `${CHECK_COMMAND_PREFIX} ${minted.ticket}${opts.json ? " --json" : ""}`;
 
     if (opts.json) {
+      const relay = minted.user_code
+        ? `Give the user the URL and the code ${minted.user_code}, which they enter on that page to authorize.`
+        : "Give the URL to the user so they can authorize.";
       emitJSONLine({
         ticket: minted.ticket,
         url: minted.url,
+        user_code: minted.user_code,
         check_command: checkCommand,
         expires_in: minted.expires_in,
-        agent_next_steps:
-          "Give the URL to the user so they can authorize. Once the user confirms they've signed in, run check_command to retrieve the token.",
+        agent_next_steps: `${relay} Once the user confirms they've signed in, run check_command to retrieve the token.`,
       });
     } else {
       console.log("Open this URL in your browser to authorize:");
       console.log(`  ${minted.url}`);
       console.log("");
+      if (minted.user_code) {
+        console.log(`When asked, enter this code: ${minted.user_code}`);
+        console.log("");
+      }
       console.log("After signing in, complete the login with:");
       console.log(`  ${checkCommand}`);
       console.log("");

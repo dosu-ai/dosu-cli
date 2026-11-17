@@ -28,20 +28,22 @@ describe("agent/output", () => {
     emitNeedUserAction({
       step: "auth",
       url: "https://example.com",
+      user_code: "BCDF-GHJK",
       ticket: "tkt-1",
       resume_command: "dosu setup --agent --tool claude --login-ticket tkt-1",
       expires_in: 600,
-      agent_next_steps: "Send the URL.",
+      agent_next_steps: "Send the URL and the code.",
     });
 
     expect(lastEmittedJSON()).toEqual({
       step: "auth",
       status: "need_user_action",
       url: "https://example.com",
+      user_code: "BCDF-GHJK",
       ticket: "tkt-1",
       resume_command: "dosu setup --agent --tool claude --login-ticket tkt-1",
       expires_in: 600,
-      agent_next_steps: "Send the URL.",
+      agent_next_steps: "Send the URL and the code.",
     });
   });
 

@@ -84,6 +84,39 @@ describe("runLoginRequest", () => {
     expect(joined).toContain("dosu login --check tkt-xyz");
     // No --json suffix when the user did not opt in.
     expect(joined).not.toMatch(/--check tkt-xyz --json/);
+    // A backend without user codes gets no code line.
+    expect(joined).not.toContain("enter this code");
+  });
+
+  it("adds the user code to the JSON and tells the agent to relay it", async () => {
+    mockMintTicket.mockResolvedValue({
+      ticket: "tkt-abc",
+      expires_in: 600,
+      url: "https://app.dosu.dev/cli/auth?ticket=tkt-abc",
+      user_code: "BCDF-GHJK",
+    });
+
+    const code = await runLoginRequest({ json: true });
+
+    expect(code).toBe(0);
+    const payload = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(payload.user_code).toBe("BCDF-GHJK");
+    expect(payload.agent_next_steps).toContain("the code BCDF-GHJK");
+  });
+
+  it("prints the user code next to the URL", async () => {
+    mockMintTicket.mockResolvedValue({
+      ticket: "tkt-xyz",
+      expires_in: 600,
+      url: "https://app.dosu.dev/cli/auth?ticket=tkt-xyz",
+      user_code: "BCDF-GHJK",
+    });
+
+    const code = await runLoginRequest({ json: false });
+
+    expect(code).toBe(0);
+    const joined = logSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(joined).toContain("When asked, enter this code: BCDF-GHJK");
   });
 
   it("emits a structured error when minting fails (--json)", async () => {

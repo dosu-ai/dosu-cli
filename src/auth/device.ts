@@ -12,6 +12,7 @@ export async function startDeviceFlow(signal?: AbortSignal): Promise<TokenRespon
   console.log("\nCould not open a browser automatically.");
   console.log("Open this URL in your browser to log in:\n");
   console.log(`  ${minted.url}\n`);
+  if (minted.user_code) console.log(`When asked, enter this code: ${minted.user_code}\n`);
   console.log("Waiting for authorization...");
 
   const deadline = Date.now() + minted.expires_in * 1000;

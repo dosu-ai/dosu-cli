@@ -252,14 +252,17 @@ async function verifyOrMint(
 
   try {
     const minted = await mintTicket();
+    const relay = minted.user_code
+      ? `Give the user the URL and the code ${minted.user_code}, which they enter on that page to sign in.`
+      : "Give the URL to the user so they can sign in.";
     emitNeedUserAction({
       step: "auth",
       url: minted.url,
+      user_code: minted.user_code,
       ticket: minted.ticket,
       resume_command: buildResumeCommand(opts.tool, minted.ticket, opts.deploymentID),
       expires_in: minted.expires_in,
-      agent_next_steps:
-        "Give the URL to the user so they can sign in. Wait for the user to confirm they've signed in, then run resume_command to finish setup.",
+      agent_next_steps: `${relay} Wait for the user to confirm they've signed in, then run resume_command to finish setup.`,
     });
     return { code: 0, cfg, exit: true };
   } catch (err: unknown) {

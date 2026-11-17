@@ -48,11 +48,29 @@ describe("startDeviceFlow", () => {
 
     const printed = consoleSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
     expect(printed).toContain("https://app.dosu.dev/cli/auth?ticket=test-ticket-abc");
+    expect(printed).not.toContain("enter this code");
     expect(token).toEqual({
       access_token: "access-tok",
       refresh_token: "refresh-tok",
       expires_in: 3600,
     });
+  });
+
+  it("prints the user code next to the URL", async () => {
+    mockMintTicket.mockResolvedValue({ ...MINTED, user_code: "BCDF-GHJK" });
+    mockExchangeTicket.mockResolvedValueOnce({
+      status: "authenticated",
+      access_token: "a",
+      refresh_token: "b",
+      expires_in: 600,
+    });
+
+    const flowPromise = startDeviceFlow();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flowPromise;
+
+    const printed = consoleSpy.mock.calls.map((c: unknown[]) => c[0]).join("\n");
+    expect(printed).toContain("When asked, enter this code: BCDF-GHJK");
   });
 
   it("resolves immediately on first poll if already authenticated", async () => {
