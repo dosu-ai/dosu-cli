@@ -11,6 +11,7 @@ import { basename } from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { CommandError } from "../cli/command-error";
+import { readPiHeader } from "../sessions/pi";
 import { type AgentSession, type SessionHarness, sessionAtPath } from "../sessions/scan";
 import { createShipStep } from "../shipper/runner";
 import type { ShipSessionResult } from "../sync/sync";
@@ -52,8 +53,12 @@ function sessionOfFile(path: string): AgentSession | string {
   } catch (err) {
     return `cannot read the file (${(err as NodeJS.ErrnoException).code ?? "error"})`;
   }
+  // A pi transcript opens with a header that names its session, and only the header does: pi
+  // keeps whatever file name it is given (`pi --session <path>`).
+  const piId = readPiHeader(path)?.id;
+  if (piId) return sessionAtPath("pi", piId, path) ?? "cannot read the file";
   const harness = harnessOf(transcript);
-  if (!harness) return "not a Claude Code, Codex, or Cursor session file";
+  if (!harness) return "not a Claude Code, Codex, Cursor, or Pi session file";
   // Session files are named by their session id, as the scanner names them; a Claude Code file
   // in its agent's layout is read as the scan reads it (a subagent's names its session).
   const session = sessionAtPath(harness, basename(path).replace(/\.jsonl$/, ""), path);
@@ -88,7 +93,7 @@ export function sessionsCommand(): Command {
   cmd
     .command("push")
     .description("Push agent sessions to Dosu with an ingest key (no sign-in)")
-    .argument("<files...>", "Claude Code, Codex, or Cursor session files (.jsonl)")
+    .argument("<files...>", "Claude Code, Codex, Cursor, or Pi session files (.jsonl)")
     .addHelpText(
       "after",
       "\nEnvironment:\n  DOSU_INGEST_KEY  Dosu ingest key (dxi_live_...); required\n" +

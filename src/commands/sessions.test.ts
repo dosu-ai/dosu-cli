@@ -73,6 +73,38 @@ function cursorFile(): string {
   ]);
 }
 
+/** A pi session in the `widget` checkout, under the name `pi --session <path>` gave it: only its
+ * header names the session. */
+function piFile(): string {
+  const at = "2026-11-17T06:28:42.454Z";
+  const message = (id: string, parentId: string, role: string, text: string) => ({
+    type: "message",
+    id,
+    parentId,
+    timestamp: at,
+    message: { role, content: [{ type: "text", text }], timestamp: Date.parse(at) },
+  });
+  return jsonl("session.jsonl", [
+    {
+      type: "session",
+      version: 3,
+      id: "01a1e831-8755-7372-9084-0105e341c33e",
+      timestamp: at,
+      cwd: repo,
+    },
+    {
+      type: "model_change",
+      id: "52552237",
+      parentId: null,
+      timestamp: at,
+      provider: "anthropic",
+      modelId: "claude-opus-5-5",
+    },
+    message("0d803822", "52552237", "user", "Run the tests"),
+    message("337b472e", "0d803822", "assistant", REPLY),
+  ]);
+}
+
 async function run(...args: string[]): Promise<void> {
   await sessionsCommand().parseAsync(["node", "sessions", ...args]);
 }
@@ -160,6 +192,18 @@ describe("dosu sessions push", () => {
     });
   });
 
+  it("names a Pi session by its header, whatever the file is called", async () => {
+    await run("push", piFile());
+
+    expect(sent().body.metadata).toEqual({
+      project: "github.com/acme/widget",
+      repo: "acme/widget",
+      agent: "pi",
+      session_id: "01a1e831-8755-7372-9084-0105e341c33e",
+    });
+    expect(sent().body.records.map((r) => r.role)).toEqual(["meta", "user", "assistant"]);
+  });
+
   it("reports each file it could not push and still pushes the rest", async () => {
     const missing = join(dir, "missing.jsonl");
     const notes = jsonl("notes.jsonl", [{ note: "not a session" }]);
@@ -177,7 +221,7 @@ describe("dosu sessions push", () => {
 
     const errors = printed(errorSpy);
     expect(errors).toContain(`${missing}: cannot read the file (ENOENT)`);
-    expect(errors).toContain(`${notes}: not a Claude Code, Codex, or Cursor session file`);
+    expect(errors).toContain(`${notes}: not a Claude Code, Codex, Cursor, or Pi session file`);
     expect(errors).toContain(`${refused}: Dosu refused the session (HTTP 422)`);
     expect(errors).toContain(`${unauthorized}: not sent: ingest failed: HTTP 401`);
     expect(errors).toContain(`${offline}: not sent: getaddrinfo ENOTFOUND`);
