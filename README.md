@@ -168,7 +168,7 @@ For coding agents and CI, `setup` has a non-interactive mode:
 dosu setup --agent --tool claude
 ```
 
-Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt.
+Combine with `dosu login --request` / `--check <ticket>` for human-in-the-loop authentication, and `--mode oss|cloud` to skip the mode prompt. When a login code is returned, give the user both the URL and the code to enter on the sign-in page (`user_code` in JSON output or the `setup --agent` `need_user_action` event). Complete the login using the same CLI environment and config directory that started it; a ticket from another environment is reported as expired.
 
 ### Studying sessions: status line and incognito
 
